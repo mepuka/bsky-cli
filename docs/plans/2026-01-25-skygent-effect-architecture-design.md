@@ -1061,6 +1061,106 @@ fc.assert(
 
 ---
 
+## 13. Architectural Research Foundation
+
+This design is informed by comprehensive research into functional programming patterns, data structures, and domain modeling from the following technical books, accessed via Book Search API at `http://127.0.0.1:8787`.
+
+### Books Consulted
+
+**Composable Filter Patterns:**
+- **Algebra-Driven Design** - Filter algebras, boolean homomorphisms, monoid composition
+- **Domain Modeling Made Functional** - Smart constructors, making illegal states unrepresentable
+- **Functional Design and Architecture** - Free monads, interpreter patterns, DSL design
+
+**Stream and Pipeline Composition:**
+- **Functional Design and Architecture** - Stream transformations, reactive patterns
+- **Designing Data Intensive Applications** - Backpressure, windowing, stream joins
+- **Purely Functional Data Structures** - Lazy evaluation, persistent structures
+
+**Storage and File System Abstractions:**
+- **Domain Modeling Made Functional** - DDD aggregates, repository patterns
+- **The Art of Immutable Architecture** - Event sourcing, immutable storage
+- **Functional Design and Architecture** - I/O at edges, dependency injection
+
+**Declarative Configuration Patterns:**
+- **Algebra-Driven Design** - Algebraic specifications, combinator libraries
+- **Pragmatic Type-Level Design** - Phantom types, type-level state machines
+- **Domain Modeling Made Functional** - Railway-oriented programming, validation composition
+
+**Data Structures and Type Classes:**
+- **Purely Functional Data Structures** - Persistent structures, amortization
+- Effect TypeScript documentation - Chunk, HashMap, SortedMap, type classes
+
+### Key Insights Applied
+
+1. **Algebraic Foundations (Algebra-Driven Design)**
+   - Filters as boolean homomorphisms with 25+ algebraic laws
+   - Monoid composition for combining filters associatively
+   - Gate pattern for separating filtering from actions
+
+2. **Stream Composition (Functional Design & Architecture)**
+   - Lazy evaluation with memoization for efficiency
+   - Pipeline operators for declarative data flow
+   - Backpressure via pull-based streams
+
+3. **Storage Abstractions (Domain Modeling Made Functional)**
+   - Smart constructors for validated paths
+   - Specification pattern for queries
+   - Repository pattern replaced with function composition
+
+4. **Declarative DSLs (Pragmatic Type-Level Design)**
+   - Free monad DSL for configuration
+   - Phantom types for compile-time safety
+   - Interpreter pattern for multiple backends
+
+5. **Effect-Native Structures (Effect Documentation)**
+   - Chunk: O(log n) concatenation with structural sharing
+   - HashMap: O(1) lookups with HAMT implementation
+   - SortedMap: O(log n) range queries with Red-Black Tree
+   - Type classes: Filterable, Order, Differ for generic operations
+
+### Book Search API
+
+The research utilized a FastAPI server providing hybrid vector + text search over chunked technical book content:
+
+**Endpoint:** `http://127.0.0.1:8787`
+
+**Available Books (15 total):**
+- algorithms-jeff-erickson.pdf (1615 chunks)
+- purely-functional-data-structures.pdf (646 chunks)
+- algebra-driven-design.pdf (633 chunks)
+- designing-data-intensive-applications.pdf (1830 chunks)
+- domain-modeling-made-functional.pdf (689 chunks)
+- functional-design-and-architecture.pdf (1081 chunks)
+- the-art-of-immutable-architecture.pdf (1031 chunks)
+- pragmatic-type-level-design.pdf (529 chunks)
+- And 7 more architectural/design books
+
+**API Operations:**
+```bash
+# List all books
+GET /books
+
+# Search with filters
+POST /search
+{
+  "query": "composable filters",
+  "limit": 10,
+  "mode": "hybrid",  # hybrid | vector | fts
+  "filters": {
+    "books": ["algebra-driven-design.pdf"],
+    "chunk_types": ["prose", "code"]
+  }
+}
+
+# Get specific chunk with context
+GET /chunks/{chunk_id}/context?before=1&after=1
+```
+
+This API enabled deep research into established patterns before committing to architectural decisions, ensuring the design aligns with proven functional programming principles.
+
+---
+
 ## Conclusion
 
 This architecture provides a solid foundation for building a composable, type-safe, agent-driven Bluesky CLI using pure Effect patterns. The emphasis on algebraic composition, Effect-native data structures, and service-based design enables maximum flexibility while maintaining strong guarantees.
