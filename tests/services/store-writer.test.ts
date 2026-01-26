@@ -5,6 +5,7 @@ import { StoreWriter } from "../../src/services/store-writer.js";
 import { EventMeta, PostEventRecord, PostUpsert } from "../../src/domain/events.js";
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
+import { EventId } from "../../src/domain/primitives.js";
 import { storePrefix } from "../../src/services/store-keys.js";
 
 const samplePost = Schema.decodeUnknownSync(Post)({
@@ -55,6 +56,58 @@ describe("StoreWriter", () => {
     expect(Option.isSome(result.stored)).toBe(true);
     if (Option.isSome(result.stored)) {
       expect(result.stored.value).toEqual(result.record);
+    }
+  });
+
+  test("append updates last event ID in KV store", async () => {
+    const program = Effect.gen(function* () {
+      const writer = yield* StoreWriter;
+      const kv = yield* KeyValueStore.KeyValueStore;
+
+      const record = yield* writer.append(sampleStore, sampleEvent);
+      const lastEventIdKey = "events/last-id";
+      const storeLastEventId = KeyValueStore.prefix(
+        kv.forSchema(EventId),
+        storePrefix(sampleStore)
+      );
+      const storedLastId = yield* storeLastEventId.get(lastEventIdKey);
+
+      return { record, storedLastId };
+    });
+
+    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+
+    expect(Option.isSome(result.storedLastId)).toBe(true);
+    if (Option.isSome(result.storedLastId)) {
+      expect(result.storedLastId.value).toEqual(result.record.id);
+    }
+  });
+
+  test("append updates last event ID with multiple events", async () => {
+    const program = Effect.gen(function* () {
+      const writer = yield* StoreWriter;
+      const kv = yield* KeyValueStore.KeyValueStore;
+
+      const record1 = yield* writer.append(sampleStore, sampleEvent);
+      const record2 = yield* writer.append(sampleStore, sampleEvent);
+      const record3 = yield* writer.append(sampleStore, sampleEvent);
+
+      const lastEventIdKey = "events/last-id";
+      const storeLastEventId = KeyValueStore.prefix(
+        kv.forSchema(EventId),
+        storePrefix(sampleStore)
+      );
+      const storedLastId = yield* storeLastEventId.get(lastEventIdKey);
+
+      return { record1, record2, record3, storedLastId };
+    });
+
+    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+
+    expect(Option.isSome(result.storedLastId)).toBe(true);
+    if (Option.isSome(result.storedLastId)) {
+      // Should store the ID of the last appended event
+      expect(result.storedLastId.value).toEqual(result.record3.id);
     }
   });
 });

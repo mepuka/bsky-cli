@@ -2,11 +2,13 @@ import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { StoreIoError } from "../domain/errors.js";
 import { PostEventRecord } from "../domain/events.js";
+import { EventId } from "../domain/primitives.js";
 import type { StorePath } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
 import { storePrefix } from "./store-keys.js";
 
 const manifestKey = "events/manifest";
+const lastEventIdKey = "events/last-id";
 
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
   StoreIoError.make({ path, cause });
@@ -18,6 +20,9 @@ export class StoreEventLog extends Context.Tag("@skygent/StoreEventLog")<
       store: StoreRef
     ) => Stream.Stream<PostEventRecord, StoreIoError>;
     readonly clear: (store: StoreRef) => Effect.Effect<void, StoreIoError>;
+    readonly getLastEventId: (
+      store: StoreRef
+    ) => Effect.Effect<Option.Option<EventId>, StoreIoError>;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -26,6 +31,7 @@ export class StoreEventLog extends Context.Tag("@skygent/StoreEventLog")<
       const kv = yield* KeyValueStore.KeyValueStore;
       const events = kv.forSchema(PostEventRecord);
       const manifest = kv.forSchema(Schema.Array(Schema.String));
+      const lastEventId = kv.forSchema(EventId);
 
       const stream = (store: StoreRef) =>
         Stream.unwrap(
@@ -53,6 +59,7 @@ export class StoreEventLog extends Context.Tag("@skygent/StoreEventLog")<
           const prefix = storePrefix(store);
           const storeManifest = KeyValueStore.prefix(manifest, prefix);
           const storeEvents = KeyValueStore.prefix(events, prefix);
+          const storeLastEventId = KeyValueStore.prefix(lastEventId, prefix);
           const keysOption = yield* storeManifest
             .get(manifestKey)
             .pipe(Effect.mapError(toStoreIoError(store.root)));
@@ -64,10 +71,18 @@ export class StoreEventLog extends Context.Tag("@skygent/StoreEventLog")<
             );
           }
           yield* storeManifest.remove(manifestKey);
+          yield* storeLastEventId.remove(lastEventIdKey);
         }).pipe(Effect.mapError(toStoreIoError(store.root)))
       );
 
-      return StoreEventLog.of({ stream, clear });
+      const getLastEventId = Effect.fn("StoreEventLog.getLastEventId")(
+        (store: StoreRef) =>
+          KeyValueStore.prefix(lastEventId, storePrefix(store))
+            .get(lastEventIdKey)
+            .pipe(Effect.mapError(toStoreIoError(store.root)))
+      );
+
+      return StoreEventLog.of({ stream, clear, getLastEventId });
     })
   );
 }

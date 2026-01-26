@@ -42,6 +42,7 @@ const generateEventId = Effect.gen(function* () {
 const eventKey = (event: PostEvent, id: EventId) =>
   `events/${event.meta.source}/${id}`;
 const manifestKey = "events/manifest";
+const lastEventIdKey = "events/last-id";
 
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
   StoreIoError.make({ path, cause });
@@ -61,6 +62,7 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
       const kv = yield* KeyValueStore.KeyValueStore;
       const events = kv.forSchema(PostEventRecord);
       const manifest = kv.forSchema(Schema.Array(Schema.String));
+      const lastEventId = kv.forSchema(EventId);
 
       const append = Effect.fn("StoreWriter.append")(
         (store: StoreRef, event: PostEvent) =>
@@ -68,6 +70,7 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
             const prefix = storePrefix(store);
             const storeEvents = KeyValueStore.prefix(events, prefix);
             const storeManifest = KeyValueStore.prefix(manifest, prefix);
+            const storeLastEventId = KeyValueStore.prefix(lastEventId, prefix);
             const id = yield* generateEventId;
             const record = PostEventRecord.make({
               id,
@@ -76,6 +79,7 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
             });
             const key = eventKey(event, id);
             yield* storeEvents.set(key, record);
+            yield* storeLastEventId.set(lastEventIdKey, record.id);
             const updated = yield* storeManifest.modify(manifestKey, (keys) => [
               ...keys,
               key
