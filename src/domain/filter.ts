@@ -260,3 +260,19 @@ export const encodeFilterExpr = (expr: FilterExpr): FilterExprEncoded =>
 
 export const filterExprSignature = (expr: FilterExpr): string =>
   JSON.stringify(encodeFilterExpr(expr));
+
+export const isEffectfulFilter = (expr: FilterExpr): boolean => {
+  switch (expr._tag) {
+    case "HasValidLinks":
+    case "Trending":
+    case "Llm":
+      return true;
+    case "And":
+    case "Or":
+      return isEffectfulFilter(expr.left) || isEffectfulFilter(expr.right);
+    case "Not":
+      return isEffectfulFilter(expr.expr);
+    default:
+      return false;
+  }
+};

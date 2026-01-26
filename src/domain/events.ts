@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { Post } from "./post.js";
 import { LlmDecisionMeta } from "./llm.js";
-import { EventId, PostCid, PostUri, Timestamp } from "./primitives.js";
+import { EventId, PostCid, PostUri, Timestamp, StoreName } from "./primitives.js";
 import { FilterExprSchema } from "./filter.js";
 
 export class EventMeta extends Schema.Class<EventMeta>("EventMeta")({
@@ -11,7 +11,8 @@ export class EventMeta extends Schema.Class<EventMeta>("EventMeta")({
   model: Schema.optional(Schema.String),
   promptHash: Schema.optional(Schema.String),
   llm: Schema.optional(Schema.Array(LlmDecisionMeta)),
-  createdAt: Timestamp
+  createdAt: Timestamp,
+  sourceStore: Schema.optional(StoreName)
 }) {}
 
 export class PostUpsert extends Schema.TaggedClass<PostUpsert>()("PostUpsert", {
