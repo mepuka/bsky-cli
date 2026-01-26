@@ -3,11 +3,12 @@ import { Chunk, Effect, Option } from "effect";
 import { StoreManager } from "../services/store-manager.js";
 import { StoreNotFound } from "../domain/errors.js";
 import { StoreName } from "../domain/primitives.js";
-import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
+import { StoreConfig, StoreMetadata } from "../domain/store.js";
 import { defaultStoreConfig } from "../domain/defaults.js";
 import { decodeJson } from "./parse.js";
 import { writeJson } from "./output.js";
 import { StoreCleaner } from "../services/store-cleaner.js";
+import { LineageStore } from "../services/lineage-store.js";
 
 const storeNameArg = Args.text({ name: "name" }).pipe(Args.withSchema(StoreName));
 const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
@@ -59,13 +60,22 @@ export const storeShow = Command.make(
   ({ name }) =>
     Effect.gen(function* () {
       const manager = yield* StoreManager;
+      const lineageStore = yield* LineageStore;
       const store = yield* loadStoreRef(name);
       const config = yield* manager.getConfig(name);
+      const lineageOption = yield* lineageStore.get(name);
+
       const output = Option.match(config, {
         onNone: () => ({ store }),
         onSome: (value) => ({ store, config: value })
       });
-      yield* writeJson(output as { store: StoreRef; config?: StoreConfig });
+
+      const finalOutput = Option.match(lineageOption, {
+        onNone: () => output,
+        onSome: (lineage) => ({ ...output, lineage })
+      });
+
+      yield* writeJson(finalOutput);
     })
 ).pipe(Command.withDescription("Show store config and metadata"));
 

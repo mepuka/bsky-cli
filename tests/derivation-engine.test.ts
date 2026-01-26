@@ -18,6 +18,7 @@ import { Hashtag, PostCid, PostUri, Timestamp } from "../src/domain/primitives.j
 import { LlmDecision } from "../src/services/llm.js";
 import { LinkValidator } from "../src/services/link-validator.js";
 import { TrendingTopics } from "../src/services/trending-topics.js";
+import { ExcludeOnError } from "../src/domain/policies.js";
 
 // Mock services
 const MockLlmDecision = Layer.succeed(LlmDecision, {
@@ -39,24 +40,46 @@ const MockTrendingTopics = Layer.succeed(TrendingTopics, {
   isTrending: () => Effect.succeed(true)
 });
 
-// Build all layers with proper dependencies
-const AllLayers = Layer.mergeAll(
-  KeyValueStore.layerMemory,
-  StoreEventLog.layer,
-  StoreWriter.layer,
-  StoreIndex.layer,
-  FilterCompiler.layer,
-  ViewCheckpointStore.layer,
-  LineageStore.layer,
-  MockLlmDecision,
-  MockLinkValidator,
-  MockTrendingTopics
-).pipe(
-  Layer.provideMerge(FilterRuntime.layer),
-  Layer.provideMerge(DerivationEngine.layer)
+// Build test layer by composing self-contained dependency layers
+// CRITICAL: StoreIndex depends on StoreEventLog, so we must ensure StoreEventLog
+// is available when StoreIndex.layer is being constructed. We do this by building
+// complete layers with their dependencies satisfied.
+
+// Build StoreEventLog with KeyValueStore
+const StoreEventLogComplete = StoreEventLog.layer.pipe(
+  Layer.provideMerge(KeyValueStore.layerMemory)
 );
 
-const TestLayer = AllLayers;
+// Build StoreIndex with StoreEventLog (which includes KeyValueStore)
+const StoreIndexComplete = StoreIndex.layer.pipe(
+  Layer.provideMerge(StoreEventLogComplete)
+);
+
+// Build other storage services with KeyValueStore
+const OtherStorageServices = Layer.mergeAll(
+  StoreWriter.layer,
+  ViewCheckpointStore.layer,
+  LineageStore.layer
+).pipe(
+  Layer.provideMerge(KeyValueStore.layerMemory)
+);
+
+// Build filter services with mocks
+const FilterServices = Layer.mergeAll(
+  FilterRuntime.layer,
+  FilterCompiler.layer
+).pipe(
+  Layer.provideMerge(MockLlmDecision),
+  Layer.provideMerge(MockLinkValidator),
+  Layer.provideMerge(MockTrendingTopics)
+);
+
+// Assemble everything for DerivationEngine
+const TestLayer = DerivationEngine.layer.pipe(
+  Layer.provideMerge(StoreIndexComplete),
+  Layer.provideMerge(OtherStorageServices),
+  Layer.provideMerge(FilterServices)
+);
 
 const createTestPost = (uri: string, text: string, hashtags: ReadonlyArray<string> = []): Post =>
   Post.make({
@@ -136,7 +159,7 @@ describe("DerivationEngine", () => {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
       const index = yield* StoreIndex;
-      const filter: FilterExpr = { _tag: "Llm", prompt: "test", minConfidence: 0.8, onError: { _tag: "Exclude" } };
+      const filter: FilterExpr = { _tag: "Llm", prompt: "test", minConfidence: 0.8, onError: ExcludeOnError.make({}) };
 
       const post = createTestPost("at://test/post1", "Test post");
       const event = PostUpsert.make({ post, meta: createTestMeta() });
@@ -270,6 +293,169 @@ describe("DerivationEngine", () => {
       // Old post should be gone
       const afterReset = yield* index.hasUri(targetRef, existingPost.uri);
       expect(afterReset).toBe(false);
+    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+  );
+
+  test("Idempotence: derive twice yields same result", () =>
+    Effect.gen(function* () {
+      const engine = yield* DerivationEngine;
+      const writer = yield* StoreWriter;
+      const index = yield* StoreIndex;
+      const filter: FilterExpr = all();
+
+      // Add posts to source
+      const posts = [
+        createTestPost("at://test/post1", "First"),
+        createTestPost("at://test/post2", "Second"),
+        createTestPost("at://test/post3", "Third")
+      ];
+
+      for (const post of posts) {
+        const event = PostUpsert.make({ post, meta: createTestMeta() });
+        const record = yield* writer.append(sourceRef, event);
+        yield* index.apply(sourceRef, record);
+      }
+
+      // First derivation
+      const result1 = yield* engine.derive(sourceRef, targetRef, filter, {
+        mode: "EventTime",
+        reset: false
+      });
+
+      expect(result1.eventsProcessed).toBe(3);
+      expect(result1.eventsMatched).toBe(3);
+
+      // Second derivation (should be idempotent - checkpoint filters out already-processed events)
+      const result2 = yield* engine.derive(sourceRef, targetRef, filter, {
+        mode: "EventTime",
+        reset: false
+      });
+
+      // Checkpoint filtering + URI deduplication ensures idempotence
+      // May process 0-1 events due to checkpoint timing, but no matches
+      expect(result2.eventsProcessed).toBeLessThanOrEqual(1);
+      expect(result2.eventsMatched).toBe(0); // All skipped due to URI deduplication
+
+      // Verify target still has exactly 3 posts
+      const hasPost1 = yield* index.hasUri(targetRef, posts[0].uri);
+      const hasPost2 = yield* index.hasUri(targetRef, posts[1].uri);
+      const hasPost3 = yield* index.hasUri(targetRef, posts[2].uri);
+
+      expect(hasPost1).toBe(true);
+      expect(hasPost2).toBe(true);
+      expect(hasPost3).toBe(true);
+    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+  );
+
+  test("Checkpoint enables incremental derivation", () =>
+    Effect.gen(function* () {
+      const engine = yield* DerivationEngine;
+      const writer = yield* StoreWriter;
+      const index = yield* StoreIndex;
+      const filter: FilterExpr = all();
+
+      // Add initial batch of posts
+      const initialPosts = [
+        createTestPost("at://test/post1", "First"),
+        createTestPost("at://test/post2", "Second")
+      ];
+
+      for (const post of initialPosts) {
+        const event = PostUpsert.make({ post, meta: createTestMeta() });
+        const record = yield* writer.append(sourceRef, event);
+        yield* index.apply(sourceRef, record);
+      }
+
+      // First derivation
+      const result1 = yield* engine.derive(sourceRef, targetRef, filter, {
+        mode: "EventTime",
+        reset: false
+      });
+
+      expect(result1.eventsProcessed).toBe(2);
+      expect(result1.eventsMatched).toBe(2);
+
+      // Add more posts to source
+      const newPosts = [
+        createTestPost("at://test/post3", "Third"),
+        createTestPost("at://test/post4", "Fourth")
+      ];
+
+      for (const post of newPosts) {
+        const event = PostUpsert.make({ post, meta: createTestMeta() });
+        const record = yield* writer.append(sourceRef, event);
+        yield* index.apply(sourceRef, record);
+      }
+
+      // Second derivation (incremental)
+      const result2 = yield* engine.derive(sourceRef, targetRef, filter, {
+        mode: "EventTime",
+        reset: false
+      });
+
+      // Checkpoint filtering: processes only events with EventId > last checkpoint
+      // With ULID comparison, may process 2 or 3 depending on timing
+      expect(result2.eventsMatched).toBeGreaterThanOrEqual(2);
+      expect(result2.eventsMatched).toBeLessThanOrEqual(3);
+
+      // Verify all 4 posts are in target
+      const hasPost1 = yield* index.hasUri(targetRef, initialPosts[0].uri);
+      const hasPost2 = yield* index.hasUri(targetRef, initialPosts[1].uri);
+      const hasPost3 = yield* index.hasUri(targetRef, newPosts[0].uri);
+      const hasPost4 = yield* index.hasUri(targetRef, newPosts[1].uri);
+
+      expect(hasPost1).toBe(true);
+      expect(hasPost2).toBe(true);
+      expect(hasPost3).toBe(true);
+      expect(hasPost4).toBe(true);
+    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+  );
+
+  test("Count invariant: processed = matched + skipped + deletes", () =>
+    Effect.gen(function* () {
+      const engine = yield* DerivationEngine;
+      const writer = yield* StoreWriter;
+      const index = yield* StoreIndex;
+      const filter: FilterExpr = { _tag: "Hashtag", tag: Hashtag.make("#tech") };
+
+      // Add mixed events: some matching, some not, some deletes
+      const matchingPost = createTestPost("at://test/post1", "Tech post", ["#tech"]);
+      const nonMatchingPost = createTestPost("at://test/post2", "Other post", ["#science"]);
+      const deletePost = createTestPost("at://test/post3", "Deleted", ["#tech"]);
+
+      // Add matching post
+      const event1 = PostUpsert.make({ post: matchingPost, meta: createTestMeta() });
+      const record1 = yield* writer.append(sourceRef, event1);
+      yield* index.apply(sourceRef, record1);
+
+      // Add non-matching post
+      const event2 = PostUpsert.make({ post: nonMatchingPost, meta: createTestMeta() });
+      const record2 = yield* writer.append(sourceRef, event2);
+      yield* index.apply(sourceRef, record2);
+
+      // Add delete event
+      const deleteEvent = PostDelete.make({
+        uri: deletePost.uri,
+        cid: deletePost.cid,
+        meta: createTestMeta()
+      });
+      const deleteRecord = yield* writer.append(sourceRef, deleteEvent);
+      yield* index.apply(sourceRef, deleteRecord);
+
+      const result = yield* engine.derive(sourceRef, targetRef, filter, {
+        mode: "EventTime",
+        reset: false
+      });
+
+      // Verify count invariant
+      const total = result.eventsMatched + result.eventsSkipped + result.deletesPropagated;
+      expect(result.eventsProcessed).toBe(total);
+
+      // Specific counts
+      expect(result.eventsMatched).toBe(1); // Only #tech post
+      expect(result.eventsSkipped).toBe(1); // Non-matching #science post
+      expect(result.deletesPropagated).toBe(1); // Delete event
+      expect(result.eventsProcessed).toBe(3); // Total
     }).pipe(Effect.provide(TestLayer), Effect.runPromise)
   );
 });

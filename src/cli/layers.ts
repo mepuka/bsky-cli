@@ -22,6 +22,11 @@ import { LinkValidator } from "../services/link-validator.js";
 import { TrendingTopics } from "../services/trending-topics.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { CliOutput } from "./output.js";
+import { DerivationEngine } from "../services/derivation-engine.js";
+import { DerivationValidator } from "../services/derivation-validator.js";
+import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
+import { LineageStore } from "../services/lineage-store.js";
+import { FilterCompiler } from "../services/filter-compiler.js";
 
 const appConfigLayer = AppConfigService.layer;
 const credentialLayer = CredentialStore.layer.pipe(Layer.provideMerge(appConfigLayer));
@@ -92,6 +97,27 @@ const syncLayer = SyncEngine.layer.pipe(
   Layer.provideMerge(bskyLayer),
   Layer.provideMerge(SyncReporter.layer)
 );
+const viewCheckpointLayer = ViewCheckpointStore.layer.pipe(
+  Layer.provideMerge(storageLayer)
+);
+const lineageLayer = LineageStore.layer.pipe(
+  Layer.provideMerge(storageLayer)
+);
+const compilerLayer = FilterCompiler.layer;
+const derivationEngineLayer = DerivationEngine.layer.pipe(
+  Layer.provideMerge(eventLogLayer),
+  Layer.provideMerge(writerLayer),
+  Layer.provideMerge(indexLayer),
+  Layer.provideMerge(compilerLayer),
+  Layer.provideMerge(runtimeLayer),
+  Layer.provideMerge(viewCheckpointLayer),
+  Layer.provideMerge(lineageLayer)
+);
+const derivationValidatorLayer = DerivationValidator.layer.pipe(
+  Layer.provideMerge(viewCheckpointLayer),
+  Layer.provideMerge(eventLogLayer),
+  Layer.provideMerge(managerLayer)
+);
 
 export const CliLive = Layer.mergeAll(
   appConfigLayer,
@@ -100,5 +126,8 @@ export const CliLive = Layer.mergeAll(
   resourceMonitorLayer,
   managerLayer,
   cleanerLayer,
-  syncLayer
+  syncLayer,
+  derivationEngineLayer,
+  derivationValidatorLayer,
+  lineageLayer
 );

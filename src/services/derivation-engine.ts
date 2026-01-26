@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Clock, Context, Effect, Layer, Option, ParseResult, Schema, Stream } from "effect";
 import { StoreEventLog } from "./store-event-log.js";
 import { StoreWriter } from "./store-writer.js";
 import { StoreIndex } from "./store-index.js";
@@ -37,7 +37,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
       options: DerivationOptions
     ) => Effect.Effect<
       DerivationResult,
-      DerivationError | StoreIoError | StoreIndexError | FilterCompileError | FilterEvalError
+      DerivationError | StoreIoError | StoreIndexError | FilterCompileError | FilterEvalError | ParseResult.ParseError
     >;
   }
 >() {
@@ -56,6 +56,8 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
         (sourceRef, targetRef, filterExpr, options) =>
           Effect.gen(function* () {
             // EventTime mode guard: reject effectful filters
+            // Defense-in-depth: CLI validates for UX (user-friendly errors),
+            // service validates for safety (in case called from other contexts)
             if (options.mode === "EventTime" && isEffectfulFilter(filterExpr)) {
               return yield* DerivationError.make({
                 reason:
@@ -183,14 +185,6 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             const endTimeMillis = yield* Clock.currentTimeMillis;
             const timestamp = yield* Schema.decodeUnknown(Timestamp)(
               new Date(endTimeMillis).toISOString()
-            ).pipe(
-              Effect.mapError(() =>
-                DerivationError.make({
-                  reason: "Failed to create timestamp",
-                  sourceStore: sourceRef.name,
-                  targetStore: targetRef.name
-                })
-              )
             );
 
             // Checkpoint saving: only if we processed events
