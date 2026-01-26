@@ -1,0 +1,33 @@
+{
+  "name": "skygent-bsky",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "prepare": "effect-language-service patch",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.72.0",
+    "@effect/vitest": "^0.27.0",
+    "@types/bun": "latest",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@effect/ai": "^0.33.2",
+    "@effect/ai-anthropic": "^0.23.0",
+    "@effect/ai-google": "^0.12.1",
+    "@effect/ai-openai": "^0.37.2",
+    "@effect/cli": "^0.73.1",
+    "@effect/platform": "^0.94.2",
+    "@effect/platform-bun": "^0.87.1",
+    "@effect/typeclass": "^0.38.0",
+    "@atproto/api": "^0.18.17",
+    "effect": "^3.19.15"
+  }
+}

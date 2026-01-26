@@ -1,0 +1,20 @@
+{
+  "feed": [
+    {
+      "post": {
+        "uri": "at://did:plc:carol/app.bsky.feed.post/3",
+        "cid": "bafkreibopuwahkkqplrgl3hvwu2wrbnfgoj2eau5eqjzjglsmwq2ewxpyy",
+        "author": {
+          "did": "did:plc:carol",
+          "handle": "carol.bsky"
+        },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "text": "Feed item",
+          "createdAt": "2026-01-03T00:00:00.000Z"
+        },
+        "indexedAt": "2026-01-03T00:00:01.000Z"
+      }
+    }
+  ]
+}

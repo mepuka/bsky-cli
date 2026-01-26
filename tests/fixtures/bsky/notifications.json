@@ -1,0 +1,20 @@
+{
+  "notifications": [
+    {
+      "uri": "at://did:plc:alice/app.bsky.feed.post/4",
+      "cid": "bafkreiayvq7hgq7qc2eqyuiosp4tkjqrnhm6h5lfinsctaypv4etj5hy4q",
+      "author": {
+        "did": "did:plc:alice",
+        "handle": "alice.bsky"
+      },
+      "reason": "mention",
+      "record": {
+        "$type": "app.bsky.feed.post",
+        "text": "Hi @bob.bsky",
+        "createdAt": "2026-01-04T00:00:00.000Z"
+      },
+      "isRead": false,
+      "indexedAt": "2026-01-04T00:00:01.000Z"
+    }
+  ]
+}

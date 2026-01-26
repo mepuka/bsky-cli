@@ -1,0 +1,37 @@
+{
+  "feed": [
+    {
+      "post": {
+        "uri": "at://did:plc:alice/app.bsky.feed.post/1",
+        "cid": "bafkreigks6arfsq3xxfpvqrrwonchxcnu6do76auprhhfomao6c273sixm",
+        "author": {
+          "did": "did:plc:alice",
+          "handle": "alice.bsky"
+        },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "text": "Hello #effect",
+          "createdAt": "2026-01-01T00:00:00.000Z"
+        },
+        "indexedAt": "2026-01-01T00:00:01.000Z",
+        "replyCount": 1
+      }
+    },
+    {
+      "post": {
+        "uri": "at://did:plc:bob/app.bsky.feed.post/2",
+        "cid": "bafkreib6epubmabzlffdhckpmvsodmjuro6xuaei2qwevs3t52xnlhaatu",
+        "author": {
+          "did": "did:plc:bob",
+          "handle": "bob.bsky"
+        },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "text": "Second post",
+          "createdAt": "2026-01-02T00:00:00.000Z"
+        },
+        "indexedAt": "2026-01-02T00:00:01.000Z"
+      }
+    }
+  ]
+}

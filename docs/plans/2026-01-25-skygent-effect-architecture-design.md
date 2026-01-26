@@ -90,97 +90,188 @@ Skygent is a command-line tool for AI agents to monitor, filter, and persist Blu
 - **Effectful** - Filters can call LLMs, APIs, or perform async validation
 - **Agent-First** - Designed for programmatic use with JSON/Markdown output
 
+### Revision Notes (2026-01-25)
+
+This document now assumes the following architectural updates:
+
+- **Filters are data, not closures**: a `FilterExpr` ADT + interpreter enables serialization, optimization, and predictable evaluation policies.
+- **Typed domain primitives**: branded types and `Schema.Class` models for stable IDs, URIs, handles, and timestamps.
+- **Typed errors everywhere**: `Schema.TaggedError` for filter, store, sync, and parsing errors.
+- **Storage is append-first**: event log + derived index/view layers for robustness and resumability.
+- **Config is JSON-first**: external configs are plain JSON, decoded into typed internal structures.
+- **LLM/HTTP policies are explicit**: retry/timeout and fail-open/closed rules are configurable per filter.
+
 ---
 
 ## 1. Core Abstractions
 
-### 1.1 Filters as Algebraic Structures
+### 1.1 Filters as a Typed ADT (AST + Interpreter)
 
-**Pattern:** Boolean algebra with Monoid composition
-
-```typescript
-import { Monoid, Chunk, Effect, HashMap } from "effect"
-
-interface Filter<A> {
-  readonly predicate: (a: A) => Effect.Effect<boolean>
-  readonly and: (other: Filter<A>) => Filter<A>
-  readonly or: (other: Filter<A>) => Filter<A>
-  readonly not: () => Filter<A>
-}
-
-// Monoid for combining filters
-const FilterMonoid: Monoid.Monoid<Filter<Post>> = {
-  empty: { predicate: () => Effect.succeed(true), ... },
-  combine: (f1, f2) => ({
-    predicate: (post) => Effect.all([
-      f1.predicate(post),
-      f2.predicate(post)
-    ]).pipe(Effect.map(([r1, r2]) => r1 && r2)),
-    ...
-  })
-}
-```
-
-**Key Features:**
-- **Associative** - `(f1 && f2) && f3 === f1 && (f2 && f3)`
-- **Identity** - `f && always === f`
-- **Composable** - Use `Chunk.reduce` to combine filter lists
-- **Effectful** - Predicates return `Effect<boolean>` for async operations
-
-### 1.2 Effect-Native Data Structures
-
-**Pattern:** Replace JS primitives with Effect structures
-
-```typescript
-interface Post {
-  readonly uri: string
-  readonly text: string
-  readonly author: string
-  readonly createdAt: Date
-  readonly metadata: HashMap.HashMap<string, unknown>  // Not plain object
-  readonly hashtags: HashSet.HashSet<string>           // Not Set
-  readonly mentions: HashSet.HashSet<string>           // Not Set
-  readonly links: Chunk.Chunk<URL>                     // Not Array
-}
-```
-
-**Benefits:**
-- **Structural sharing** - O(log n) updates, not O(n) copies
-- **Immutability** - No accidental mutations
-- **Performance** - Chunk concatenation is O(log n), not O(n)
-- **Integration** - Native support in Stream and Effect APIs
-
-### 1.3 Schema-Based Parsing
-
-**Pattern:** Transform raw JSON to domain models with validation
+**Pattern:** Boolean algebra as data + interpreter with explicit evaluation policy.
 
 ```typescript
 import { Schema } from "effect"
 
-const HashtagSchema = Schema.String.pipe(
-  Schema.pattern(/^#[a-zA-Z0-9_]+$/),
-  Schema.minLength(2),
-  Schema.maxLength(64)
-)
+class FilterAll extends Schema.TaggedClass<FilterAll>()("All", {}) {}
+class FilterNone extends Schema.TaggedClass<FilterNone>()("None", {}) {}
+class FilterAnd extends Schema.TaggedClass<FilterAnd>()("And", {
+  left: Schema.lazy(() => FilterExpr),
+  right: Schema.lazy(() => FilterExpr)
+}) {}
+class FilterOr extends Schema.TaggedClass<FilterOr>()("Or", {
+  left: Schema.lazy(() => FilterExpr),
+  right: Schema.lazy(() => FilterExpr)
+}) {}
+class FilterNot extends Schema.TaggedClass<FilterNot>()("Not", {
+  expr: Schema.lazy(() => FilterExpr)
+}) {}
 
-const EnrichedPost = Schema.transform(
-  RawPost,
-  Schema.Struct({
+class FilterAuthor extends Schema.TaggedClass<FilterAuthor>()("Author", {
+  handle: Handle
+}) {}
+class FilterHashtag extends Schema.TaggedClass<FilterHashtag>()("Hashtag", {
+  tag: Hashtag
+}) {}
+class FilterDateRange extends Schema.TaggedClass<FilterDateRange>()("DateRange", {
+  start: Timestamp,
+  end: Timestamp
+}) {}
+class FilterHasValidLinks extends Schema.TaggedClass<FilterHasValidLinks>()("HasValidLinks", {
+  onError: FilterErrorPolicy
+}) {}
+class FilterTrending extends Schema.TaggedClass<FilterTrending>()("Trending", {
+  tag: Hashtag,
+  onError: FilterErrorPolicy
+}) {}
+class FilterLlm extends Schema.TaggedClass<FilterLlm>()("Llm", {
+  prompt: Schema.String,
+  minConfidence: Schema.Number,
+  onError: FilterErrorPolicy
+}) {}
+
+export const FilterExpr = Schema.Union(
+  FilterAll,
+  FilterNone,
+  FilterAnd,
+  FilterOr,
+  FilterNot,
+  FilterAuthor,
+  FilterHashtag,
+  FilterDateRange,
+  FilterHasValidLinks,
+  FilterTrending,
+  FilterLlm
+)
+export type FilterExpr = typeof FilterExpr.Type
+```
+
+**Interpreter (short-circuit, policy-aware):**
+
+```typescript
+const and = (left: Predicate, right: Predicate): Predicate =>
+  (post) =>
+    left(post).pipe(
+      Effect.flatMap((ok) => ok ? right(post) : Effect.succeed(false))
+    )
+```
+
+**Key Features:**
+- **Serializable** - Filters are data and can be stored in config or generated by agents
+- **Composable** - Monoid over `FilterExpr` (e.g., `And` with identity `All`)
+- **Short-circuiting** - evaluation order is explicit and safe for effectful filters
+- **Type-safe policies** - fail-open/closed, retries, and timeouts are part of the AST
+
+### 1.2 Domain Types and Primitives
+
+**Pattern:** Branded primitives + `Schema.Class` for runtime validation and type safety.
+
+```typescript
+import { Schema } from "effect"
+
+export const Handle = Schema.String.pipe(
+  Schema.pattern(/^[a-z0-9][a-z0-9.-]{1,63}$/),
+  Schema.brand("Handle")
+)
+export type Handle = typeof Handle.Type
+
+export const Hashtag = Schema.String.pipe(
+  Schema.pattern(/^#[a-zA-Z0-9_]+$/),
+  Schema.brand("Hashtag")
+)
+export type Hashtag = typeof Hashtag.Type
+
+export const PostUri = Schema.String.pipe(Schema.brand("PostUri"))
+export type PostUri = typeof PostUri.Type
+
+export const PostCid = Schema.String.pipe(Schema.brand("PostCid"))
+export type PostCid = typeof PostCid.Type
+
+export const Timestamp = Schema.DateFromString.pipe(Schema.brand("Timestamp"))
+export type Timestamp = typeof Timestamp.Type
+
+export class Post extends Schema.Class<Post>("Post")({
+  uri: PostUri,
+  cid: Schema.optional(PostCid),
+  author: Handle,
+  text: Schema.String,
+  createdAt: Timestamp,
+  hashtags: Schema.Array(Hashtag),
+  mentions: Schema.Array(Handle),
+  links: Schema.Array(Schema.URL)
+}) {}
+
+export const StoreName = Schema.String.pipe(
+  Schema.pattern(/^[a-z0-9][a-z0-9-_]{1,63}$/),
+  Schema.brand("StoreName")
+)
+export type StoreName = typeof StoreName.Type
+
+export const StorePath = Schema.String.pipe(Schema.brand("StorePath"))
+export type StorePath = typeof StorePath.Type
+```
+
+**Internal vs External Shapes:**
+- External JSON uses arrays/objects for compatibility.
+- Internal processing can project to `Chunk`/`HashSet`/`HashMap` for performance.
+- Conversions live in a dedicated `PostIndex`/`PostView` module (not ad-hoc).
+
+### 1.3 Schema-Based Parsing
+
+**Pattern:** Parse raw payloads once, transform into validated domain types.
+
+```typescript
+import { Schema } from "effect"
+
+class RawPost extends Schema.Class<RawPost>("RawPost")({
+  uri: PostUri,
+  cid: Schema.optional(PostCid),
+  author: Handle,
+  record: Schema.Struct({
     text: Schema.String,
-    mentions: Schema.Array(MentionSchema),
-    hashtags: Schema.Array(HashtagSchema),
-    links: Schema.Array(LinkSchema)
-  }),
-  {
-    decode: (raw) => ({
+    createdAt: Schema.String
+  })
+}) {}
+
+// Transform raw -> domain Post (validated + enriched)
+const PostFromRaw = Schema.transformOrFail(RawPost, Post, {
+  decode: (raw) =>
+    Schema.decodeUnknown(Post)({
+      uri: raw.uri,
+      cid: raw.cid,
+      author: raw.author,
       text: raw.record.text,
-      mentions: extractMentions(raw.record.text),
+      createdAt: raw.record.createdAt,
       hashtags: extractHashtags(raw.record.text),
+      mentions: extractMentions(raw.record.text),
       links: extractLinks(raw.record.text)
     }),
-    encode: (enriched) => ({ record: { text: enriched.text } })
-  }
-)
+  encode: (post) => ({
+    uri: post.uri,
+    cid: post.cid,
+    author: post.author,
+    record: { text: post.text, createdAt: post.createdAt }
+  })
+})
 ```
 
 **Key Features:**
@@ -188,6 +279,56 @@ const EnrichedPost = Schema.transform(
 - **Custom transforms** - Extract entities during decode
 - **Type-safe** - Compile-time guarantees on parsed data
 - **Error tracking** - Structured ParseError with paths
+- **Single decode boundary** - Raw data is decoded once at ingestion
+
+### 1.4 Errors and Policies
+
+**Pattern:** Every subsystem returns tagged, typed errors.
+
+```typescript
+class FilterCompileError extends Schema.TaggedError<FilterCompileError>()(
+  "FilterCompileError",
+  { message: Schema.String }
+) {}
+
+class FilterEvalError extends Schema.TaggedError<FilterEvalError>()(
+  "FilterEvalError",
+  { message: Schema.String, cause: Schema.optional(Schema.Unknown) }
+) {}
+
+class StoreNotFound extends Schema.TaggedError<StoreNotFound>()(
+  "StoreNotFound",
+  { name: StoreName }
+) {}
+
+class StoreIoError extends Schema.TaggedError<StoreIoError>()(
+  "StoreIoError",
+  { path: StorePath, cause: Schema.Unknown }
+) {}
+
+class StoreIndexError extends Schema.TaggedError<StoreIndexError>()(
+  "StoreIndexError",
+  { message: Schema.String, cause: Schema.optional(Schema.Unknown) }
+) {}
+
+export type StoreError = StoreNotFound | StoreIoError | StoreIndexError
+```
+
+```typescript
+class IncludeOnError extends Schema.TaggedClass<IncludeOnError>()("Include", {}) {}
+class ExcludeOnError extends Schema.TaggedClass<ExcludeOnError>()("Exclude", {}) {}
+class RetryOnError extends Schema.TaggedClass<RetryOnError>()("Retry", {
+  maxRetries: Schema.Number,
+  baseDelay: Schema.Duration
+}) {}
+
+export const FilterErrorPolicy = Schema.Union(
+  IncludeOnError,
+  ExcludeOnError,
+  RetryOnError
+)
+export type FilterErrorPolicy = typeof FilterErrorPolicy.Type
+```
 
 ---
 
@@ -199,34 +340,54 @@ const EnrichedPost = Schema.transform(
 
 ```typescript
 // Authentication and API client
-class BskyClient extends Context.Tag("BskyClient")<BskyClient, {
-  readonly getTimeline: (opts?: TimelineOpts) => Stream.Stream<Post, BskyError>
-  readonly getNotifications: Stream.Stream<Notification, BskyError>
-  readonly getFeed: (uri: string) => Stream.Stream<Post, BskyError>
+class BskyClient extends Context.Tag("@skygent/BskyClient")<BskyClient, {
+  readonly getTimeline: (opts?: TimelineOpts) => Stream.Stream<RawPost, BskyError>
+  readonly getNotifications: Stream.Stream<RawNotification, BskyError>
+  readonly getFeed: (uri: string) => Stream.Stream<RawPost, BskyError>
 }>() {}
 
-// Composable filter evaluation
-class FilterEngine extends Context.Tag("FilterEngine")<FilterEngine, {
-  readonly evaluate: (filter: Filter<Post>) => (post: Post) => Effect.Effect<boolean>
-  readonly compile: (config: FilterConfig) => Effect.Effect<Filter<Post>>
-  readonly llmFilter: (prompt: string) => Filter<Post>
+// Parse + enrich raw payloads
+class PostParser extends Context.Tag("@skygent/PostParser")<PostParser, {
+  readonly parsePost: (raw: RawPost) => Effect.Effect<Post, ParseError>
 }>() {}
 
-// Hierarchical storage management
-class StoreManager extends Context.Tag("StoreManager")<StoreManager, {
-  readonly createStore: (name: string, config: StoreConfig) => Effect.Effect<Store>
-  readonly getStore: (name: string) => Effect.Effect<Option.Option<Store>>
-  readonly listStores: Effect.Effect<Chunk.Chunk<StoreMetadata>>
-  readonly stores: Effect.Effect<HashMap.HashMap<string, Store>>
+// Compile filter specs to a typed FilterExpr AST
+class FilterCompiler extends Context.Tag("@skygent/FilterCompiler")<FilterCompiler, {
+  readonly compile: (spec: FilterSpec) => Effect.Effect<FilterExpr, FilterCompileError>
+}>() {}
+
+// Evaluate FilterExpr with policy-aware, short-circuiting semantics
+class FilterRuntime extends Context.Tag("@skygent/FilterRuntime")<FilterRuntime, {
+  readonly evaluate: (
+    expr: FilterExpr
+  ) => Effect.Effect<(post: Post) => Effect.Effect<boolean, FilterEvalError>, FilterCompileError>
+}>() {}
+
+// Hierarchical storage management (metadata + config)
+class StoreManager extends Context.Tag("@skygent/StoreManager")<StoreManager, {
+  readonly createStore: (name: StoreName, config: StoreConfig) => Effect.Effect<StoreRef, StoreError>
+  readonly getStore: (name: StoreName) => Effect.Effect<Option.Option<StoreRef>, StoreError>
+  readonly listStores: Effect.Effect<Chunk.Chunk<StoreMetadata>, StoreError>
+}>() {}
+
+// Append-only event log writer
+class StoreWriter extends Context.Tag("@skygent/StoreWriter")<StoreWriter, {
+  readonly append: (store: StoreRef, event: PostEvent) => Effect.Effect<void, StoreError>
+}>() {}
+
+// Queryable index/materialized views
+class StoreIndex extends Context.Tag("@skygent/StoreIndex")<StoreIndex, {
+  readonly upsert: (store: StoreRef, post: Post) => Effect.Effect<void, StoreError>
+  readonly query: (store: StoreRef, query: StoreQuery) => Stream.Stream<Post, StoreError>
 }>() {}
 
 // Stream processing and sync
-class SyncEngine extends Context.Tag("SyncEngine")<SyncEngine, {
+class SyncEngine extends Context.Tag("@skygent/SyncEngine")<SyncEngine, {
   readonly sync: (
     source: DataSource,
-    target: Store,
-    filter: Filter<Post>
-  ) => Effect.Effect<SyncResult>
+    target: StoreRef,
+    filter: FilterExpr
+  ) => Effect.Effect<SyncResult, SyncError>
   readonly watch: (config: WatchConfig) => Stream.Stream<SyncEvent>
 }>() {}
 ```
@@ -237,21 +398,25 @@ class SyncEngine extends Context.Tag("SyncEngine")<SyncEngine, {
 
 ```typescript
 // Infrastructure
-const FileSystemLive = NodeFileSystem.layer
-const ConfigLive = Layer.succeed(Config, loadConfig())
+const FileSystemLive = BunFileSystem.layer
+const ConfigLive = Layer.effect(Config, loadConfig)
+const HttpClientLive = BunHttpClient.layer
+const CacheLive = Cache.layer
 
 // Clients
 const BskyClientLive = Layer.scoped(
   BskyClient,
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const config = yield* Config
     const agent = new BskyAgent({ service: config.service })
 
     yield* Effect.acquireRelease(
-      Effect.tryPromise(() => agent.login({
-        identifier: config.identifier,
-        password: config.password
-      })),
+      Effect.tryPromise(() =>
+        agent.login({
+          identifier: config.identifier,
+          password: config.password
+        })
+      ),
       () => Effect.promise(() => agent.logout())
     )
 
@@ -259,46 +424,46 @@ const BskyClientLive = Layer.scoped(
   })
 )
 
-// Services
-const FilterEngineLive = Layer.effect(
-  FilterEngine,
-  Effect.gen(function*() {
+const PostParserLive = Layer.succeed(PostParser, PostParser.of({
+  parsePost: (raw) => Schema.decodeUnknown(PostFromRaw)(raw)
+}))
+
+const FilterCompilerLive = Layer.effect(FilterCompiler, /* spec -> FilterExpr */)
+
+const FilterRuntimeLive = Layer.effect(
+  FilterRuntime,
+  Effect.gen(function* () {
     const llm = yield* LanguageModel.LanguageModel
+    const cache = yield* Cache.Cache
+    const http = yield* HttpClient.HttpClient
 
-    return FilterEngine.of({
-      evaluate: (filter) => (post) => filter.predicate(post),
-      llmFilter: (prompt) => ({
-        predicate: (post) =>
-          LanguageModel.generateObject({
-            prompt: `${prompt}\n\nPost: ${post.text}`,
-            schema: Schema.Struct({ isRelevant: Schema.Boolean })
-          }).pipe(
-            Effect.map(r => r.value.isRelevant),
-            Effect.cached(Duration.minutes(5))
-          ),
-        ...
-      })
-    })
+    return FilterRuntime.of({ /* policy-aware evaluator */ })
   })
 )
 
-const StoreManagerLive = Layer.effect(
-  StoreManager,
-  Effect.gen(function*() {
-    const fs = yield* FileSystem.FileSystem
-    const stores = yield* Ref.make(HashMap.empty<string, Store>())
+const StoreManagerLive = Layer.effect(StoreManager, /* metadata + config only */)
+const StoreWriterLive = Layer.effect(StoreWriter, /* append-only event log */)
+const StoreIndexLive = Layer.effect(StoreIndex, /* kv index or sqlite (optional) */)
 
-    return StoreManager.of({ /* implementation */ })
-  })
+const InfraLive = Layer.mergeAll(
+  FileSystemLive,
+  ConfigLive,
+  HttpClientLive,
+  CacheLive,
+  LanguageModel.layer
 )
 
-// Application composition
+// Provide once at the top
 const AppLive = Layer.mergeAll(
-  BskyClientLive.pipe(Layer.provide(ConfigLive)),
-  FilterEngineLive,
-  StoreManagerLive.pipe(Layer.provide(FileSystemLive)),
+  BskyClientLive,
+  PostParserLive,
+  FilterCompilerLive,
+  FilterRuntimeLive,
+  StoreManagerLive,
+  StoreWriterLive,
+  StoreIndexLive,
   SyncEngineLive
-)
+).pipe(Layer.provide(InfraLive))
 ```
 
 ---
@@ -307,6 +472,10 @@ const AppLive = Layer.mergeAll(
 
 ### 3.1 Store Structure
 
+**Primary persistence:** File-based `KeyValueStore` (Effect Platform) backed by the local filesystem.
+The KV store holds event records, metadata, and rebuildable index shards keyed by stable prefixes.
+Event keys use time-ordered ULIDs to preserve deterministic replay order.
+
 **Filesystem Layout:**
 
 ```
@@ -314,80 +483,157 @@ const AppLive = Layer.mergeAll(
   config.json              # Global auth + defaults
   stores/
     arsenal/               # Custom store
-      store.json           # Store config (filters, rules)
-      timeline/
-        all.json           # Full timeline (Chunk<Post>)
-        all.md             # Readable markdown
-        tech/
-          posts.json       # Filtered posts (HashMap<string, Post>)
-          posts.md
-          README.md        # Filter rules explanation
-        sports/
-          posts.json
-      notifications/
-        mentions.json
+      store.json           # Store config (JSON)
+      checkpoints.json     # Sync cursors + provenance
+      kv/                  # File-based KeyValueStore backing (encoded keys)
+      index.sqlite         # Optional read-optimized index (later)
+      views/
+        timeline/
+          all.json
+          all.md
+        filters/
+          tech/
+            posts.json
+            posts.md
+            README.md
+          sports/
+            posts.json
+```
+
+**Logical KV keyspace (illustrative):**
+
+```
+events/timeline/<ulid>          -> PostEventRecord (JSON)
+events/notifications/<ulid>     -> PostEventRecord (JSON)
+events/manifest                 -> string[] (ordered event keys)
+indexes/by-date/<yyyy-mm-dd>    -> PostUri[]
+indexes/by-hashtag/<tag>        -> PostUri[]
+meta/store                      -> Store metadata
 ```
 
 ### 3.2 Store Configuration
 
-**Declarative DSL:**
+**Declarative DSL (JSON-first, typed decode):**
 
 ```typescript
-interface StoreConfig {
-  readonly format: {
-    readonly json: boolean
-    readonly markdown: boolean
-  }
-  readonly filters: HashMap.HashMap<string, FilterConfig>
-  readonly autoSync: boolean
-  readonly syncInterval?: Duration.Duration
-}
+class StoreConfig extends Schema.Class<StoreConfig>("StoreConfig")({
+  format: Schema.Struct({
+    json: Schema.Boolean,
+    markdown: Schema.Boolean
+  }),
+  autoSync: Schema.Boolean,
+  syncInterval: Schema.optional(Schema.String), // e.g. "5 minutes" (later decoded to Duration)
+  filters: Schema.Array(FilterSpec)
+}) {}
 
-interface FilterConfig {
-  readonly type: "hashtag" | "author" | "date" | "llm" | "composite"
-  readonly rules: unknown  // Type depends on filter type
-}
+class FilterSpec extends Schema.TaggedClass<FilterSpec>()("FilterSpec", {
+  name: Schema.String,
+  expr: FilterExpr,
+  output: Schema.Struct({
+    path: Schema.String,   // relative path template
+    json: Schema.Boolean,
+    markdown: Schema.Boolean
+  })
+}) {}
 
-// Example config
-const arsenalConfig: StoreConfig = {
+// Example config (JSON shape)
+const arsenalConfig = {
   format: { json: true, markdown: true },
-  filters: HashMap.make(
-    ["tech", { type: "hashtag", rules: { tags: ["#tech", "#typescript"] } }],
-    ["sports", { type: "hashtag", rules: { tags: ["#sports"] } }]
-  ),
   autoSync: true,
-  syncInterval: Duration.minutes(5)
+  syncInterval: "5 minutes",
+  filters: [
+    {
+      name: "tech",
+      expr: { _tag: "Hashtag", tag: "#tech" },
+      output: { path: "views/filters/tech", json: true, markdown: true }
+    },
+    {
+      name: "sports",
+      expr: { _tag: "Hashtag", tag: "#sports" },
+      output: { path: "views/filters/sports", json: true, markdown: false }
+    }
+  ]
 }
 ```
+
+**Note:** External config stays JSON. Internal compilation can convert to `Chunk`/`HashMap` and `Duration`.
 
 ### 3.3 Store Data Model
 
 **Using Effect-Native Structures:**
 
 ```typescript
-interface Store {
-  readonly name: string
-  readonly path: StorePath
-  readonly filters: Chunk.Chunk<Filter<Post>>
-  readonly posts: SortedMap.SortedMap<string, Post>  // Time-ordered
-  readonly metadata: HashMap.HashMap<string, unknown>
-}
+export class StoreRef extends Schema.Class<StoreRef>("StoreRef")({
+  name: StoreName,
+  root: StorePath
+}) {}
 
-// SortedMap enables efficient range queries
-const PostOrder = Order.combine(
-  Order.mapInput(Order.Date, (p: Post) => p.createdAt),
-  Order.mapInput(Order.string, (p: Post) => p.uri)
-)
+export class PostKey extends Schema.Class<PostKey>("PostKey")({
+  createdAt: Timestamp,
+  uri: PostUri
+}) {}
 
-// Create time-ordered store
-const timelineStore = SortedMap.empty(PostOrder)
+// SortedMap enables efficient range queries over keys
+const PostKeyOrder = Order.struct({
+  createdAt: Order.Date,
+  uri: Order.string
+})
 
-// Efficient range queries
+const timelineIndex = SortedMap.empty<PostKey, Post>(PostKeyOrder)
+
 const recentPosts = SortedMap.getRange(
-  timelineStore,
-  startDate,
-  endDate
+  timelineIndex,
+  PostKey.make({ createdAt: startDate, uri: startUri }),
+  PostKey.make({ createdAt: endDate, uri: endUri })
 )
+```
+
+**Persistence Strategy:**
+- **Event log** stored in file-based `KeyValueStore` under stable key prefixes (e.g., `events/timeline/<ulid>`).
+- **Indexes/views** are derived and rebuildable.
+- **Post identity** uses `PostUri` + optional `PostCid` for revisions.
+- **Checkpoints** track last processed event for incremental rebuilds.
+
+### 3.4 Event and Query Models
+
+```typescript
+class EventMeta extends Schema.Class<EventMeta>("EventMeta")({
+  source: Schema.Literal("timeline", "notifications", "jetstream"),
+  command: Schema.String,
+  filterExprHash: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.String),
+  promptHash: Schema.optional(Schema.String),
+  createdAt: Timestamp
+}) {}
+
+class PostUpsert extends Schema.TaggedClass<PostUpsert>()("PostUpsert", {
+  post: Post,
+  meta: EventMeta
+}) {}
+
+class PostDelete extends Schema.TaggedClass<PostDelete>()("PostDelete", {
+  uri: PostUri,
+  cid: Schema.optional(PostCid),
+  meta: EventMeta
+}) {}
+
+export const PostEvent = Schema.Union(PostUpsert, PostDelete)
+export type PostEvent = typeof PostEvent.Type
+
+export const EventId = Schema.ULID.pipe(Schema.brand("EventId"))
+export type EventId = typeof EventId.Type
+
+class PostEventRecord extends Schema.Class<PostEventRecord>("PostEventRecord")({
+  id: EventId,
+  version: Schema.Literal(1),
+  event: PostEvent
+}) {}
+
+class StoreQuery extends Schema.Class<StoreQuery>("StoreQuery")({
+  range: Schema.optional(Schema.Struct({ start: Timestamp, end: Timestamp })),
+  filter: Schema.optional(FilterExpr),
+  limit: Schema.optional(Schema.Number)
+}) {}
 ```
 
 ---
@@ -399,25 +645,15 @@ const recentPosts = SortedMap.getRange(
 **1. Simple Filters (Pure):**
 
 ```typescript
-const PostFilters = {
-  author: (handle: string): Filter<Post> => ({
-    predicate: (post) => Effect.succeed(post.author === handle),
-    ...
-  }),
+const Filters = {
+  author: (handle: Handle): FilterExpr =>
+    new FilterAuthor({ handle }),
 
-  hashtag: (tag: string): Filter<Post> => ({
-    predicate: (post) => Effect.succeed(
-      HashSet.has(post.hashtags, tag)
-    ),
-    ...
-  }),
+  hashtag: (tag: Hashtag): FilterExpr =>
+    new FilterHashtag({ tag }),
 
-  dateRange: (start: Date, end: Date): Filter<Post> => ({
-    predicate: (post) => Effect.succeed(
-      post.createdAt >= start && post.createdAt <= end
-    ),
-    ...
-  })
+  dateRange: (start: Timestamp, end: Timestamp): FilterExpr =>
+    new FilterDateRange({ start, end })
 }
 ```
 
@@ -425,29 +661,16 @@ const PostFilters = {
 
 ```typescript
 const EffectfulFilters = {
-  isTrending: (tag: string): Filter<Post> => ({
-    predicate: (post) =>
-      HttpClient.get(`/api/trending/${tag}`).pipe(
-        Effect.map(r => r.trending),
-        Effect.orElse(() => Effect.succeed(false))
-      ),
-    ...
-  }),
+  isTrending: (tag: Hashtag): FilterExpr =>
+    new FilterTrending({
+      tag,
+      onError: { _tag: "Include" } // fail-open by default
+    }),
 
-  hasValidLinks: (): Filter<Post> => ({
-    predicate: (post) =>
-      Effect.forEach(
-        post.links,
-        (link) => HttpClient.head(link.href).pipe(
-          Effect.map(_ => true),
-          Effect.catchAll(() => Effect.succeed(false))
-        ),
-        { concurrency: 3 }
-      ).pipe(
-        Effect.map(results => Chunk.every(results, x => x))
-      ),
-    ...
-  })
+  hasValidLinks: (): FilterExpr =>
+    new FilterHasValidLinks({
+      onError: { _tag: "Exclude" }
+    })
 }
 ```
 
@@ -455,33 +678,12 @@ const EffectfulFilters = {
 
 ```typescript
 const SemanticFilters = {
-  relevantTo: (topic: string): Filter<Post> => ({
-    predicate: (post) =>
-      LanguageModel.generateObject({
-        prompt: `Is this post relevant to ${topic}? Post: "${post.text}"`,
-        schema: Schema.Struct({
-          isRelevant: Schema.Boolean,
-          confidence: Schema.Number
-        })
-      }).pipe(
-        Effect.map(r => r.value.isRelevant && r.value.confidence > 0.7),
-        Effect.cached(Duration.minutes(10))  // Cache expensive LLM calls
-      ),
-    ...
-  }),
-
-  sentiment: (target: "positive" | "negative"): Filter<Post> => ({
-    predicate: (post) =>
-      LanguageModel.generateObject({
-        prompt: `Classify sentiment: ${post.text}`,
-        schema: Schema.Struct({
-          sentiment: Schema.Literal("positive", "negative", "neutral")
-        })
-      }).pipe(
-        Effect.map(r => r.value.sentiment === target)
-      ),
-    ...
-  })
+  relevantTo: (topic: string): FilterExpr =>
+    new FilterLlm({
+      prompt: `Is this post relevant to ${topic}?`,
+      minConfidence: 0.7,
+      onError: { _tag: "Include" }
+    })
 }
 ```
 
@@ -490,20 +692,32 @@ const SemanticFilters = {
 **Algebraic Combinators:**
 
 ```typescript
+const and = (left: FilterExpr, right: FilterExpr) => new FilterAnd({ left, right })
+const or = (left: FilterExpr, right: FilterExpr) => new FilterOr({ left, right })
+const not = (expr: FilterExpr) => new FilterNot({ expr })
+
 // Combine multiple filters with AND
 const techPosts = Chunk.make(
-  PostFilters.hashtag("#typescript"),
-  PostFilters.hashtag("#effect"),
-  PostFilters.author("alice.bsky")
+  Filters.hashtag("#typescript" as Hashtag),
+  Filters.hashtag("#effect" as Hashtag),
+  Filters.author("alice.bsky" as Handle)
 ).pipe(
-  Chunk.reduce(FilterMonoid.empty, FilterMonoid.combine)
+  Chunk.reduce(new FilterAll({}), (acc, next) => and(acc, next))
 )
 
 // Build complex filter with OR/NOT
-const interestingPosts = PostFilters.author("alice.bsky")
-  .or(PostFilters.hashtag("#effect"))
-  .and(PostFilters.dateRange(new Date("2024-01-01"), new Date()))
-  .not(PostFilters.author("spammer.bsky"))
+const interestingPosts = not(
+  and(
+    or(
+      Filters.author("alice.bsky" as Handle),
+      Filters.hashtag("#effect" as Hashtag)
+    ),
+    Filters.dateRange(
+      Timestamp.make(new Date("2024-01-01").toISOString()),
+      Timestamp.make(new Date().toISOString())
+    )
+  )
+)
 ```
 
 ### 4.3 Filter Execution Strategies
@@ -511,47 +725,23 @@ const interestingPosts = PostFilters.author("alice.bsky")
 **Sequential (Default):**
 
 ```typescript
+const predicate = yield* filterRuntime.evaluate(filterExpr)
+
 const filtered = yield* posts.pipe(
-  Stream.filterEffect((post) => filter.predicate(post))
+  Stream.filterEffect((post) => predicate(post))
 )
 ```
 
 **Batched (For LLM Filters):**
 
 ```typescript
-const batchedLLMFilter = (topic: string) =>
-  Effect.gen(function*() {
-    const cached = yield* Effect.cached(
-      (batch: Chunk.Chunk<Post>) =>
-        LanguageModel.generateObject({
-          prompt: `Rate relevance to ${topic} (0-10) for each:\n${
-            Chunk.map(batch, p => `- ${p.text}`).pipe(Chunk.join("\n"))
-          }`,
-          schema: Schema.Struct({
-            scores: Schema.Array(Schema.Number)
-          })
-        }).pipe(
-          Effect.map(r => Chunk.fromIterable(r.value.scores))
-        ),
-      Duration.minutes(10)
-    )
-
-    return (posts: Stream.Stream<Post>) =>
-      posts.pipe(
-        Stream.grouped(10),  // Batch size 10
-        Stream.mapEffect((batch) =>
-          cached(batch).pipe(
-            Effect.map((scores) =>
-              Chunk.zip(batch, scores).pipe(
-                Chunk.filter(([_, score]) => score > 7),
-                Chunk.map(([post, _]) => post)
-              )
-            )
-          )
-        ),
-        Stream.flattenChunks
-      )
-  })
+// Runtime uses RequestResolver + Effect.request to batch LLM calls
+const evaluateBatch = yield* FilterRuntime.evaluateBatch(filterExpr)
+const filtered = yield* posts.pipe(
+  Stream.grouped(10),
+  Stream.mapEffect(evaluateBatch),
+  Stream.flattenChunks
+)
 ```
 
 ---
@@ -563,89 +753,56 @@ const batchedLLMFilter = (topic: string) =>
 **Pattern:** Lazy evaluation with backpressure
 
 ```typescript
-const processFeed = (source: DataSource) =>
-  Effect.gen(function*() {
+const processFeed = (source: DataSource, storeName: StoreName, filterSpec: FilterSpec) =>
+  Effect.gen(function* () {
     const client = yield* BskyClient
-    const filterEngine = yield* FilterEngine
-    const storage = yield* StoreManager
+    const parser = yield* PostParser
+    const compiler = yield* FilterCompiler
+    const runtime = yield* FilterRuntime
+    const storeManager = yield* StoreManager
+    const writer = yield* StoreWriter
+    const index = yield* StoreIndex
 
-    // Fetch timeline as stream
-    const timeline = yield* client.getTimeline()
-
-    // Apply filter pipeline
-    const filtered = timeline.pipe(
-      // 1. Parse with Schema
-      Stream.mapEffect((raw) => Schema.decode(EnrichedPost)(raw)),
-
-      // 2. Fast heuristic filter
-      Stream.filter((post) => HashSet.size(post.hashtags) > 0),
-
-      // 3. Effectful validation
-      Stream.filterEffect((post) =>
-        EffectfulFilters.hasValidLinks().predicate(post)
-      ),
-
-      // 4. LLM semantic filter (batched)
-      Stream.grouped(10),
-      Stream.mapEffect((batch) => llmBatchFilter(batch)),
-      Stream.flattenChunks,
-
-      // 5. Transform to markdown
-      Stream.map(generateMarkdown)
+    const store = yield* storeManager.getStore(storeName).pipe(
+      Effect.flatMap(Option.match({
+        onNone: () => Effect.fail(StoreNotFound.make({ name: storeName })),
+        onSome: Effect.succeed
+      }))
     )
 
-    // Persist to store
-    yield* filtered.pipe(
-      Stream.runForEach((post) =>
-        storage.getStore("arsenal").pipe(
-          Effect.flatMap(Option.match({
-            onNone: () => Effect.fail("Store not found"),
-            onSome: (store) => savePost(store, post)
-          }))
-        )
-      )
+    const filterExpr = yield* compiler.compile(filterSpec)
+    const predicate = yield* runtime.evaluate(filterExpr)
+
+    const stream = yield* client.getTimeline()
+
+    yield* stream.pipe(
+      Stream.mapEffect(parser.parsePost),
+      Stream.filterEffect(predicate),
+      Stream.tap((post) => writer.append(store, PostEvent.fromPost(post))),
+      Stream.tap((post) => index.upsert(store, post)),
+      Stream.runDrain
     )
   })
 ```
 
 ### 5.2 Markdown Generation
 
-**Pattern:** Transform enriched posts to human-readable format
+**Pattern:** Transform enriched posts to human-readable format (facet-aware, safe escaping)
 
 ```typescript
-const generateMarkdown = (post: EnrichedPost): string => {
-  let md = `# Post by @${post.author}\n\n`
-  md += `**Created:** ${post.createdAt.toISOString()}\n\n`
-
-  // Replace mentions
-  let text = post.text
-  HashSet.forEach(post.mentions, (mention) => {
-    text = text.replace(
-      new RegExp(`@${mention}`, "g"),
-      `[@${mention}](mention://${mention})`
-    )
+const generateMarkdown = (post: Post): string => {
+  const header = `# Post by @${post.author}\n\n**Created:** ${post.createdAt.toISOString()}\n\n`
+  const body = renderMarkdownFromFacets({
+    text: post.text,
+    mentions: post.mentions,
+    hashtags: post.hashtags,
+    links: post.links
   })
 
-  // Replace hashtags
-  HashSet.forEach(post.hashtags, (tag) => {
-    text = text.replace(
-      new RegExp(`#${tag}`, "g"),
-      `[#${tag}](tag://${tag})`
-    )
-  })
+  const tags =
+    post.hashtags.length > 0 ? `\n\n**Tags:** ${post.hashtags.join(", ")}` : ""
 
-  // Replace links
-  Chunk.forEach(post.links, (link) => {
-    text = text.replace(link.href, `[${link.href}](${link.href})`)
-  })
-
-  md += text + "\n\n"
-
-  if (HashSet.size(post.hashtags) > 0) {
-    md += `**Tags:** ${Chunk.join(Chunk.fromIterable(post.hashtags), ", ")}\n`
-  }
-
-  return md
+  return `${header}${body}${tags}\n`
 }
 ```
 
@@ -718,16 +875,16 @@ const syncTimeline = Command.make(
   ({ store, filter }) =>
     Effect.gen(function*() {
       const sync = yield* SyncEngine
-      const filterEngine = yield* FilterEngine
+      const compiler = yield* FilterCompiler
 
-      const compiledFilter = filter ?
-        yield* filterEngine.compile(parseFilterExpr(filter)) :
-        FilterMonoid.empty
+      const filterExpr = filter
+        ? yield* compiler.compile(parseFilterExpr(filter))
+        : new FilterAll({})
 
       const result = yield* sync.sync(
         DataSource.timeline(),
         { name: store },
-        compiledFilter
+        filterExpr
       )
 
       yield* Effect.log(`Synced ${result.count} posts to ${store}`)
@@ -746,6 +903,11 @@ const app = Command.make("skygent", {}, () =>
   ])
 )
 ```
+
+**Output Policy (Agent-First):**
+- **Stdout:** structured JSON (`--format json` default)
+- **Stderr:** human-readable logs, progress, warnings
+- **Optional:** `--format markdown|table` for human review without breaking automation
 
 ---
 
@@ -784,18 +946,39 @@ const analyzed = timeline.pipe(
 **Caching Strategy:**
 
 ```typescript
-// Cache LLM results by post content hash
+// Cache LLM results by (model + promptHash + contentHash)
+class LlmKey extends Schema.Class<LlmKey>("LlmKey")({
+  model: Schema.String,
+  promptHash: Schema.String,
+  contentHash: Schema.String
+}) {}
+
 const cachedClassify = yield* Cache.make({
   capacity: 10000,
   timeToLive: Duration.hours(24),
-  lookup: (text: string) =>
+  lookup: (key: LlmKey) =>
     LanguageModel.generateObject({
-      prompt: `Classify: ${text}`,
+      prompt: loadPrompt(key.promptHash),
       schema: Schema.Struct({ category: Schema.String })
     }).pipe(Effect.map(r => r.value.category))
 })
 
-const classifyPost = (post: Post) => cachedClassify.get(post.text)
+const classifyPost = (post: Post, model: string, promptHash: string) =>
+  cachedClassify.get(
+    LlmKey.make({
+      model,
+      promptHash,
+      contentHash: hash(post.text)
+    })
+  )
+
+// Persist provenance for reproducibility
+const annotation: LlmAnnotation = {
+  model,
+  promptHash,
+  createdAt: new Date(),
+  output: "category"
+}
 ```
 
 ### 7.2 Type Class Usage
@@ -808,7 +991,7 @@ import { Filterable } from "@effect/typeclass/Filterable"
 // Partition stream by predicate
 const [tech, other] = yield* timeline.pipe(
   Stream.partition((post) =>
-    HashSet.has(post.hashtags, "#tech")
+    post.hashtags.includes("#tech" as Hashtag)
   )
 )
 
@@ -920,11 +1103,14 @@ for (const post of posts) {
   const sentiment = await classifySentiment(post.text)
 }
 
-// Good: 10 batched calls
-const batches = Chunk.chunksOf(Chunk.fromIterable(posts), 10)
-for (const batch of batches) {
-  const sentiments = await classifyBatch(batch.map(p => p.text))
-}
+// Good: RequestResolver batches LlmDecisionRequest into a single decideBatch call
+const decide = (post: Post) =>
+  Effect.request(new LlmDecisionRequest({ prompt, text: post.text }), LlmResolver)
+
+const decisions = yield* Effect.all(
+  posts.map(decide),
+  { batching: true }
+)
 ```
 
 ---
@@ -967,16 +1153,19 @@ fc.assert(
   fc.property(
     fc.array(fc.string()),
     (posts) => {
-      const f1 = PostFilters.author("alice")
-      const f2 = PostFilters.hashtag("#tech")
-      const f3 = PostFilters.dateRange(start, end)
+      const f1 = new FilterAuthor({ handle: "alice.bsky" as Handle })
+      const f2 = new FilterHashtag({ tag: "#tech" as Hashtag })
+      const f3 = new FilterDateRange({ start, end })
 
-      const left = f1.and(f2).and(f3)
-      const right = f1.and(f2.and(f3))
+      const left = new FilterAnd({ left: new FilterAnd({ left: f1, right: f2 }), right: f3 })
+      const right = new FilterAnd({ left: f1, right: new FilterAnd({ left: f2, right: f3 }) })
 
-      // Should produce same results
-      posts.forEach(post => {
-        expect(left.predicate(post)).toEqual(right.predicate(post))
+      // Should produce same results under the same runtime
+      const predicateLeft = yield* filterRuntime.evaluate(left)
+      const predicateRight = yield* filterRuntime.evaluate(right)
+
+      posts.forEach((post) => {
+        expect(predicateLeft(post)).toEqual(predicateRight(post))
       })
     }
   )
@@ -989,21 +1178,21 @@ fc.assert(
 
 ### Phase 1: Foundation (Week 1)
 - [ ] Project setup with Effect Language Service
-- [ ] Core data structures (Post, Filter interfaces)
+- [ ] Core data structures (Post, FilterExpr, error types)
 - [ ] Schema definitions for Bluesky post parsing
 - [ ] BskyClient service with authentication
 
 ### Phase 2: Filtering (Week 2)
-- [ ] Filter algebra implementation (Monoid, combinators)
+- [ ] FilterExpr ADT + combinators
 - [ ] Simple filters (author, hashtag, date)
-- [ ] FilterEngine service
+- [ ] FilterCompiler + FilterRuntime services
 - [ ] Stream filtering pipeline
 
 ### Phase 3: Storage (Week 3)
-- [ ] StorePath and Store models
+- [ ] StoreRef, StorePath, PostEvent models
 - [ ] StoreManager service
-- [ ] JSON/Markdown serialization
-- [ ] File system operations
+- [ ] Event log writer + index builder
+- [ ] JSON/Markdown view generation
 
 ### Phase 4: Sync & CLI (Week 4)
 - [ ] SyncEngine service
@@ -1032,8 +1221,9 @@ fc.assert(
 
 1. **Composability** - Combine filters without nesting complexity
 2. **Testability** - Algebraic laws enable property-based testing
-3. **Flexibility** - Mix pure, effectful, and LLM-based predicates
-4. **Performance** - Lazy evaluation, short-circuit on failures
+3. **Flexibility** - Mix pure, effectful, and LLM-based nodes with policies
+4. **Serialization** - Filters can be stored, diffed, and optimized
+5. **Performance** - Short-circuit and batched evaluation strategies
 
 ### Why Schema Transformations?
 
@@ -1051,13 +1241,19 @@ fc.assert(
 
 ---
 
-## 12. Open Questions
+## 12. Decisions & Remaining Questions (2026-01-25)
 
-1. **Jetstream Integration** - Should we also support the effect-jetstream library for real-time firehose access?
-2. **Custom Feed Generation** - Cloudflare Workers for hosting algorithm feeds?
-3. **Persistence Format** - JSONL vs individual JSON files?
-4. **CLI Output Format** - JSON-only, or support table formatting?
-5. **Agent Memory** - Should stores track provenance (which agent/command created data)?
+**Decisions**
+1. **Jetstream Integration** - Yes, as an optional `DataSource` using the `effect-jetstream` package; it will feed the same parser + filter + store pipeline.
+2. **Custom Feed Generation** - Not in MVP. Keep event log + index so a future worker can read from the same store.
+3. **Persistence Format** - File-based `KeyValueStore` for event log + metadata + rebuildable indices; SQLite is optional for read-heavy workloads.
+4. **CLI Output Format** - JSON to stdout by default; optional `--format markdown|table` for humans; logs to stderr.
+5. **Agent Memory / Provenance** - Yes. Every event includes `source`, `command`, `filterExprHash`, `model/promptHash`, and timestamp.
+
+**Current Defaults (can revisit)**
+- **Model selection**: Provider-agnostic with config-driven primary + fallback; no hard default. Decide if we want a first-class “default provider” once usage stabilizes.
+- **Retention policy**: Default to retain raw events indefinitely; add optional per-store TTL pruning for derived views.
+- **Index strategy**: Start with KV-backed index shards; introduce SQLite only when queries exceed KV scan costs.
 
 ---
 

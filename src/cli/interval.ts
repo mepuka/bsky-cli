@@ -1,0 +1,46 @@
+import { Duration, Effect, Option } from "effect";
+import { CliInputError } from "./errors.js";
+
+const parseDurationText = (value: string) =>
+  Effect.try({
+    try: () => Duration.decode(value as Duration.DurationInput),
+    catch: (cause) =>
+      CliInputError.make({
+        message: `Invalid duration: ${value}. Use formats like "30 seconds" or "500 millis".`,
+        cause
+      })
+  }).pipe(
+    Effect.flatMap((duration) =>
+      Duration.toMillis(duration) < 0
+        ? Effect.fail(
+            CliInputError.make({
+              message: "Interval must be non-negative.",
+              cause: duration
+            })
+          )
+        : Effect.succeed(duration)
+    )
+  );
+
+const parseDurationMillis = (value: number) =>
+  value < 0
+    ? Effect.fail(
+        CliInputError.make({
+          message: "Interval must be non-negative.",
+          cause: value
+        })
+      )
+    : Effect.succeed(Duration.millis(value));
+
+export const parseInterval = (
+  interval: Option.Option<string>,
+  intervalMs: Option.Option<number>
+) =>
+  Option.match(interval, {
+    onSome: parseDurationText,
+    onNone: () =>
+      Option.match(intervalMs, {
+        onSome: parseDurationMillis,
+        onNone: () => Effect.succeed(Duration.seconds(30))
+      })
+  });
