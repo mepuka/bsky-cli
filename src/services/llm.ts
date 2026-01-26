@@ -24,21 +24,47 @@ import {
 import type { NonEmptyArray } from "effect/Array";
 import { ConfigError, FilterEvalError } from "../domain/errors.js";
 import { LlmDecisionMeta, LlmUsage } from "../domain/llm.js";
+import { LlmTelemetry } from "./llm-telemetry.js";
 
-const SINGLE_SYSTEM_PROMPT =
-  "You are a precise classifier. Return a JSON object with a numeric score between 0 and 1.";
-const BATCH_SYSTEM_PROMPT =
-  "You are a precise classifier. Return a JSON object with a list of {id, score} results.";
+const SINGLE_SYSTEM_PROMPT = `You are analyzing Bluesky posts (microblogging, <= 300 chars).
+
+Score how well the post matches the task prompt.
+
+Scoring guidance:
+- 0.9–1.0: explicit, unambiguous match with strong evidence
+- 0.7–0.9: strong match with clear relevance
+- 0.5–0.7: moderate match, contextual
+- 0.3–0.5: weak/tangential match
+- 0.0–0.3: no match
+
+When uncertain, choose mid-range (0.4–0.6).
+Return only JSON: {"score": number between 0 and 1}.`;
+
+const BATCH_SYSTEM_PROMPT = `You are analyzing Bluesky posts (microblogging, <= 300 chars).
+
+Score how well each post matches the task prompt.
+
+Scoring guidance:
+- 0.9–1.0: explicit, unambiguous match with strong evidence
+- 0.7–0.9: strong match with clear relevance
+- 0.5–0.7: moderate match, contextual
+- 0.3–0.5: weak/tangential match
+- 0.0–0.3: no match
+
+When uncertain, choose mid-range (0.4–0.6).
+Return only JSON: {"results":[{"id": string, "score": number between 0 and 1}]}.`;
+
+const ConfidenceScore = Schema.Number.pipe(Schema.finite(), Schema.between(0, 1));
 
 const SingleDecisionSchema = Schema.Struct({
-  score: Schema.Number
+  score: ConfidenceScore
 });
 
 const BatchDecisionSchema = Schema.Struct({
   results: Schema.Array(
     Schema.Struct({
       id: Schema.String,
-      score: Schema.Number
+      score: ConfidenceScore
     })
   )
 });
@@ -75,7 +101,7 @@ const parseProviderList = (raw: string) => {
   return Schema.decodeUnknown(LlmProviderListSchema)(entries).pipe(
     Effect.mapError((error) =>
       ConfigError.make({
-        message: `Invalid SKYGENT_LLM_PROVIDER(S): ${formatSchemaError(error)}`
+        message: `Invalid SKYGENT_LLM_PROVIDERS: ${formatSchemaError(error)}`
       })
     )
   );
@@ -287,16 +313,9 @@ export class LlmPlan extends Context.Tag("@skygent/LlmPlan")<
       const providersRaw = yield* Config.string("SKYGENT_LLM_PROVIDERS").pipe(
         Config.option
       );
-      const providerRaw = yield* Config.string("SKYGENT_LLM_PROVIDER").pipe(
-        Config.option
-      );
       const providers = yield* Option.match(providersRaw, {
         onSome: parseProviderList,
-        onNone: () =>
-          Option.match(providerRaw, {
-            onSome: parseProviderList,
-            onNone: () => Effect.succeed([] as ReadonlyArray<LlmProvider>)
-          })
+        onNone: () => Effect.succeed([] as ReadonlyArray<LlmProvider>)
       });
 
       if (providers.length === 0) {
@@ -500,6 +519,7 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
       const settings = yield* LlmSettings;
       const idGenerator = yield* IdGenerator.IdGenerator;
       const plan = yield* LlmPlan;
+      const telemetry = yield* LlmTelemetry;
       const persistentStore = yield* Option.match(settings.persistentCache, {
         onNone: () => Effect.succeed(Option.none()),
         onSome: (config) =>
@@ -626,18 +646,56 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
             prompt: buildSinglePrompt(settings, request),
             schema: SingleDecisionSchema,
             objectName: "LlmDecision"
-          }),
+          }).pipe(
+            Effect.withSpan("llm.single", {
+              attributes: { kind: "single" }
+            })
+          ),
           plan
         ).pipe(
-          Effect.map((response) => {
+          Effect.timed,
+          Effect.map(([duration, response]) => {
             const meta = responseMetadata(response.content);
+            const usage = usageFromResponse(response.usage);
             return {
               score: response.value.score,
-              usage: usageFromResponse(response.usage),
+              usage,
               modelId: meta.modelId,
-              responseId: meta.responseId
+              responseId: meta.responseId,
+              duration
             };
           }),
+          Effect.tap((result) =>
+            telemetry
+              .recordRequest({
+                kind: "single",
+                duration: result.duration,
+                usage: result.usage,
+                ...(result.modelId ? { modelId: result.modelId } : {})
+              })
+              .pipe(
+                Effect.zipRight(
+                  telemetry.recordDecision({
+                    kind: "single",
+                    cached: false,
+                    count: 1,
+                    ...(result.modelId ? { modelId: result.modelId } : {})
+                  })
+                )
+              )
+          ),
+          Effect.map(({ score, usage, modelId, responseId }) => ({
+            score,
+            usage,
+            modelId,
+            responseId
+          })),
+          Effect.tapError(() =>
+            telemetry.recordFailure({
+              kind: "single",
+              stage: "single"
+            })
+          ),
           Effect.mapError((cause) =>
             cause._tag === "FilterEvalError"
               ? cause
@@ -660,18 +718,57 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
             ),
             schema: BatchDecisionSchema,
             objectName: "LlmDecisionBatch"
-          }),
+          }).pipe(
+            Effect.withSpan("llm.batch", {
+              attributes: { kind: "batch", size: items.length }
+            })
+          ),
           plan
         ).pipe(
-          Effect.map((response) => {
+          Effect.timed,
+          Effect.map(([duration, response]) => {
             const meta = responseMetadata(response.content);
+            const usage = usageFromResponse(response.usage);
             return {
               results: response.value.results,
-              usage: usageFromResponse(response.usage),
+              usage,
               modelId: meta.modelId,
-              responseId: meta.responseId
+              responseId: meta.responseId,
+              duration
             };
           }),
+          Effect.tap((result) =>
+            telemetry
+              .recordRequest({
+                kind: "batch",
+                duration: result.duration,
+                usage: result.usage,
+                batchSize: items.length,
+                ...(result.modelId ? { modelId: result.modelId } : {})
+              })
+              .pipe(
+                Effect.zipRight(
+                  telemetry.recordDecision({
+                    kind: "batch",
+                    cached: false,
+                    count: items.length,
+                    ...(result.modelId ? { modelId: result.modelId } : {})
+                  })
+                )
+              )
+          ),
+          Effect.map(({ results, usage, modelId, responseId }) => ({
+            results,
+            usage,
+            modelId,
+            responseId
+          })),
+          Effect.tapError(() =>
+            telemetry.recordFailure({
+              kind: "batch",
+              stage: "batch"
+            })
+          ),
           Effect.mapError((cause) =>
             cause._tag === "FilterEvalError"
               ? cause
@@ -744,6 +841,8 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
             );
 
             const missing: Array<(typeof hashed)[number]> = [];
+            let cacheHits = 0;
+            let cacheMisses = 0;
 
             if (Option.isSome(persistentStore) && models.length > 0) {
               for (const item of hashed) {
@@ -765,12 +864,36 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
                     responseId: entry.responseId,
                     usage: entry.usage
                   });
+                  cacheHits += 1;
                 } else {
                   missing.push(item);
+                  cacheMisses += 1;
                 }
               }
             } else {
               missing.push(...hashed);
+            }
+
+            if (Option.isSome(persistentStore)) {
+              if (cacheHits > 0) {
+                yield* telemetry.recordCacheHit({
+                  level: "persistent",
+                  kind,
+                  count: cacheHits
+                });
+                yield* telemetry.recordDecision({
+                  kind,
+                  cached: true,
+                  count: cacheHits
+                });
+              }
+              if (cacheMisses > 0) {
+                yield* telemetry.recordCacheMiss({
+                  level: "persistent",
+                  kind,
+                  count: cacheMisses
+                });
+              }
             }
 
             if (missing.length === 0) {

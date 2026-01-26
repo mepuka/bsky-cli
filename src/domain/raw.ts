@@ -1,20 +1,27 @@
-import { ParseResult, Schema } from "effect";
+import { Effect, ParseResult, Schema } from "effect";
 import { extractFromFacets, extractHashtags, extractLinks, extractMentions } from "./extract.js";
 import { Post } from "./post.js";
 import { Did, Handle, PostCid, PostUri } from "./primitives.js";
 import {
+  EmbedUnknown,
+  FeedContext,
   Label,
+  LegacyEntity,
   PostEmbed,
   PostMetrics,
+  PostViewerState,
   ReplyRef,
   RichTextFacet,
-  SelfLabels
+  SelfLabels,
+  ThreadgateView
 } from "./bsky.js";
 
 export class RawPostRecord extends Schema.Class<RawPostRecord>("RawPostRecord")({
+  $type: Schema.optional(Schema.Literal("app.bsky.feed.post")),
   text: Schema.String,
   createdAt: Schema.String,
   facets: Schema.optional(Schema.Array(RichTextFacet)),
+  entities: Schema.optional(Schema.Array(LegacyEntity)),
   reply: Schema.optional(ReplyRef),
   embed: Schema.optional(Schema.Unknown),
   langs: Schema.optional(Schema.Array(Schema.String)),
@@ -31,7 +38,11 @@ export class RawPost extends Schema.Class<RawPost>("RawPost")({
   indexedAt: Schema.optional(Schema.String),
   labels: Schema.optional(Schema.Array(Schema.encodedSchema(Label))),
   metrics: Schema.optional(PostMetrics),
-  embed: Schema.optional(PostEmbed)
+  embed: Schema.optional(PostEmbed),
+  viewer: Schema.optional(PostViewerState),
+  threadgate: Schema.optional(ThreadgateView),
+  debug: Schema.optional(Schema.Unknown),
+  feed: Schema.optional(FeedContext)
 }) {}
 
 export const PostFromRaw = Schema.transformOrFail(RawPost, Post, {
@@ -53,8 +64,18 @@ export const PostFromRaw = Schema.transformOrFail(RawPost, Post, {
       ...extractLinks(raw.record.text),
       ...facetData.links
     ]);
-
-    return ParseResult.succeed({
+    const embed =
+      raw.embed ??
+      (raw.record.embed
+        ? EmbedUnknown.make({
+            rawType:
+              typeof (raw.record.embed as { $type?: unknown })?.$type === "string"
+                ? String((raw.record.embed as { $type?: unknown }).$type)
+                : "unknown",
+            data: raw.record.embed
+          })
+        : undefined);
+    return ParseResult.decodeUnknown(Schema.encodedSchema(Post))({
       uri: raw.uri,
       cid: raw.cid,
       author: raw.author,
@@ -67,31 +88,48 @@ export const PostFromRaw = Schema.transformOrFail(RawPost, Post, {
       links,
       facets: raw.record.facets,
       reply: raw.record.reply,
-      embed: raw.embed,
+      embed,
       langs: raw.record.langs,
+      tags: raw.record.tags,
       selfLabels: raw.record.labels?.values,
       labels: raw.labels,
       metrics: raw.metrics,
-      indexedAt: raw.indexedAt
+      indexedAt: raw.indexedAt,
+      viewer: raw.viewer,
+      threadgate: raw.threadgate,
+      debug: raw.debug,
+      feed: raw.feed,
+      recordEmbed: raw.record.embed
     });
   },
-  encode: (post) =>
-    ParseResult.decodeUnknown(RawPost)({
-      uri: post.uri,
-      cid: post.cid,
-      author: post.author,
-      authorDid: post.authorDid,
-      indexedAt: post.indexedAt,
-      labels: post.labels,
-      metrics: post.metrics,
-      embed: post.embed,
-      record: {
-        text: post.text,
-        createdAt: post.createdAt,
-        facets: post.facets,
-        reply: post.reply,
-        langs: post.langs,
-        labels: post.selfLabels ? { values: post.selfLabels } : undefined
-      }
+  encode: (_encoded, _options, _ast, post) =>
+    Effect.gen(function* () {
+      const labels = post.labels
+        ? yield* ParseResult.encodeUnknown(Schema.Array(Label))(post.labels)
+        : undefined;
+      return yield* ParseResult.decodeUnknown(RawPost)({
+        uri: post.uri,
+        cid: post.cid,
+        author: post.author,
+        authorDid: post.authorDid,
+        indexedAt: post.indexedAt?.toISOString(),
+        labels,
+        metrics: post.metrics,
+        embed: post.embed,
+        viewer: post.viewer,
+        threadgate: post.threadgate,
+        debug: post.debug,
+        feed: post.feed,
+        record: {
+          text: post.text,
+          createdAt: post.createdAt.toISOString(),
+          facets: post.facets,
+          reply: post.reply,
+          embed: post.recordEmbed,
+          langs: post.langs,
+          labels: post.selfLabels ? { values: post.selfLabels } : undefined,
+          tags: post.tags
+        }
+      });
     })
 });

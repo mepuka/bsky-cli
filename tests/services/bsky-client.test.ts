@@ -3,6 +3,7 @@ import { Chunk, Effect, Layer, Stream } from "effect";
 import { BunContext } from "@effect/platform-bun";
 import { AppConfigService } from "../../src/services/app-config.js";
 import { BskyClient } from "../../src/services/bsky-client.js";
+import { CredentialStore } from "../../src/services/credential-store.js";
 import { makeBskyMockLayer } from "../support/bsky-mock-server.js";
 import timelineFixture from "../fixtures/bsky/timeline.json";
 import feedFixture from "../fixtures/bsky/feed.json";
@@ -21,10 +22,15 @@ describe("BskyClient", () => {
     const appConfigLayer = AppConfigService.layer.pipe(
       Layer.provideMerge(baseLayer)
     );
-    const bskyLayer = BskyClient.layer.pipe(
-      Layer.provideMerge(appConfigLayer)
+    const credentialLayer = CredentialStore.layer.pipe(
+      Layer.provideMerge(appConfigLayer),
+      Layer.provideMerge(baseLayer)
     );
-    const layer = Layer.mergeAll(baseLayer, appConfigLayer, bskyLayer);
+    const bskyLayer = BskyClient.layer.pipe(
+      Layer.provideMerge(appConfigLayer),
+      Layer.provideMerge(credentialLayer)
+    );
+    const layer = Layer.mergeAll(baseLayer, appConfigLayer, credentialLayer, bskyLayer);
 
     const program = Effect.scoped(
       Effect.gen(function* () {
@@ -51,10 +57,15 @@ describe("BskyClient", () => {
     const appConfigLayer = AppConfigService.layer.pipe(
       Layer.provideMerge(baseLayer)
     );
-    const bskyLayer = BskyClient.layer.pipe(
-      Layer.provideMerge(appConfigLayer)
+    const credentialLayer = CredentialStore.layer.pipe(
+      Layer.provideMerge(appConfigLayer),
+      Layer.provideMerge(baseLayer)
     );
-    const layer = Layer.mergeAll(baseLayer, appConfigLayer, bskyLayer);
+    const bskyLayer = BskyClient.layer.pipe(
+      Layer.provideMerge(appConfigLayer),
+      Layer.provideMerge(credentialLayer)
+    );
+    const layer = Layer.mergeAll(baseLayer, appConfigLayer, credentialLayer, bskyLayer);
 
     const program = Effect.scoped(
       Effect.gen(function* () {

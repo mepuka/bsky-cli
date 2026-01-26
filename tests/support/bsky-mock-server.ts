@@ -1,5 +1,6 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Redacted } from "effect";
 import { ConfigOverrides } from "../../src/services/app-config.js";
+import { CredentialsOverrides } from "../../src/services/credential-store.js";
 
 type Fixtures = {
   readonly timeline: unknown;
@@ -95,9 +96,13 @@ export const makeBskyMockLayer = (
 
   const configLayer = Layer.succeed(ConfigOverrides, {
     service: "https://bsky.test",
-    identifier: credentials.identifier,
-    password: credentials.password
+    identifier: credentials.identifier
   });
 
-  return Layer.mergeAll(fetchLayer, configLayer);
+  const credentialLayer = Layer.succeed(CredentialsOverrides, {
+    identifier: credentials.identifier,
+    password: Redacted.make(credentials.password)
+  });
+
+  return Layer.mergeAll(fetchLayer, configLayer, credentialLayer);
 };

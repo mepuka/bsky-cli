@@ -25,6 +25,11 @@ export class ConfigError extends Schema.TaggedError<ConfigError>()(
   }
 ) {}
 
+export class CredentialError extends Schema.TaggedError<CredentialError>()(
+  "CredentialError",
+  { message: Schema.String, cause: Schema.optional(Schema.Unknown) }
+) {}
+
 export class StoreNotFound extends Schema.TaggedError<StoreNotFound>()(
   "StoreNotFound",
   { name: StoreName }

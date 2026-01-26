@@ -1,7 +1,8 @@
 import { Options } from "@effect/cli";
-import { Option } from "effect";
+import { Option, Redacted } from "effect";
 import { OutputFormat } from "../domain/config.js";
 import { AppConfig } from "../domain/config.js";
+import type { CredentialsOverridesValue } from "../services/credential-store.js";
 
 const pickDefined = <T extends Record<string, unknown>>(input: T): Partial<T> =>
   Object.fromEntries(
@@ -27,9 +28,9 @@ export const configOptions = {
     Options.optional,
     Options.withDescription("Override Bluesky identifier")
   ),
-  password: Options.text("password").pipe(
+  password: Options.redacted("password").pipe(
     Options.optional,
-    Options.withDescription("Override Bluesky password")
+    Options.withDescription("Override Bluesky password (redacted)")
   )
 };
 
@@ -38,7 +39,7 @@ export type ConfigOptions = {
   readonly storeRoot: Option.Option<string>;
   readonly outputFormat: Option.Option<OutputFormat>;
   readonly identifier: Option.Option<string>;
-  readonly password: Option.Option<string>;
+  readonly password: Option.Option<Redacted.Redacted<string>>;
 };
 
 export const toConfigOverrides = (options: ConfigOptions): Partial<AppConfig> =>
@@ -46,6 +47,13 @@ export const toConfigOverrides = (options: ConfigOptions): Partial<AppConfig> =>
     service: Option.getOrUndefined(options.service),
     storeRoot: Option.getOrUndefined(options.storeRoot),
     outputFormat: Option.getOrUndefined(options.outputFormat),
+    identifier: Option.getOrUndefined(options.identifier)
+  }) as Partial<AppConfig>;
+
+export const toCredentialsOverrides = (
+  options: ConfigOptions
+): CredentialsOverridesValue =>
+  pickDefined({
     identifier: Option.getOrUndefined(options.identifier),
     password: Option.getOrUndefined(options.password)
-  }) as Partial<AppConfig>;
+  }) as CredentialsOverridesValue;

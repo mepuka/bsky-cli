@@ -7,9 +7,10 @@ import { SyncEngine } from "../services/sync-engine.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { parseInterval } from "./interval.js";
 import { decodeJson } from "./parse.js";
-import { writeJsonStream } from "./output.js";
+import { CliOutput, writeJsonStream } from "./output.js";
 import { storeOptions } from "./store.js";
 import { logInfo, makeSyncReporter } from "./logging.js";
+import { ResourceMonitor } from "../services/resource-monitor.js";
 
 const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
 const filterJsonOption = Options.text("filter-json").pipe(
@@ -46,6 +47,8 @@ const timelineCommand = Command.make(
   ({ store, filter, interval, intervalMs, quiet }) =>
     Effect.gen(function* () {
       const sync = yield* SyncEngine;
+      const monitor = yield* ResourceMonitor;
+      const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter);
       const parsedInterval = yield* parseInterval(interval, intervalMs);
@@ -61,7 +64,7 @@ const timelineCommand = Command.make(
         )
         .pipe(
           Stream.map((event) => event.result),
-          Stream.provideService(SyncReporter, makeSyncReporter(quiet))
+          Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
         );
       yield* writeJsonStream(stream);
     })
@@ -82,6 +85,8 @@ const feedCommand = Command.make(
   ({ uri, store, filter, interval, intervalMs, quiet }) =>
     Effect.gen(function* () {
       const sync = yield* SyncEngine;
+      const monitor = yield* ResourceMonitor;
+      const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter);
       const parsedInterval = yield* parseInterval(interval, intervalMs);
@@ -97,7 +102,7 @@ const feedCommand = Command.make(
         )
         .pipe(
           Stream.map((event) => event.result),
-          Stream.provideService(SyncReporter, makeSyncReporter(quiet))
+          Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
         );
       yield* writeJsonStream(stream);
     })
@@ -115,6 +120,8 @@ const notificationsCommand = Command.make(
   ({ store, filter, interval, intervalMs, quiet }) =>
     Effect.gen(function* () {
       const sync = yield* SyncEngine;
+      const monitor = yield* ResourceMonitor;
+      const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter);
       const parsedInterval = yield* parseInterval(interval, intervalMs);
@@ -130,7 +137,7 @@ const notificationsCommand = Command.make(
         )
         .pipe(
           Stream.map((event) => event.result),
-          Stream.provideService(SyncReporter, makeSyncReporter(quiet))
+          Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
         );
       yield* writeJsonStream(stream);
     })

@@ -11,3 +11,4 @@ export * from "./raw.js";
 export * from "./sync.js";
 export * from "./defaults.js";
 export * from "./bsky.js";
+export * from "./credentials.js";

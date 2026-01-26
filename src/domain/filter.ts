@@ -213,7 +213,7 @@ const FilterTrendingSchema: Schema.Schema<FilterTrending, FilterTrendingEncoded,
 );
 const FilterLlmSchema: Schema.Schema<FilterLlm, FilterLlmEncoded, never> = Schema.TaggedStruct("Llm", {
   prompt: Schema.String,
-  minConfidence: Schema.Number,
+  minConfidence: Schema.Number.pipe(Schema.finite(), Schema.between(0, 1)),
   onError: FilterErrorPolicy
 });
 

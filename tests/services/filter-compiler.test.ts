@@ -74,7 +74,7 @@ describe("FilterCompiler", () => {
   });
 
   test("rejects invalid Llm confidence", async () => {
-    const spec = decodeSpec({
+    const spec = {
       name: "llm",
       expr: {
         _tag: "Llm",
@@ -83,20 +83,15 @@ describe("FilterCompiler", () => {
         onError: { _tag: "Include" }
       },
       output: { path: "views/filters/llm", json: true, markdown: false }
-    });
-
-    const program = Effect.gen(function* () {
-      const compiler = yield* FilterCompiler;
-      return yield* compiler.compile(spec);
-    });
+    };
 
     const result = await Effect.runPromise(
-      Effect.either(program.pipe(Effect.provide(FilterCompiler.layer)))
+      Effect.either(Schema.decodeUnknown(FilterSpec)(spec))
     );
 
     expect(Either.isLeft(result)).toBe(true);
     if (Either.isLeft(result)) {
-      expect(result.left.message).toContain("minConfidence");
+      expect(result.left.message).toContain("between");
     }
   });
 

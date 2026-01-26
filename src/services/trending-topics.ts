@@ -1,4 +1,5 @@
 import { AtpAgent } from "@atproto/api";
+import type { AppBskyUnspeccedGetTrendingTopics } from "@atproto/api";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import {
   Clock,
@@ -7,11 +8,13 @@ import {
   Effect,
   Layer,
   Option,
+  Redacted,
   Schema
 } from "effect";
 import { FilterEvalError } from "../domain/errors.js";
 import { Hashtag } from "../domain/primitives.js";
 import { AppConfigService } from "./app-config.js";
+import { CredentialStore } from "./credential-store.js";
 
 const cachePrefix = "cache/trending/";
 const cacheKey = "topics";
@@ -42,6 +45,7 @@ export class TrendingTopics extends Context.Tag("@skygent/TrendingTopics")<
     Effect.gen(function* () {
       const kv = yield* KeyValueStore.KeyValueStore;
       const config = yield* AppConfigService;
+      const credentials = yield* CredentialStore;
       const store = KeyValueStore.prefix(
         kv.forSchema(TrendingCacheEntry),
         cachePrefix
@@ -58,20 +62,26 @@ export class TrendingTopics extends Context.Tag("@skygent/TrendingTopics")<
         if (agent.hasSession) {
           return;
         }
-        if (!config.identifier || !config.password) {
+        const creds = yield* credentials
+          .get()
+          .pipe(Effect.mapError(toFilterEvalError("Failed to load credentials")));
+        if (Option.isNone(creds)) {
           return;
         }
+        const value = creds.value;
         yield* Effect.tryPromise(() =>
           agent.login({
-            identifier: config.identifier ?? "",
-            password: config.password ?? ""
+            identifier: value.identifier,
+            password: Redacted.value(value.password)
           })
         ).pipe(Effect.mapError(toFilterEvalError("Bluesky login failed")));
       });
 
       const fetchTopics = Effect.gen(function* () {
         yield* ensureAuth;
-        const response = yield* Effect.tryPromise(() =>
+        const response = yield* Effect.tryPromise<
+          AppBskyUnspeccedGetTrendingTopics.Response
+        >(() =>
           agent.app.bsky.unspecced.getTrendingTopics(
             withViewer({ limit: 25 }, agent.did ?? undefined)
           )

@@ -12,6 +12,9 @@ export const Hashtag = Schema.String.pipe(
 );
 export type Hashtag = typeof Hashtag.Type;
 
+export const AtUri = Schema.String.pipe(Schema.brand("AtUri"));
+export type AtUri = typeof AtUri.Type;
+
 export const PostUri = Schema.String.pipe(Schema.brand("PostUri"));
 export type PostUri = typeof PostUri.Type;
 

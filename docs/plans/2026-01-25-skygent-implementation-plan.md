@@ -140,6 +140,7 @@
 **Deliverables**
 - Store, sync, query commands.
 - JSON-first output policy.
+- Formalized stdout/stderr handling via CLI output service.
 
 **Checklist**
 - [x] `store create/list/show` with JSON output.
@@ -152,7 +153,8 @@
 - [x] Structured error output to stderr + semantic exit codes.
 - [x] `--quiet` to suppress progress logs.
 - [x] Config hierarchy (CLI > env > file > defaults).
-- [x] Streaming NDJSON uses `Stream.runForEach` / sinks; stdout stays data-only.
+- [x] `CliOutput` service with Bun stdout/stderr sinks for all CLI output/logging.
+- [x] Streaming NDJSON uses `Stream.run` + sinks; stdout stays data-only.
 
 **Acceptance**
 - Default output is JSON; logs go to stderr.
@@ -160,7 +162,30 @@
 
 ---
 
-### Phase 7 — Jetstream (Optional)
+### Phase 7 — Security & Operational Hardening (Pre-Jetstream)
+**Deliverables**
+- Secure credential handling + redaction.
+- Bsky rate limiting + exponential backoff.
+- Basic resource monitoring + guardrails.
+- Configuration docs for onboarding.
+
+**Checklist**
+- [x] Replace plaintext password handling with `Redacted` (Config + CLI).
+- [x] Add `CredentialStore` service (env + file store; keychain as optional future backend).
+- [x] Remove password from config file persistence (store only identifier).
+- [x] Use `@effect/cli` redacted option for secrets; avoid printing in logs.
+- [x] Add rate limiting + backoff in `BskyClient` (`Schedule` + jitter).
+- [x] Add `.env.example` documenting required env vars.
+- [x] Add resource monitoring (store size + memory usage) with warning thresholds.
+- [x] Add security notes to README (credential handling + safe usage).
+
+**Acceptance**
+- No plaintext password ever written to disk or logs.
+- API calls are rate-limited with backoff on 429/5xx.
+
+---
+
+### Phase 8 — Jetstream (Optional)
 **Deliverables**
 - Jetstream data source wired to pipeline.
 
@@ -175,7 +200,7 @@
 
 ---
 
-### Phase 8 — LLM Integration & Caching
+### Phase 9 — LLM Integration & Caching
 **Deliverables**
 - LLM filter runtime + caching + provenance.
 
@@ -194,7 +219,7 @@
 
 ---
 
-### Phase 9 — Testing + Hardening
+### Phase 10 — Testing + Hardening
 **Deliverables**
 - Property-based tests for filter laws.
 - Layer swapping tests for services.
@@ -202,7 +227,7 @@
 **Checklist**
 - [x] Filter associativity & identity laws.
 - [ ] Store log + rebuild tests.
-- [ ] CLI integration smoke tests (stdout NDJSON, stderr logs, exit codes).
+- [x] CLI integration smoke tests (stdout NDJSON, stderr logs, exit codes).
 - [ ] End-to-end sync test with mocked Bluesky responses.
 - [ ] Documented local dev checklist (env, config, sample filters).
 
@@ -224,9 +249,10 @@ Use this table as the single source of truth during implementation:
 | 4 | Complete | Store log + index + store manager + rebuild complete |
 | 5 | Complete | SyncEngine + sync commands + checkpoints/dedupe done |
 | 6 | Complete | Store + sync + query + watch + output format/config done |
-| 7 | Not started | Jetstream (optional) |
-| 8 | In progress | LLM cache + metadata done; model defaults/telemetry pending |
-| 9 | In progress | Property tests done; CLI smoke tests pending |
+| 7 | Complete | Credentials + rate limiting + docs + monitoring done |
+| 8 | Not started | Jetstream (optional) |
+| 9 | In progress | LLM cache + metadata done; model defaults/telemetry pending |
+| 10 | In progress | Property tests done; CLI smoke tests pending |
 
 ---
 
@@ -255,4 +281,5 @@ Use this table as the single source of truth during implementation:
 ## 5. Next Action
 
 - Add CLI smoke tests (stdout NDJSON, stderr logs, exit codes).
-- Begin Jetstream integration (optional) once core tests pass.
+- Add integration tests for store rebuild + end-to-end sync.
+- Decide whether to start Jetstream integration (optional).

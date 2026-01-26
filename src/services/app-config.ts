@@ -17,8 +17,7 @@ const PartialAppConfig = Schema.Struct({
   service: Schema.optional(Schema.String),
   storeRoot: Schema.optional(Schema.String),
   outputFormat: Schema.optional(OutputFormat),
-  identifier: Schema.optional(Schema.String),
-  password: Schema.optional(Schema.String)
+  identifier: Schema.optional(Schema.String)
 });
 
 type PartialAppConfig = typeof PartialAppConfig.Type;
@@ -120,14 +119,12 @@ export class AppConfigService extends Context.Tag("@skygent/AppConfig")<
       const envStoreRoot = yield* Config.string("SKYGENT_STORE_ROOT").pipe(Config.option);
       const envFormat = yield* envOutputFormat.pipe(Config.option);
       const envIdentifier = yield* Config.string("SKYGENT_IDENTIFIER").pipe(Config.option);
-      const envPassword = yield* Config.string("SKYGENT_PASSWORD").pipe(Config.option);
 
       const envConfig = pickDefined({
         service: Option.getOrUndefined(envService),
         storeRoot: Option.getOrUndefined(envStoreRoot),
         outputFormat: Option.getOrUndefined(envFormat),
-        identifier: Option.getOrUndefined(envIdentifier),
-        password: Option.getOrUndefined(envPassword)
+        identifier: Option.getOrUndefined(envIdentifier)
       });
 
       const merged = {

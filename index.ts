@@ -1,19 +1,11 @@
 import { Command, ValidationError } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
-import { Cause, Effect, Exit, Option } from "effect";
+import { Effect, Layer } from "effect";
 import { app } from "./src/cli/app.js";
 import { CliInputError, CliJsonError } from "./src/cli/errors.js";
 import { logErrorEvent } from "./src/cli/logging.js";
-import {
-  BskyError,
-  ConfigError,
-  FilterCompileError,
-  FilterEvalError,
-  StoreIndexError,
-  StoreIoError,
-  StoreNotFound
-} from "./src/domain/errors.js";
-import { SyncError } from "./src/domain/sync.js";
+import { CliOutput } from "./src/cli/output.js";
+import { exitCodeFor, exitCodeFromExit } from "./src/cli/exit-codes.js";
 
 const cli = Command.run(app, {
   name: "skygent",
@@ -63,39 +55,6 @@ const errorDetails = (error: unknown): Record<string, unknown> | undefined => {
   return undefined;
 };
 
-const exitCodeFor = (error: unknown): number => {
-  if (ValidationError.isValidationError(error)) return 2;
-  if (error instanceof CliJsonError) return 2;
-  if (error instanceof CliInputError) return 2;
-  if (error instanceof ConfigError) return 2;
-  if (error instanceof StoreNotFound) return 3;
-  if (error instanceof StoreIoError || error instanceof StoreIndexError) return 7;
-  if (error instanceof FilterCompileError || error instanceof FilterEvalError) return 8;
-  if (error instanceof SyncError) {
-    switch (error.stage) {
-      case "source":
-        return 5;
-      case "filter":
-        return 8;
-      case "store":
-        return 7;
-      default:
-        return 1;
-    }
-  }
-  if (error instanceof BskyError) return 5;
-  return 1;
-};
-
-const exitCodeFromExit = (exit: Exit.Exit<unknown, unknown>) => {
-  if (Exit.isSuccess(exit)) return 0;
-  const failure = Cause.failureOption(exit.cause);
-  return Option.match(failure, {
-    onNone: () => 1,
-    onSome: exitCodeFor
-  });
-};
-
 const program = cli(process.argv).pipe(
   Effect.tapError((error) =>
     ValidationError.isValidationError(error)
@@ -106,7 +65,7 @@ const program = cli(process.argv).pipe(
           ...errorDetails(error)
         })
   ),
-  Effect.provide(BunContext.layer)
+  Effect.provide(Layer.mergeAll(BunContext.layer, CliOutput.layer))
 );
 
 BunRuntime.runMain({

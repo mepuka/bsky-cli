@@ -1,21 +1,62 @@
-import { AtpAgent, AppBskyFeedDefs, AppBskyFeedPost } from "@atproto/api";
-import { Chunk, Context, Effect, Layer, Option, Schema, Stream } from "effect";
-import { AppConfigService } from "./app-config.js";
-import { BskyError } from "../domain/errors.js";
-import { RawPost, RawPostRecord } from "../domain/raw.js";
+import { AtpAgent } from "@atproto/api";
+import type {
+  AppBskyFeedDefs,
+  AppBskyFeedGetFeed,
+  AppBskyFeedGetTimeline,
+  AppBskyFeedPost,
+  AppBskyNotificationListNotifications
+} from "@atproto/api";
 import {
+  Chunk,
+  Clock,
+  Config,
+  Context,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Redacted,
+  Ref,
+  Schedule,
+  Schema,
+  Stream
+} from "effect";
+import { AppConfigService } from "./app-config.js";
+import { CredentialStore } from "./credential-store.js";
+import { BskyError } from "../domain/errors.js";
+import { RawPost } from "../domain/raw.js";
+import {
+  BlockedAuthor,
   EmbedAspectRatio,
   EmbedExternal,
   EmbedImage,
   EmbedImages,
+  EmbedRecordBlocked,
+  EmbedRecordDetached,
+  EmbedRecordNotFound,
+  EmbedRecordTarget,
+  EmbedRecordUnknown,
+  EmbedRecordView,
   EmbedRecord,
   EmbedRecordWithMedia,
   EmbedUnknown,
   EmbedVideo,
+  FeedContext,
+  FeedPostBlocked,
+  FeedPostNotFound,
+  FeedPostUnknown,
+  FeedPostViewRef,
+  FeedReasonPin,
+  FeedReasonRepost,
+  FeedReasonUnknown,
+  FeedReplyRef,
   Label,
   PostEmbed,
-  PostMetrics
+  PostMetrics,
+  PostViewerState,
+  ProfileBasic
 } from "../domain/bsky.js";
+import { Timestamp } from "../domain/primitives.js";
 
 export interface TimelineOptions {
   readonly limit?: number;
@@ -38,6 +79,29 @@ const messageFromCause = (fallback: string, cause: unknown) => {
 const toBskyError = (message: string) => (cause: unknown) =>
   BskyError.make({ message: messageFromCause(message, cause), cause });
 
+const isRetryableCause = (cause: unknown) => {
+  if (!cause || typeof cause !== "object") return false;
+  const source =
+    "cause" in cause && typeof (cause as { cause?: unknown }).cause !== "undefined"
+      ? (cause as { cause?: unknown }).cause
+      : cause;
+  if (!source || typeof source !== "object") return false;
+  const record = source as { status?: unknown; statusCode?: unknown; error?: unknown };
+  const status =
+    typeof record.status === "number"
+      ? record.status
+      : typeof record.statusCode === "number"
+        ? record.statusCode
+        : typeof (record.error as { status?: unknown })?.status === "number"
+          ? (record.error as { status: number }).status
+          : undefined;
+  if (typeof status === "number") {
+    return status === 429 || (status >= 500 && status < 600);
+  }
+  const code = (record as { code?: unknown }).code;
+  return typeof code === "string" && ["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN"].includes(code);
+};
+
 const mapAspectRatio = (input: unknown) => {
   if (!input || typeof input !== "object") return undefined;
   const ratio = input as { width?: unknown; height?: unknown };
@@ -47,79 +111,229 @@ const mapAspectRatio = (input: unknown) => {
   return EmbedAspectRatio.make({ width: ratio.width, height: ratio.height });
 };
 
-const mapEmbedView = (embed: unknown): PostEmbed | undefined => {
-  if (!embed || typeof embed !== "object") return undefined;
-  const typed = embed as { $type?: string };
-  switch (typed.$type) {
-    case "app.bsky.embed.images#view": {
-      const images = (embed as { images?: Array<any> }).images ?? [];
-      return EmbedImages.make({
-        images: images
-          .filter((image) => image && typeof image === "object")
-          .map((image) =>
-            EmbedImage.make({
-              thumb: String(image.thumb ?? ""),
-              fullsize: String(image.fullsize ?? ""),
-              alt: String(image.alt ?? ""),
-              aspectRatio: mapAspectRatio(image.aspectRatio)
-            })
-          )
-      });
+const decodeTimestamp = (value: unknown, message: string) =>
+  Schema.decodeUnknown(Timestamp)(value).pipe(
+    Effect.mapError(toBskyError(message))
+  );
+
+const decodeLabels = (labels: unknown) =>
+  Schema.decodeUnknown(Schema.Array(Label))(labels).pipe(
+    Effect.mapError(toBskyError("Invalid moderation labels"))
+  );
+
+const decodeProfileBasic = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return yield* BskyError.make({ message: "Invalid author payload" });
     }
-    case "app.bsky.embed.external#view": {
-      const external = (embed as { external?: any }).external ?? {};
-      return EmbedExternal.make({
-        uri: String(external.uri ?? ""),
-        title: String(external.title ?? ""),
-        description: String(external.description ?? ""),
-        thumb: external.thumb ? String(external.thumb) : undefined
-      });
+    const author = input as Record<string, unknown>;
+    return yield* Schema.decodeUnknown(ProfileBasic)({
+      did: author.did,
+      handle: author.handle,
+      displayName: author.displayName,
+      pronouns: author.pronouns,
+      avatar: author.avatar,
+      associated: author.associated,
+      viewer: author.viewer,
+      labels: author.labels,
+      createdAt: author.createdAt,
+      verification: author.verification,
+      status: author.status,
+      debug: author.debug
+    }).pipe(Effect.mapError(toBskyError("Invalid author payload")));
+  });
+
+const decodeViewerState = (input: unknown) =>
+  Schema.decodeUnknown(PostViewerState)(input).pipe(
+    Effect.mapError(toBskyError("Invalid viewer state"))
+  );
+
+const mapBlockedAuthor = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return yield* BskyError.make({ message: "Invalid blocked author payload" });
     }
-    case "app.bsky.embed.video#view": {
-      return EmbedVideo.make({
-        cid: String((embed as { cid?: unknown }).cid ?? ""),
-        playlist: String((embed as { playlist?: unknown }).playlist ?? ""),
-        thumbnail: (embed as { thumbnail?: unknown }).thumbnail
-          ? String((embed as { thumbnail?: unknown }).thumbnail)
-          : undefined,
-        alt: (embed as { alt?: unknown }).alt
-          ? String((embed as { alt?: unknown }).alt)
-          : undefined,
-        aspectRatio: mapAspectRatio((embed as { aspectRatio?: unknown }).aspectRatio)
-      });
+    const author = input as Record<string, unknown>;
+    return yield* Schema.decodeUnknown(BlockedAuthor)({
+      did: author.did,
+      viewer: author.viewer
+    }).pipe(Effect.mapError(toBskyError("Invalid blocked author payload")));
+  });
+
+const mapEmbedRecordTarget = (
+  record: unknown
+): Effect.Effect<EmbedRecordTarget, BskyError> =>
+  Effect.gen(function* () {
+    if (!record || typeof record !== "object") {
+      return EmbedRecordUnknown.make({ rawType: "unknown", data: record });
     }
-    case "app.bsky.embed.record#view": {
-      const record = (embed as { record?: any }).record;
-      const recordType = record && typeof record === "object" ? record.$type : undefined;
-      return EmbedRecord.make({
-        recordType,
-        record: record ?? embed
-      });
-    }
-    case "app.bsky.embed.recordWithMedia#view": {
-      const record = (embed as { record?: any }).record;
-      const recordType = record && typeof record === "object" ? record.$type : undefined;
-      const mediaCandidate = mapEmbedView((embed as { media?: unknown }).media);
-      const media =
-        mediaCandidate &&
-        (mediaCandidate._tag === "Images" ||
-          mediaCandidate._tag === "External" ||
-          mediaCandidate._tag === "Video")
-          ? mediaCandidate
-          : (embed as { media?: unknown }).media;
-      return EmbedRecordWithMedia.make({
-        recordType,
-        record: record ?? embed,
-        media
-      });
-    }
-    default:
-      if (typed.$type) {
-        return EmbedUnknown.make({ rawType: typed.$type, data: embed });
+    const typed = record as { $type?: string };
+    const recordType = typed.$type;
+    switch (recordType) {
+      case "app.bsky.embed.record#viewRecord": {
+        const view = record as {
+          uri?: unknown;
+          cid?: unknown;
+          author?: unknown;
+          value?: unknown;
+          labels?: unknown;
+          replyCount?: unknown;
+          repostCount?: unknown;
+          likeCount?: unknown;
+          quoteCount?: unknown;
+          embeds?: unknown;
+          indexedAt?: unknown;
+        };
+        const author = yield* decodeProfileBasic(view.author);
+        const labels =
+          view.labels && Array.isArray(view.labels)
+            ? yield* decodeLabels(view.labels)
+            : undefined;
+        const metrics = (() => {
+          const data = {
+            replyCount: view.replyCount as number | undefined,
+            repostCount: view.repostCount as number | undefined,
+            likeCount: view.likeCount as number | undefined,
+            quoteCount: view.quoteCount as number | undefined
+          };
+          const hasAny = Object.values(data).some((value) => value !== undefined);
+          return hasAny ? PostMetrics.make(data) : undefined;
+        })();
+        const indexedAt = yield* decodeTimestamp(
+          view.indexedAt,
+          "Invalid record embed timestamp"
+        );
+        const embeds: Array<PostEmbed> | undefined =
+          Array.isArray(view.embeds)
+            ? yield* Effect.forEach(
+                view.embeds,
+                (entry) => mapEmbedView(entry),
+                { concurrency: "unbounded" }
+              ).pipe(
+                Effect.map((values) =>
+                  values.filter((value): value is PostEmbed => value !== undefined)
+                )
+              )
+            : undefined;
+        return yield* Schema.decodeUnknown(EmbedRecordView)({
+          uri: view.uri,
+          cid: view.cid,
+          author,
+          value: view.value ?? record,
+          labels,
+          metrics,
+          embeds,
+          indexedAt
+        }).pipe(Effect.mapError(toBskyError("Invalid record embed payload")));
       }
-      return undefined;
-  }
-};
+      case "app.bsky.embed.record#viewNotFound":
+        return yield* Schema.decodeUnknown(EmbedRecordNotFound)({
+          uri: (record as { uri?: unknown }).uri,
+          notFound: true
+        }).pipe(Effect.mapError(toBskyError("Invalid record embed payload")));
+      case "app.bsky.embed.record#viewBlocked": {
+        const author = yield* mapBlockedAuthor(
+          (record as { author?: unknown }).author
+        );
+        return yield* Schema.decodeUnknown(EmbedRecordBlocked)({
+          uri: (record as { uri?: unknown }).uri,
+          blocked: true,
+          author
+        }).pipe(Effect.mapError(toBskyError("Invalid record embed payload")));
+      }
+      case "app.bsky.embed.record#viewDetached":
+        return yield* Schema.decodeUnknown(EmbedRecordDetached)({
+          uri: (record as { uri?: unknown }).uri,
+          detached: true
+        }).pipe(Effect.mapError(toBskyError("Invalid record embed payload")));
+      default:
+        return EmbedRecordUnknown.make({
+          rawType: typeof recordType === "string" ? recordType : "unknown",
+          data: record
+        });
+    }
+  });
+
+const mapEmbedView = (
+  embed: unknown
+): Effect.Effect<PostEmbed | undefined, BskyError> =>
+  Effect.gen(function* () {
+    if (!embed || typeof embed !== "object") return undefined;
+    const typed = embed as { $type?: string };
+    switch (typed.$type) {
+      case "app.bsky.embed.images#view": {
+        const images = (embed as { images?: Array<any> }).images ?? [];
+        return EmbedImages.make({
+          images: images
+            .filter((image) => image && typeof image === "object")
+            .map((image) =>
+              EmbedImage.make({
+                thumb: String(image.thumb ?? ""),
+                fullsize: String(image.fullsize ?? ""),
+                alt: String(image.alt ?? ""),
+                aspectRatio: mapAspectRatio(image.aspectRatio)
+              })
+            )
+        });
+      }
+      case "app.bsky.embed.external#view": {
+        const external = (embed as { external?: any }).external ?? {};
+        return EmbedExternal.make({
+          uri: String(external.uri ?? ""),
+          title: String(external.title ?? ""),
+          description: String(external.description ?? ""),
+          thumb: external.thumb ? String(external.thumb) : undefined
+        });
+      }
+      case "app.bsky.embed.video#view": {
+        return EmbedVideo.make({
+          cid: String((embed as { cid?: unknown }).cid ?? ""),
+          playlist: String((embed as { playlist?: unknown }).playlist ?? ""),
+          thumbnail: (embed as { thumbnail?: unknown }).thumbnail
+            ? String((embed as { thumbnail?: unknown }).thumbnail)
+            : undefined,
+          alt: (embed as { alt?: unknown }).alt
+            ? String((embed as { alt?: unknown }).alt)
+            : undefined,
+          aspectRatio: mapAspectRatio((embed as { aspectRatio?: unknown }).aspectRatio)
+        });
+      }
+      case "app.bsky.embed.record#view": {
+        const record = (embed as { record?: unknown }).record;
+        const recordType = record && typeof record === "object" ? (record as { $type?: string }).$type : undefined;
+        const mapped = yield* mapEmbedRecordTarget(record ?? embed);
+        return EmbedRecord.make({
+          recordType,
+          record: mapped
+        });
+      }
+      case "app.bsky.embed.recordWithMedia#view": {
+        const record = (embed as { record?: unknown }).record;
+        const recordType = record && typeof record === "object" ? (record as { $type?: string }).$type : undefined;
+        const mediaCandidate: PostEmbed | undefined = yield* mapEmbedView(
+          (embed as { media?: unknown }).media
+        );
+        const media: PostEmbed | unknown =
+          mediaCandidate &&
+          (mediaCandidate._tag === "Images" ||
+            mediaCandidate._tag === "External" ||
+            mediaCandidate._tag === "Video")
+            ? mediaCandidate
+            : (embed as { media?: unknown }).media;
+        const mapped: EmbedRecordTarget = yield* mapEmbedRecordTarget(record ?? embed);
+        return EmbedRecordWithMedia.make({
+          recordType,
+          record: mapped,
+          media
+        });
+      }
+      default:
+        if (typed.$type) {
+          return EmbedUnknown.make({ rawType: typed.$type, data: embed });
+        }
+        return undefined;
+    }
+  });
 
 const metricsFromPostView = (post: PostView) => {
   const data = {
@@ -133,40 +347,160 @@ const metricsFromPostView = (post: PostView) => {
   return hasAny ? PostMetrics.make(data) : undefined;
 };
 
+const mapFeedPostReference = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return FeedPostUnknown.make({ rawType: "unknown", data: input });
+    }
+    const candidate = input as {
+      $type?: unknown;
+      uri?: unknown;
+      cid?: unknown;
+      author?: unknown;
+      notFound?: unknown;
+      blocked?: unknown;
+    };
+    const type = typeof candidate.$type === "string" ? candidate.$type : undefined;
+    if (
+      type === "app.bsky.feed.defs#postView" ||
+      (candidate.uri && candidate.cid && candidate.author)
+    ) {
+      const post = input as PostView;
+      const author = yield* decodeProfileBasic(post.author);
+      const labels =
+        post.labels && post.labels.length > 0
+          ? yield* decodeLabels(post.labels)
+          : undefined;
+      const viewer = post.viewer ? yield* decodeViewerState(post.viewer) : undefined;
+      const indexedAt = yield* decodeTimestamp(
+        post.indexedAt,
+        "Invalid feed post timestamp"
+      );
+      return yield* Schema.decodeUnknown(FeedPostViewRef)({
+        uri: post.uri,
+        cid: post.cid,
+        author,
+        indexedAt,
+        labels,
+        viewer
+      }).pipe(Effect.mapError(toBskyError("Invalid feed post reference")));
+    }
+    if (type === "app.bsky.feed.defs#notFoundPost" || candidate.notFound === true) {
+      return yield* Schema.decodeUnknown(FeedPostNotFound)({
+        uri: candidate.uri,
+        notFound: true
+      }).pipe(Effect.mapError(toBskyError("Invalid feed post reference")));
+    }
+    if (type === "app.bsky.feed.defs#blockedPost" || candidate.blocked === true) {
+      const author = yield* mapBlockedAuthor(
+        (candidate as { author?: unknown }).author
+      );
+      return yield* Schema.decodeUnknown(FeedPostBlocked)({
+        uri: candidate.uri,
+        blocked: true,
+        author
+      }).pipe(Effect.mapError(toBskyError("Invalid feed post reference")));
+    }
+    return FeedPostUnknown.make({
+      rawType: type ?? "unknown",
+      data: input
+    });
+  });
+
+const mapFeedReplyRef = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return yield* BskyError.make({ message: "Invalid feed reply payload" });
+    }
+    const reply = input as {
+      root?: unknown;
+      parent?: unknown;
+      grandparentAuthor?: unknown;
+    };
+    const root = yield* mapFeedPostReference(reply.root);
+    const parent = yield* mapFeedPostReference(reply.parent);
+    const grandparentAuthor = reply.grandparentAuthor
+      ? yield* decodeProfileBasic(reply.grandparentAuthor)
+      : undefined;
+    return yield* Schema.decodeUnknown(FeedReplyRef)({
+      root,
+      parent,
+      grandparentAuthor
+    }).pipe(Effect.mapError(toBskyError("Invalid feed reply payload")));
+  });
+
+const mapFeedReason = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return FeedReasonUnknown.make({ rawType: "unknown", data: input });
+    }
+    const reason = input as { $type?: unknown };
+    const type = typeof reason.$type === "string" ? reason.$type : undefined;
+    switch (type) {
+      case "app.bsky.feed.defs#reasonRepost": {
+        const raw = reason as {
+          by?: unknown;
+          uri?: unknown;
+          cid?: unknown;
+          indexedAt?: unknown;
+        };
+        const by = yield* decodeProfileBasic(raw.by);
+        const indexedAt = yield* decodeTimestamp(
+          raw.indexedAt,
+          "Invalid reason timestamp"
+        );
+        return yield* Schema.decodeUnknown(FeedReasonRepost)({
+          by,
+          uri: raw.uri,
+          cid: raw.cid,
+          indexedAt
+        }).pipe(Effect.mapError(toBskyError("Invalid reason payload")));
+      }
+      case "app.bsky.feed.defs#reasonPin":
+        return FeedReasonPin.make({});
+      default:
+        return FeedReasonUnknown.make({
+          rawType: type ?? "unknown",
+          data: input
+        });
+    }
+  });
+
+const mapFeedContext = (item: FeedViewPost) =>
+  Effect.gen(function* () {
+    const reply = item.reply ? yield* mapFeedReplyRef(item.reply) : undefined;
+    const reason = item.reason ? yield* mapFeedReason(item.reason) : undefined;
+    return yield* Schema.decodeUnknown(FeedContext)({
+      reply,
+      reason,
+      feedContext: item.feedContext,
+      reqId: item.reqId
+    }).pipe(Effect.mapError(toBskyError("Invalid feed context payload")));
+  });
+
 const withCursor = <T extends Record<string, unknown>>(
   params: T,
   cursor: string | undefined
 ): T & { cursor?: string } =>
   typeof cursor === "string" ? { ...params, cursor } : params;
 
-const decodeRecord = (record: unknown) =>
-  Schema.decodeUnknown(RawPostRecord)(record).pipe(
-    Effect.mapError(toBskyError("Invalid post record"))
-  );
-
-const decodeLabels = (labels: unknown) =>
-  Schema.decodeUnknown(Schema.Array(Label))(labels).pipe(
-    Effect.mapError(toBskyError("Invalid moderation labels"))
-  );
-
-const toRawPost = (post: PostView) =>
+const toRawPost = (post: PostView, feed?: FeedContext) =>
   Effect.gen(function* () {
-    const record = yield* decodeRecord(post.record);
-    const labels =
-      post.labels && post.labels.length > 0
-        ? yield* decodeLabels(post.labels)
-        : undefined;
-
+    const embed = yield* mapEmbedView(post.embed);
     const raw = {
       uri: post.uri,
       cid: post.cid,
       author: post.author.handle,
       authorDid: post.author.did,
-      record,
+      record: post.record,
       indexedAt: post.indexedAt,
-      labels,
+      labels: post.labels,
       metrics: metricsFromPostView(post),
-      embed: mapEmbedView(post.embed)
+      embed,
+      viewer: post.viewer,
+      threadgate: post.threadgate,
+      debug: post.debug,
+      feed
     };
 
     return yield* Schema.decodeUnknown(RawPost)(raw).pipe(
@@ -175,7 +509,12 @@ const toRawPost = (post: PostView) =>
   });
 
 const toRawPostsFromFeed = (feed: ReadonlyArray<FeedViewPost>) =>
-  Effect.forEach(feed, (item) => toRawPost(item.post));
+  Effect.forEach(feed, (item) =>
+    Effect.gen(function* () {
+      const context = yield* mapFeedContext(item);
+      return yield* toRawPost(item.post, context);
+    })
+  );
 
 const isPostRecord = (record: unknown): record is AppBskyFeedPost.Record =>
   typeof record === "object" &&
@@ -194,14 +533,60 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
     BskyClient,
     Effect.gen(function* () {
       const config = yield* AppConfigService;
+      const credentials = yield* CredentialStore;
       const agent = new AtpAgent({ service: config.service });
+
+      const minInterval = yield* Config.duration("SKYGENT_BSKY_RATE_LIMIT").pipe(
+        Config.withDefault(Duration.millis(250))
+      );
+      const retryBase = yield* Config.duration("SKYGENT_BSKY_RETRY_BASE").pipe(
+        Config.withDefault(Duration.millis(250))
+      );
+      const retryMax = yield* Config.integer("SKYGENT_BSKY_RETRY_MAX").pipe(
+        Config.withDefault(5)
+      );
+
+      const limiter = yield* Effect.makeSemaphore(1);
+      const lastCallRef = yield* Ref.make(0);
+      const minIntervalMs = Duration.toMillis(minInterval);
+
+      const withRateLimit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        limiter.withPermits(1)(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+            const last = yield* Ref.get(lastCallRef);
+            const waitMs = Math.max(0, minIntervalMs - (now - last));
+            if (waitMs > 0) {
+              yield* Effect.sleep(Duration.millis(waitMs));
+            }
+            return yield* effect;
+          }).pipe(
+            Effect.ensuring(
+              Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) => Ref.set(lastCallRef, now))
+              )
+            )
+          )
+        );
+
+      const retrySchedule = Schedule.exponential(retryBase).pipe(
+        Schedule.jittered,
+        Schedule.intersect(Schedule.recurWhile(isRetryableCause)),
+        Schedule.intersect(Schedule.recurs(retryMax))
+      );
+
+      const withRetry = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(Effect.retry(retrySchedule));
 
       const ensureAuth = (required: boolean) =>
         Effect.gen(function* () {
           if (agent.hasSession) {
             return;
           }
-          if (!config.identifier || !config.password) {
+          const creds = yield* credentials
+            .get()
+            .pipe(Effect.mapError(toBskyError("Failed to load credentials")));
+          if (Option.isNone(creds)) {
             if (required) {
               return yield* BskyError.make({
                 message:
@@ -210,11 +595,16 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
             }
             return;
           }
-          yield* Effect.tryPromise(() =>
-            agent.login({
-              identifier: config.identifier ?? "",
-              password: config.password ?? ""
-            })
+          const value = creds.value;
+          yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise(() =>
+                agent.login({
+                  identifier: value.identifier,
+                  password: Redacted.value(value.password)
+                })
+              )
+            )
           ).pipe(Effect.mapError(toBskyError("Bluesky login failed")));
         });
 
@@ -234,8 +624,12 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
               { limit: opts?.limit ?? 50 },
               cursor
             );
-            const response = yield* Effect.tryPromise(() =>
-              agent.app.bsky.feed.getTimeline(params)
+            const response = yield* withRetry(
+              withRateLimit(
+                Effect.tryPromise<AppBskyFeedGetTimeline.Response>(() =>
+                  agent.app.bsky.feed.getTimeline(params)
+                )
+              )
             ).pipe(Effect.mapError(toBskyError("Failed to fetch timeline")));
             const posts = yield* toRawPostsFromFeed(response.data.feed);
             const nextCursor = response.data.cursor;
@@ -258,8 +652,12 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
               { feed: uri, limit: 50 },
               cursor
             );
-            const response = yield* Effect.tryPromise(() =>
-              agent.app.bsky.feed.getFeed(params)
+            const response = yield* withRetry(
+              withRateLimit(
+                Effect.tryPromise<AppBskyFeedGetFeed.Response>(() =>
+                  agent.app.bsky.feed.getFeed(params)
+                )
+              )
             ).pipe(Effect.mapError(toBskyError("Failed to fetch feed")));
             const posts = yield* toRawPostsFromFeed(response.data.feed);
             const nextCursor = response.data.cursor;
@@ -279,8 +677,12 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           Effect.gen(function* () {
             yield* ensureAuth(true);
             const params = withCursor({ limit: 50 }, cursor);
-            const response = yield* Effect.tryPromise(() =>
-              agent.app.bsky.notification.listNotifications(params)
+            const response = yield* withRetry(
+              withRateLimit(
+                Effect.tryPromise<AppBskyNotificationListNotifications.Response>(() =>
+                  agent.app.bsky.notification.listNotifications(params)
+                )
+              )
             ).pipe(Effect.mapError(toBskyError("Failed to fetch notifications")));
 
               const posts = yield* Effect.forEach(
@@ -290,19 +692,14 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                     if (!isPostRecord(notification.record)) {
                       return Option.none<RawPost>();
                     }
-                    const record = yield* decodeRecord(notification.record);
-                    const labels =
-                      notification.labels && notification.labels.length > 0
-                        ? yield* decodeLabels(notification.labels)
-                        : undefined;
                     const raw = {
                       uri: notification.uri,
                       cid: notification.cid,
                       author: notification.author.handle,
                       authorDid: notification.author.did,
-                      record,
+                      record: notification.record,
                       indexedAt: notification.indexedAt,
-                      labels
+                      labels: notification.labels
                     };
                     const parsed = yield* Schema.decodeUnknown(RawPost)(raw).pipe(
                       Effect.mapError(toBskyError("Invalid notification payload"))

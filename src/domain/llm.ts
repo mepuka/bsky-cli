@@ -1,18 +1,24 @@
 import { Schema } from "effect";
 
+const ConfidenceScore = Schema.Number.pipe(Schema.finite(), Schema.between(0, 1));
+const NonNegativeNumber = Schema.Number.pipe(
+  Schema.finite(),
+  Schema.nonNegative()
+);
+
 export class LlmUsage extends Schema.Class<LlmUsage>("LlmUsage")({
-  inputTokens: Schema.optional(Schema.Number),
-  outputTokens: Schema.optional(Schema.Number),
-  totalTokens: Schema.optional(Schema.Number),
-  reasoningTokens: Schema.optional(Schema.Number),
-  cachedInputTokens: Schema.optional(Schema.Number)
+  inputTokens: Schema.optional(NonNegativeNumber),
+  outputTokens: Schema.optional(NonNegativeNumber),
+  totalTokens: Schema.optional(NonNegativeNumber),
+  reasoningTokens: Schema.optional(NonNegativeNumber),
+  cachedInputTokens: Schema.optional(NonNegativeNumber)
 }) {}
 
 export class LlmDecisionMeta extends Schema.Class<LlmDecisionMeta>("LlmDecisionMeta")({
   promptHash: Schema.String,
   textHash: Schema.String,
-  score: Schema.Number,
-  minConfidence: Schema.Number,
+  score: ConfidenceScore,
+  minConfidence: ConfidenceScore,
   keep: Schema.Boolean,
   cached: Schema.Boolean,
   planHash: Schema.optional(Schema.String),

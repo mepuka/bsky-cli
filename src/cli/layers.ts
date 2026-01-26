@@ -5,8 +5,10 @@ import { Effect, Layer } from "effect";
 import { BskyClient } from "../services/bsky-client.js";
 import { FilterRuntime } from "../services/filter-runtime.js";
 import { LlmDecision, LlmPlan, LlmSettings } from "../services/llm.js";
+import { LlmTelemetry } from "../services/llm-telemetry.js";
 import { PostParser } from "../services/post-parser.js";
 import { AppConfigService } from "../services/app-config.js";
+import { CredentialStore } from "../services/credential-store.js";
 import { StoreEventLog } from "../services/store-event-log.js";
 import { StoreIndex } from "../services/store-index.js";
 import { StoreManager } from "../services/store-manager.js";
@@ -18,9 +20,15 @@ import { StoreCleaner } from "../services/store-cleaner.js";
 import { IdGenerator } from "@effect/ai";
 import { LinkValidator } from "../services/link-validator.js";
 import { TrendingTopics } from "../services/trending-topics.js";
+import { ResourceMonitor } from "../services/resource-monitor.js";
+import { CliOutput } from "./output.js";
 
 const appConfigLayer = AppConfigService.layer;
-const bskyLayer = BskyClient.layer.pipe(Layer.provideMerge(appConfigLayer));
+const credentialLayer = CredentialStore.layer.pipe(Layer.provideMerge(appConfigLayer));
+const bskyLayer = BskyClient.layer.pipe(
+  Layer.provideMerge(appConfigLayer),
+  Layer.provideMerge(credentialLayer)
+);
 
 const storageLayer = Layer.unwrapEffect(
   Effect.gen(function* () {
@@ -53,7 +61,8 @@ const llmDecisionLayer = LlmDecision.layer.pipe(
   Layer.provideMerge(LlmSettings.layer),
   Layer.provideMerge(LlmPlan.layer),
   Layer.provideMerge(idGeneratorLayer),
-  Layer.provideMerge(storageLayer)
+  Layer.provideMerge(storageLayer),
+  Layer.provideMerge(LlmTelemetry.layer)
 );
 const linkValidatorLayer = LinkValidator.layer.pipe(
   Layer.provideMerge(storageLayer),
@@ -61,6 +70,10 @@ const linkValidatorLayer = LinkValidator.layer.pipe(
 );
 const trendingTopicsLayer = TrendingTopics.layer.pipe(
   Layer.provideMerge(storageLayer),
+  Layer.provideMerge(appConfigLayer),
+  Layer.provideMerge(credentialLayer)
+);
+const resourceMonitorLayer = ResourceMonitor.layer.pipe(
   Layer.provideMerge(appConfigLayer)
 );
 const runtimeLayer = FilterRuntime.layer.pipe(
@@ -80,6 +93,9 @@ const syncLayer = SyncEngine.layer.pipe(
 
 export const CliLive = Layer.mergeAll(
   appConfigLayer,
+  credentialLayer,
+  CliOutput.layer,
+  resourceMonitorLayer,
   managerLayer,
   cleanerLayer,
   syncLayer
