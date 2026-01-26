@@ -24,7 +24,10 @@ export type PostCid = typeof PostCid.Type;
 export const Did = Schema.String.pipe(Schema.brand("Did"));
 export type Did = typeof Did.Type;
 
-export const Timestamp = Schema.DateFromString.pipe(Schema.brand("Timestamp"));
+export const Timestamp = Schema.Union(
+  Schema.DateFromString,
+  Schema.DateFromSelf
+).pipe(Schema.brand("Timestamp"));
 export type Timestamp = typeof Timestamp.Type;
 
 export const EventId = Schema.ULID.pipe(Schema.brand("EventId"));
