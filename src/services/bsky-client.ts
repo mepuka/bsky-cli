@@ -215,7 +215,7 @@ const mapEmbedRecordTarget = (
                 )
               )
             : undefined;
-        return yield* Schema.decodeUnknown(EmbedRecordView)({
+        return EmbedRecordView.make({
           uri: view.uri,
           cid: view.cid,
           author,
@@ -224,28 +224,28 @@ const mapEmbedRecordTarget = (
           metrics,
           embeds,
           indexedAt
-        }).pipe(Effect.mapError(toBskyError("Invalid record embed payload")));
+        });
       }
       case "app.bsky.embed.record#viewNotFound":
-        return yield* Schema.decodeUnknown(EmbedRecordNotFound)({
+        return EmbedRecordNotFound.make({
           uri: (record as { uri?: unknown }).uri,
           notFound: true
-        }).pipe(Effect.mapError(toBskyError("Invalid record embed payload")));
+        });
       case "app.bsky.embed.record#viewBlocked": {
         const author = yield* mapBlockedAuthor(
           (record as { author?: unknown }).author
         );
-        return yield* Schema.decodeUnknown(EmbedRecordBlocked)({
+        return EmbedRecordBlocked.make({
           uri: (record as { uri?: unknown }).uri,
           blocked: true,
           author
-        }).pipe(Effect.mapError(toBskyError("Invalid record embed payload")));
+        });
       }
       case "app.bsky.embed.record#viewDetached":
-        return yield* Schema.decodeUnknown(EmbedRecordDetached)({
+        return EmbedRecordDetached.make({
           uri: (record as { uri?: unknown }).uri,
           detached: true
-        }).pipe(Effect.mapError(toBskyError("Invalid record embed payload")));
+        });
       default:
         return EmbedRecordUnknown.make({
           rawType: typeof recordType === "string" ? recordType : "unknown",
@@ -376,30 +376,30 @@ const mapFeedPostReference = (input: unknown) =>
         post.indexedAt,
         "Invalid feed post timestamp"
       );
-      return yield* Schema.decodeUnknown(FeedPostViewRef)({
+      return FeedPostViewRef.make({
         uri: post.uri,
         cid: post.cid,
         author,
         indexedAt,
         labels,
         viewer
-      }).pipe(Effect.mapError(toBskyError("Invalid feed post reference")));
+      });
     }
     if (type === "app.bsky.feed.defs#notFoundPost" || candidate.notFound === true) {
-      return yield* Schema.decodeUnknown(FeedPostNotFound)({
+      return FeedPostNotFound.make({
         uri: candidate.uri,
         notFound: true
-      }).pipe(Effect.mapError(toBskyError("Invalid feed post reference")));
+      });
     }
     if (type === "app.bsky.feed.defs#blockedPost" || candidate.blocked === true) {
       const author = yield* mapBlockedAuthor(
         (candidate as { author?: unknown }).author
       );
-      return yield* Schema.decodeUnknown(FeedPostBlocked)({
+      return FeedPostBlocked.make({
         uri: candidate.uri,
         blocked: true,
         author
-      }).pipe(Effect.mapError(toBskyError("Invalid feed post reference")));
+      });
     }
     return FeedPostUnknown.make({
       rawType: type ?? "unknown",
@@ -422,11 +422,11 @@ const mapFeedReplyRef = (input: unknown) =>
     const grandparentAuthor = reply.grandparentAuthor
       ? yield* decodeProfileBasic(reply.grandparentAuthor)
       : undefined;
-    return yield* Schema.decodeUnknown(FeedReplyRef)({
+    return FeedReplyRef.make({
       root,
       parent,
       grandparentAuthor
-    }).pipe(Effect.mapError(toBskyError("Invalid feed reply payload")));
+    });
   });
 
 const mapFeedReason = (input: unknown) =>
@@ -449,12 +449,12 @@ const mapFeedReason = (input: unknown) =>
           raw.indexedAt,
           "Invalid reason timestamp"
         );
-        return yield* Schema.decodeUnknown(FeedReasonRepost)({
+        return FeedReasonRepost.make({
           by,
           uri: raw.uri,
           cid: raw.cid,
           indexedAt
-        }).pipe(Effect.mapError(toBskyError("Invalid reason payload")));
+        });
       }
       case "app.bsky.feed.defs#reasonPin":
         return FeedReasonPin.make({});

@@ -1,4 +1,4 @@
-import { Command, ValidationError } from "@effect/cli";
+import { Command, HelpDoc, ValidationError } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { app } from "./src/cli/app.js";
@@ -12,9 +12,17 @@ const cli = Command.run(app, {
   version: "0.0.0"
 });
 
+const stripAnsi = (value: string) =>
+  value.replace(/\u001b\[[0-9;]*m/g, "");
+
+const formatValidationError = (error: ValidationError.ValidationError) => {
+  const text = HelpDoc.toAnsiText(error.error).trimEnd();
+  return stripAnsi(text.length > 0 ? text : "Invalid command input. Use --help for usage.");
+};
+
 const formatError = (error: unknown) => {
   if (ValidationError.isValidationError(error)) {
-    return "Invalid command input. Use --help for usage.";
+    return formatValidationError(error);
   }
   if (error instanceof CliJsonError) {
     return error.message;

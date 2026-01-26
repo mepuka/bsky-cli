@@ -108,8 +108,8 @@ interface FilterRegexEncoded {
 }
 interface FilterDateRangeEncoded {
   readonly _tag: "DateRange";
-  readonly start: string;
-  readonly end: string;
+  readonly start: string | Date;
+  readonly end: string | Date;
 }
 type FilterErrorPolicyEncoded = typeof FilterErrorPolicy.Encoded;
 interface FilterHasValidLinksEncoded {

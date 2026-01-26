@@ -18,19 +18,19 @@ export const FacetIndex = Schema.Struct({
 export type FacetIndex = typeof FacetIndex.Type;
 
 export const FacetMentionFeature = Schema.Struct({
-  $type: Schema.optional(Schema.Literal("app.bsky.richtext.facet#mention")),
+  $type: Schema.Literal("app.bsky.richtext.facet#mention"),
   did: Did
 });
 export type FacetMentionFeature = typeof FacetMentionFeature.Type;
 
 export const FacetLinkFeature = Schema.Struct({
-  $type: Schema.optional(Schema.Literal("app.bsky.richtext.facet#link")),
+  $type: Schema.Literal("app.bsky.richtext.facet#link"),
   uri: Schema.String
 });
 export type FacetLinkFeature = typeof FacetLinkFeature.Type;
 
 export const FacetTagFeature = Schema.Struct({
-  $type: Schema.optional(Schema.Literal("app.bsky.richtext.facet#tag")),
+  $type: Schema.Literal("app.bsky.richtext.facet#tag"),
   tag: Schema.String
 });
 export type FacetTagFeature = typeof FacetTagFeature.Type;
