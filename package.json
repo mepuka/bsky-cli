@@ -1,15 +1,26 @@
 {
   "name": "skygent-bsky",
+  "version": "0.1.0",
+  "description": "Composable Bluesky data filtering and monitoring CLI built with Effect",
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "bin": {
+    "skygent": "./index.ts"
+  },
   "scripts": {
     "prepare": "effect-language-service patch",
+    "build": "tsc --build",
+    "build:clean": "rm -rf dist .tsbuildinfo && bun run build",
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "bun run build && changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.29.8",
     "@effect/language-service": "^0.72.0",
     "@effect/vitest": "^0.27.0",
     "@types/bun": "latest",

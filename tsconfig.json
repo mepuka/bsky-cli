@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
-    // Environment setup & latest features
+    // Build target & module system (NodeNext for CLI/library)
     "lib": ["ESNext"],
-    "target": "ESNext",
-    "module": "Preserve",
+    "target": "ES2022",
+    "module": "NodeNext",
     "moduleDetection": "force",
     "jsx": "react-jsx",
     "allowJs": true,
@@ -15,27 +15,31 @@
       }
     ],
 
-    // Bundler mode
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
+    // Module resolution
     "verbatimModuleSyntax": true,
-    "noEmit": true,
     "resolveJsonModule": true,
 
-    // Best practices
+    // Type safety
     "strict": true,
-    "skipLibCheck": true,
+    "exactOptionalPropertyTypes": true,
+    "noUnusedLocals": true,
+    "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "exactOptionalPropertyTypes": true,
 
     // Build performance
     "incremental": true,
+    "skipLibCheck": true,
 
-    // Some stricter flags (disabled by default)
-    "noUnusedLocals": true,
+    // Output configuration
+    "declaration": false,
+    "sourceMap": true,
+    "outDir": "dist",
+
+    // Linting
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
-  }
+  },
+  "include": ["src", "index.ts"],
+  "exclude": ["node_modules", "dist", "tests"]
 }
