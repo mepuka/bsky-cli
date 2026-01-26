@@ -325,16 +325,15 @@ describe("DerivationEngine", () => {
       expect(result1.eventsProcessed).toBe(3);
       expect(result1.eventsMatched).toBe(3);
 
-      // Second derivation (should be idempotent - checkpoint filters out already-processed events)
+      // Second derivation (checkpoint filters out already-processed events)
       const result2 = yield* engine.derive(sourceRef, targetRef, filter, {
         mode: "EventTime",
         reset: false
       });
 
       // Checkpoint filtering + URI deduplication ensures idempotence
-      // May process 0-1 events due to checkpoint timing, but no matches
-      expect(result2.eventsProcessed).toBeLessThanOrEqual(1);
-      expect(result2.eventsMatched).toBe(0); // All skipped due to URI deduplication
+      expect(result2.eventsProcessed).toBe(0);
+      expect(result2.eventsMatched).toBe(0);
 
       // Verify target still has exactly 3 posts
       const hasPost1 = yield* index.hasUri(targetRef, posts[0].uri);
@@ -394,9 +393,7 @@ describe("DerivationEngine", () => {
       });
 
       // Checkpoint filtering: processes only events with EventId > last checkpoint
-      // With ULID comparison, may process 2 or 3 depending on timing
-      expect(result2.eventsMatched).toBeGreaterThanOrEqual(2);
-      expect(result2.eventsMatched).toBeLessThanOrEqual(3);
+      expect(result2.eventsMatched).toBe(2);
 
       // Verify all 4 posts are in target
       const hasPost1 = yield* index.hasUri(targetRef, initialPosts[0].uri);
@@ -456,6 +453,35 @@ describe("DerivationEngine", () => {
       expect(result.eventsSkipped).toBe(1); // Non-matching #science post
       expect(result.deletesPropagated).toBe(1); // Delete event
       expect(result.eventsProcessed).toBe(3); // Total
+    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+  );
+
+  test("Reset ignores existing checkpoint", () =>
+    Effect.gen(function* () {
+      const engine = yield* DerivationEngine;
+      const writer = yield* StoreWriter;
+      const index = yield* StoreIndex;
+      const filter: FilterExpr = all();
+
+      // Seed source with a post
+      const post = createTestPost("at://test/post1", "First");
+      const event = PostUpsert.make({ post, meta: createTestMeta() });
+      const record = yield* writer.append(sourceRef, event);
+      yield* index.apply(sourceRef, record);
+
+      // First derivation to create checkpoint
+      const first = yield* engine.derive(sourceRef, targetRef, filter, {
+        mode: "EventTime",
+        reset: false
+      });
+      expect(first.eventsMatched).toBe(1);
+
+      // Reset derivation should re-process even with existing checkpoint
+      const second = yield* engine.derive(sourceRef, targetRef, filter, {
+        mode: "EventTime",
+        reset: true
+      });
+      expect(second.eventsMatched).toBe(1);
     }).pipe(Effect.provide(TestLayer), Effect.runPromise)
   );
 });

@@ -6,11 +6,12 @@ import {
   ConfigError,
   FilterCompileError,
   FilterEvalError,
-  StoreIndexError,
   StoreIoError,
+  StoreIndexError,
   StoreNotFound
 } from "../domain/errors.js";
 import { SyncError } from "../domain/sync.js";
+import { DerivationError } from "../domain/derivation.js";
 
 export const exitCodeFor = (error: unknown): number => {
   if (ValidationError.isValidationError(error)) return 2;
@@ -20,6 +21,7 @@ export const exitCodeFor = (error: unknown): number => {
   if (error instanceof StoreNotFound) return 3;
   if (error instanceof StoreIoError || error instanceof StoreIndexError) return 7;
   if (error instanceof FilterCompileError || error instanceof FilterEvalError) return 8;
+  if (error instanceof DerivationError) return 2;
   if (error instanceof SyncError) {
     switch (error.stage) {
       case "source":

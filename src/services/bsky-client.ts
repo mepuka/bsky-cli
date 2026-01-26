@@ -56,7 +56,7 @@ import {
   PostViewerState,
   ProfileBasic
 } from "../domain/bsky.js";
-import { Timestamp } from "../domain/primitives.js";
+import { PostCid, PostUri, Timestamp } from "../domain/primitives.js";
 
 export interface TimelineOptions {
   readonly limit?: number;
@@ -115,6 +115,26 @@ const decodeTimestamp = (value: unknown, message: string) =>
   Schema.decodeUnknown(Timestamp)(value).pipe(
     Effect.mapError(toBskyError(message))
   );
+
+const decodePostUri = (value: unknown, message: string) =>
+  Schema.decodeUnknown(PostUri)(value).pipe(
+    Effect.mapError(toBskyError(message))
+  );
+
+const decodePostCid = (value: unknown, message: string) =>
+  Schema.decodeUnknown(PostCid)(value).pipe(
+    Effect.mapError(toBskyError(message))
+  );
+
+const decodePostUriOptional = (value: unknown, message: string) =>
+  typeof value === "undefined"
+    ? Effect.void.pipe(Effect.as(undefined))
+    : decodePostUri(value, message);
+
+const decodePostCidOptional = (value: unknown, message: string) =>
+  typeof value === "undefined"
+    ? Effect.void.pipe(Effect.as(undefined))
+    : decodePostCid(value, message);
 
 const decodeLabels = (labels: unknown) =>
   Schema.decodeUnknown(Schema.Array(Label))(labels).pipe(
@@ -216,8 +236,14 @@ const mapEmbedRecordTarget = (
               )
             : undefined;
         return EmbedRecordView.make({
-          uri: view.uri,
-          cid: view.cid,
+          uri: yield* decodePostUri(
+            view.uri,
+            "Invalid record embed URI"
+          ),
+          cid: yield* decodePostCid(
+            view.cid,
+            "Invalid record embed CID"
+          ),
           author,
           value: view.value ?? record,
           labels,
@@ -228,7 +254,10 @@ const mapEmbedRecordTarget = (
       }
       case "app.bsky.embed.record#viewNotFound":
         return EmbedRecordNotFound.make({
-          uri: (record as { uri?: unknown }).uri,
+          uri: yield* decodePostUri(
+            (record as { uri?: unknown }).uri,
+            "Invalid record embed URI"
+          ),
           notFound: true
         });
       case "app.bsky.embed.record#viewBlocked": {
@@ -236,14 +265,20 @@ const mapEmbedRecordTarget = (
           (record as { author?: unknown }).author
         );
         return EmbedRecordBlocked.make({
-          uri: (record as { uri?: unknown }).uri,
+          uri: yield* decodePostUri(
+            (record as { uri?: unknown }).uri,
+            "Invalid record embed URI"
+          ),
           blocked: true,
           author
         });
       }
       case "app.bsky.embed.record#viewDetached":
         return EmbedRecordDetached.make({
-          uri: (record as { uri?: unknown }).uri,
+          uri: yield* decodePostUri(
+            (record as { uri?: unknown }).uri,
+            "Invalid record embed URI"
+          ),
           detached: true
         });
       default:
@@ -377,8 +412,14 @@ const mapFeedPostReference = (input: unknown) =>
         "Invalid feed post timestamp"
       );
       return FeedPostViewRef.make({
-        uri: post.uri,
-        cid: post.cid,
+        uri: yield* decodePostUri(
+          post.uri,
+          "Invalid feed post URI"
+        ),
+        cid: yield* decodePostCid(
+          post.cid,
+          "Invalid feed post CID"
+        ),
         author,
         indexedAt,
         labels,
@@ -387,7 +428,10 @@ const mapFeedPostReference = (input: unknown) =>
     }
     if (type === "app.bsky.feed.defs#notFoundPost" || candidate.notFound === true) {
       return FeedPostNotFound.make({
-        uri: candidate.uri,
+        uri: yield* decodePostUri(
+          candidate.uri,
+          "Invalid feed post URI"
+        ),
         notFound: true
       });
     }
@@ -396,7 +440,10 @@ const mapFeedPostReference = (input: unknown) =>
         (candidate as { author?: unknown }).author
       );
       return FeedPostBlocked.make({
-        uri: candidate.uri,
+        uri: yield* decodePostUri(
+          candidate.uri,
+          "Invalid feed post URI"
+        ),
         blocked: true,
         author
       });
@@ -451,8 +498,14 @@ const mapFeedReason = (input: unknown) =>
         );
         return FeedReasonRepost.make({
           by,
-          uri: raw.uri,
-          cid: raw.cid,
+          uri: yield* decodePostUriOptional(
+            raw.uri,
+            "Invalid repost URI"
+          ),
+          cid: yield* decodePostCidOptional(
+            raw.cid,
+            "Invalid repost CID"
+          ),
           indexedAt
         });
       }

@@ -78,14 +78,17 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             yield* compiler.compile(filterSpec);
             const predicate = yield* runtime.evaluate(filterExpr);
 
-            // Reset logic: clear target store if requested
+            // Reset logic: clear target store + checkpoint if requested
             if (options.reset) {
               yield* index.clear(targetRef);
               yield* eventLog.clear(targetRef);
+              yield* checkpoints.remove(targetRef.name, sourceRef.name);
             }
 
-            // Checkpoint loading
-            const checkpointOption = yield* checkpoints.load(targetRef.name, sourceRef.name);
+            // Checkpoint loading (skip when reset)
+            const checkpointOption = options.reset
+              ? Option.none()
+              : yield* checkpoints.load(targetRef.name, sourceRef.name);
             const filterHash = filterExprSignature(filterExpr);
 
             // Check if checkpoint is valid (matching filter and mode)
@@ -148,10 +151,8 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
                       };
                     }
 
-                    // Filter evaluation: catchAll to skip posts with filter errors
-                    const matches = yield* predicate(event.post).pipe(
-                      Effect.catchAll(() => Effect.succeed(false))
-                    );
+                    // Filter evaluation: failures propagate to caller
+                    const matches = yield* predicate(event.post);
 
                     if (matches) {
                       const derivedMeta = EventMeta.make({
@@ -187,22 +188,23 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
               new Date(endTimeMillis).toISOString()
             );
 
-            // Checkpoint saving: only if we processed events
-            if (Option.isSome(result.lastSourceId)) {
-              const checkpoint = DerivationCheckpoint.make({
-                viewName: targetRef.name,
-                sourceStore: sourceRef.name,
-                targetStore: targetRef.name,
-                filterHash,
-                evaluationMode: options.mode,
-                lastSourceEventId: Option.getOrUndefined(result.lastSourceId),
-                eventsProcessed: result.processed,
-                eventsMatched: result.matched,
-                deletesPropagated: result.deletes,
-                updatedAt: timestamp
-              });
-              yield* checkpoints.save(checkpoint);
-            }
+            // Checkpoint saving: always record materialization attempt
+            const lastSourceIdOption = Option.isSome(result.lastSourceId)
+              ? result.lastSourceId
+              : yield* eventLog.getLastEventId(sourceRef);
+            const checkpoint = DerivationCheckpoint.make({
+              viewName: targetRef.name,
+              sourceStore: sourceRef.name,
+              targetStore: targetRef.name,
+              filterHash,
+              evaluationMode: options.mode,
+              lastSourceEventId: Option.getOrUndefined(lastSourceIdOption),
+              eventsProcessed: result.processed,
+              eventsMatched: result.matched,
+              deletesPropagated: result.deletes,
+              updatedAt: timestamp
+            });
+            yield* checkpoints.save(checkpoint);
 
             // Lineage saving: record derivation metadata
             const lineage = StoreLineage.make({

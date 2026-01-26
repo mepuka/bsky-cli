@@ -6,6 +6,7 @@ import { Effect, Layer, Ref, Sink, Stream } from "effect";
 import { CliOutput, type CliOutputService } from "../../src/cli/output.js";
 import { logErrorEvent } from "../../src/cli/logging.js";
 import { storeCommand } from "../../src/cli/store.js";
+import { LineageStore } from "../../src/services/lineage-store.js";
 import { StoreManager } from "../../src/services/store-manager.js";
 import { StoreCleaner } from "../../src/services/store-cleaner.js";
 
@@ -67,9 +68,10 @@ describe("CLI store command", () => {
       version: "0.0.0"
     });
     const { layer, stdoutRef, stderrRef } = makeOutputCapture();
-    const storeLayer = StoreManager.layer.pipe(
-      Layer.provide(KeyValueStore.layerMemory)
-    );
+    const storeLayer = Layer.mergeAll(
+      StoreManager.layer,
+      LineageStore.layer
+    ).pipe(Layer.provide(KeyValueStore.layerMemory));
     const cleanerLayer = Layer.succeed(
       StoreCleaner,
       StoreCleaner.of({

@@ -24,6 +24,10 @@ export class ViewCheckpointStore extends Context.Tag("@skygent/ViewCheckpointSto
     readonly save: (
       checkpoint: DerivationCheckpoint
     ) => Effect.Effect<void, StoreIoError>;
+    readonly remove: (
+      viewName: StoreName,
+      sourceName: StoreName
+    ) => Effect.Effect<void, StoreIoError>;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -53,7 +57,14 @@ export class ViewCheckpointStore extends Context.Tag("@skygent/ViewCheckpointSto
             )
       );
 
-      return ViewCheckpointStore.of({ load, save });
+      const remove = Effect.fn("ViewCheckpointStore.remove")(
+        (viewName: StoreName, sourceName: StoreName) =>
+          checkpoints
+            .remove(checkpointKey(viewName, sourceName))
+            .pipe(Effect.mapError(toStoreIoError(viewName, sourceName)))
+      );
+
+      return ViewCheckpointStore.of({ load, save, remove });
     })
   );
 }

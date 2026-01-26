@@ -1,5 +1,5 @@
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
-import { Context, Effect, Layer, Option, Random, Schema } from "effect";
+import { Context, Effect, Layer, Option, Random, Ref, Schema } from "effect";
 import { StoreIoError } from "../domain/errors.js";
 import { PostEvent, PostEventRecord } from "../domain/events.js";
 import { EventId } from "../domain/primitives.js";
@@ -25,19 +25,28 @@ const encodeTime = (time: number) => {
   return output;
 };
 
-const randomPart = Effect.forEach(
-  Array.from({ length: 16 }),
-  () => Random.nextIntBetween(0, 32)
-).pipe(
-  Effect.map((digits) => digits.map((digit) => ULID_ALPHABET[digit]).join(""))
-);
+const encodeRandomDigits = (digits: ReadonlyArray<number>) =>
+  digits.map((digit) => ULID_ALPHABET[digit]).join("");
 
-const generateEventId = Effect.gen(function* () {
-  const timePart = encodeTime(Date.now());
-  const rand = yield* randomPart;
-  const id = `${timePart}${rand}`;
-  return yield* Schema.decodeUnknown(EventId)(id);
-}).pipe(Effect.orDie);
+const incrementRandomDigits = (digits: ReadonlyArray<number>) => {
+  const next = digits.slice();
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    const value = next[i];
+    if (typeof value !== "number") {
+      continue;
+    }
+    if (value === 31) {
+      next[i] = 0;
+      if (i === 0) {
+        return { digits: next, overflow: true } as const;
+      }
+    } else {
+      next[i] = value + 1;
+      return { digits: next, overflow: false } as const;
+    }
+  }
+  return { digits: next, overflow: true } as const;
+};
 
 const eventKey = (event: PostEvent, id: EventId) =>
   `events/${event.meta.source}/${id}`;
@@ -63,6 +72,44 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
       const events = kv.forSchema(PostEventRecord);
       const manifest = kv.forSchema(Schema.Array(Schema.String));
       const lastEventId = kv.forSchema(EventId);
+      const idState = yield* Ref.make({
+        lastTime: 0,
+        lastRandom: [] as ReadonlyArray<number>
+      });
+
+      const nextRandomDigits = () =>
+        Effect.forEach(
+          Array.from({ length: 16 }),
+          () => Random.nextIntBetween(0, 32)
+        );
+
+      const generateEventId = Effect.fn("StoreWriter.generateEventId")(() =>
+        Effect.gen(function* () {
+          const state = yield* Ref.get(idState);
+          const now = Date.now();
+          let time = state.lastTime;
+          let digits = state.lastRandom;
+
+          if (digits.length === 0 || now > state.lastTime) {
+            time = now;
+            digits = yield* nextRandomDigits();
+          } else {
+            const incremented = incrementRandomDigits(digits);
+            if (incremented.overflow) {
+              time = state.lastTime + 1;
+              digits = yield* nextRandomDigits();
+            } else {
+              time = state.lastTime;
+              digits = incremented.digits;
+            }
+          }
+
+          const id = `${encodeTime(time)}${encodeRandomDigits(digits)}`;
+          const decoded = yield* Schema.decodeUnknown(EventId)(id);
+          yield* Ref.set(idState, { lastTime: time, lastRandom: digits });
+          return decoded;
+        }).pipe(Effect.orDie)
+      );
 
       const append = Effect.fn("StoreWriter.append")(
         (store: StoreRef, event: PostEvent) =>
@@ -71,7 +118,7 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
             const storeEvents = KeyValueStore.prefix(events, prefix);
             const storeManifest = KeyValueStore.prefix(manifest, prefix);
             const storeLastEventId = KeyValueStore.prefix(lastEventId, prefix);
-            const id = yield* generateEventId;
+            const id = yield* generateEventId();
             const record = PostEventRecord.make({
               id,
               version: 1,

@@ -127,6 +127,7 @@ export const CliLive = Layer.mergeAll(
   managerLayer,
   cleanerLayer,
   syncLayer,
+  viewCheckpointLayer,
   derivationEngineLayer,
   derivationValidatorLayer,
   lineageLayer

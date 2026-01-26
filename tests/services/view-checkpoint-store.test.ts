@@ -107,4 +107,20 @@ describe("ViewCheckpointStore", () => {
       expect(result.value.eventsMatched).toBe(50);
     }
   });
+
+  test("remove deletes checkpoint", async () => {
+    const program = Effect.gen(function* () {
+      const store = yield* ViewCheckpointStore;
+
+      yield* store.save(sampleCheckpoint);
+      yield* store.remove(sampleViewName, sampleSourceName);
+      const loaded = yield* store.load(sampleViewName, sampleSourceName);
+
+      return loaded;
+    });
+
+    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+
+    expect(Option.isNone(result)).toBe(true);
+  });
 });

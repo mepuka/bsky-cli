@@ -73,17 +73,19 @@ export const deriveCommand = Command.make(
         });
       }
 
-      // Validation 3: Filter change detection (only if not resetting)
+      // Validation 3: Filter or mode change detection (only if not resetting)
       if (!reset) {
         const checkpointOption = yield* checkpoints.load(target, source);
         if (Option.isSome(checkpointOption)) {
           const checkpoint = checkpointOption.value;
           const newFilterHash = filterExprSignature(filterExpr);
-          if (checkpoint.filterHash !== newFilterHash) {
+          if (checkpoint.filterHash !== newFilterHash || checkpoint.evaluationMode !== evaluationMode) {
             const message = [
-              "Filter expression has changed since last derivation.",
+              "Derivation settings have changed since last derivation.",
               `Previous filter hash: ${checkpoint.filterHash}`,
               `New filter hash:      ${newFilterHash}`,
+              `Previous mode:        ${checkpoint.evaluationMode}`,
+              `New mode:             ${evaluationMode}`,
               "",
               "This would result in inconsistent data. Options:",
               "  1. Use --reset --yes to discard existing data and start fresh",
@@ -95,7 +97,9 @@ export const deriveCommand = Command.make(
               message,
               cause: {
                 oldHash: checkpoint.filterHash,
-                newHash: newFilterHash
+                newHash: newFilterHash,
+                oldMode: checkpoint.evaluationMode,
+                newMode: evaluationMode
               }
             });
           }
