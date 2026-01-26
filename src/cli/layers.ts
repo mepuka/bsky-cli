@@ -58,8 +58,10 @@ const idGeneratorLayer = Layer.succeed(
   IdGenerator.defaultIdGenerator
 );
 const llmDecisionLayer = LlmDecision.layer.pipe(
+  Layer.provideMerge(
+    LlmPlan.layer.pipe(Layer.provide(LlmSettings.layer))
+  ),
   Layer.provideMerge(LlmSettings.layer),
-  Layer.provideMerge(LlmPlan.layer),
   Layer.provideMerge(idGeneratorLayer),
   Layer.provideMerge(storageLayer),
   Layer.provideMerge(LlmTelemetry.layer)

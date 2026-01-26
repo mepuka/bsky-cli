@@ -211,7 +211,7 @@
 - [x] Fail-open/closed policy enforcement in filter runtime.
 - [x] Persistent LLM cache keyed by model/prompt/content hash.
 - [x] LLM annotations stored in event metadata (provenance + confidence).
-- [ ] Configuration schema for provider-specific model defaults.
+- [x] Configuration schema for provider-specific model defaults (Anthropic: claude-haiku-4-5, OpenAI: gpt-5-mini, Google: gemini-3.0-flash; temperature: 0.2).
 - [ ] Provider health/fallback telemetry (stderr summary + counters).
 
 **Acceptance**
@@ -251,7 +251,7 @@ Use this table as the single source of truth during implementation:
 | 6 | Complete | Store + sync + query + watch + output format/config done |
 | 7 | Complete | Credentials + rate limiting + docs + monitoring done |
 | 8 | Not started | Jetstream (optional) |
-| 9 | In progress | LLM cache + metadata done; model defaults/telemetry pending |
+| 9 | In progress | LLM cache + metadata + model defaults done; telemetry pending |
 | 10 | In progress | Property tests done; CLI smoke tests pending |
 
 ---

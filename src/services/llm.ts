@@ -1,10 +1,12 @@
 import { IdGenerator, LanguageModel, Prompt, Response } from "@effect/ai";
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient";
 import * as AnthropicLanguageModel from "@effect/ai-anthropic/AnthropicLanguageModel";
+import * as AnthropicGenerated from "@effect/ai-anthropic/Generated";
 import * as GoogleClient from "@effect/ai-google/GoogleClient";
 import * as GoogleLanguageModel from "@effect/ai-google/GoogleLanguageModel";
 import * as OpenAiClient from "@effect/ai-openai/OpenAiClient";
 import * as OpenAiLanguageModel from "@effect/ai-openai/OpenAiLanguageModel";
+import * as OpenAiGenerated from "@effect/ai-openai/Generated";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import {
   Clock,
@@ -73,6 +75,22 @@ const LlmProviderSchema = Schema.Literal("openai", "anthropic", "google");
 type LlmProvider = typeof LlmProviderSchema.Type;
 const LlmProviderListSchema = Schema.Array(LlmProviderSchema);
 
+/**
+ * Default model IDs for each LLM provider.
+ * Uses typed schemas from @effect/ai packages where available.
+ */
+const DEFAULT_MODELS = {
+  anthropic: "claude-haiku-4-5" as const satisfies Schema.Schema.Type<typeof AnthropicGenerated.Model>,
+  openai: "gpt-5-mini" as const satisfies Schema.Schema.Type<typeof OpenAiGenerated.AssistantSupportedModels>,
+  google: "gemini-3.0-flash" as const
+} as const;
+
+/**
+ * Default temperature for LLM requests.
+ * Low temperature (0.2) for deterministic, focused outputs.
+ */
+const DEFAULT_TEMPERATURE = 0.2;
+
 const formatSchemaError = (error: unknown) =>
   ParseResult.isParseError(error)
     ? ParseResult.TreeFormatter.formatErrorSync(error)
@@ -122,16 +140,13 @@ const resolveModel = (provider: LlmProvider) =>
   Effect.gen(function* () {
     const generic = yield* Config.string("SKYGENT_LLM_MODEL").pipe(Config.option);
     const specific = yield* Config.string(providerModelKey(provider)).pipe(Config.option);
-    const model = Option.getOrElse(specific, () => Option.getOrUndefined(generic));
-    if (!model) {
-      return yield* ConfigError.make({
-        message: `Missing model for ${provider}. Set ${providerModelKey(provider)} or SKYGENT_LLM_MODEL.`
-      });
-    }
-    return model;
+    const envModel = Option.getOrElse(specific, () => Option.getOrUndefined(generic));
+
+    // Use environment variable if set, otherwise use provider default
+    return envModel ?? DEFAULT_MODELS[provider];
   });
 
-const openAiLayer = (model: string) =>
+const openAiLayer = (model: string, temperature: number) =>
   Effect.gen(function* () {
     const apiKey = yield* Config.redacted("SKYGENT_OPENAI_API_KEY").pipe(
       Config.option
@@ -155,10 +170,12 @@ const openAiLayer = (model: string) =>
       projectId: Option.getOrUndefined(projectId)
     });
 
-    return OpenAiLanguageModel.model(model).pipe(Layer.provide(clientLayer));
+    return OpenAiLanguageModel.model(model, { temperature }).pipe(
+      Layer.provide(clientLayer)
+    );
   });
 
-const anthropicLayer = (model: string) =>
+const anthropicLayer = (model: string, temperature: number) =>
   Effect.gen(function* () {
     const apiKey = yield* Config.redacted("SKYGENT_ANTHROPIC_API_KEY").pipe(
       Config.option
@@ -180,10 +197,12 @@ const anthropicLayer = (model: string) =>
       anthropicVersion: Option.getOrUndefined(anthropicVersion)
     });
 
-    return AnthropicLanguageModel.model(model).pipe(Layer.provide(clientLayer));
+    return AnthropicLanguageModel.model(model, { temperature }).pipe(
+      Layer.provide(clientLayer)
+    );
   });
 
-const googleLayer = (model: string) =>
+const googleLayer = (model: string, temperature: number) =>
   Effect.gen(function* () {
     const apiKey = yield* Config.redacted("SKYGENT_GOOGLE_API_KEY").pipe(
       Config.option
@@ -201,18 +220,21 @@ const googleLayer = (model: string) =>
       apiUrl: Option.getOrUndefined(apiUrl)
     });
 
-    return GoogleLanguageModel.model(model).pipe(Layer.provide(clientLayer));
+    return GoogleLanguageModel.model(model, {
+      generationConfig: { temperature },
+      toolConfig: {}
+    }).pipe(Layer.provide(clientLayer));
   });
 
-const providerLayer = (provider: LlmProvider, model: string) =>
+const providerLayer = (provider: LlmProvider, model: string, temperature: number) =>
   Effect.gen(function* () {
     switch (provider) {
       case "openai":
-        return yield* openAiLayer(model);
+        return yield* openAiLayer(model, temperature);
       case "anthropic":
-        return yield* anthropicLayer(model);
+        return yield* anthropicLayer(model, temperature);
       case "google":
-        return yield* googleLayer(model);
+        return yield* googleLayer(model, temperature);
     }
   });
 
@@ -235,6 +257,7 @@ export interface LlmSettingsService {
   readonly persistentCache: Option.Option<PersistentCacheConfig>;
   readonly systemPrompt: string;
   readonly batchSystemPrompt: string;
+  readonly temperature: number;
 }
 
 export class LlmSettings extends Context.Tag("@skygent/LlmSettings")<
@@ -282,13 +305,18 @@ export class LlmSettings extends Context.Tag("@skygent/LlmSettings")<
         "SKYGENT_LLM_BATCH_SYSTEM_PROMPT"
       ).pipe(Config.withDefault(BATCH_SYSTEM_PROMPT));
 
+      const temperature = yield* Config.number("SKYGENT_LLM_TEMPERATURE").pipe(
+        Config.withDefault(DEFAULT_TEMPERATURE)
+      );
+
       return {
         strategy,
         maxBatchSize,
         cache,
         persistentCache,
         systemPrompt,
-        batchSystemPrompt
+        batchSystemPrompt,
+        temperature
       };
     })
   );
@@ -310,6 +338,7 @@ export class LlmPlan extends Context.Tag("@skygent/LlmPlan")<
   static readonly layer = Layer.effect(
     LlmPlan,
     Effect.gen(function* () {
+      const settings = yield* LlmSettings;
       const providersRaw = yield* Config.string("SKYGENT_LLM_PROVIDERS").pipe(
         Config.option
       );
@@ -341,7 +370,7 @@ export class LlmPlan extends Context.Tag("@skygent/LlmPlan")<
         (provider) =>
           Effect.gen(function* () {
             const model = yield* resolveModel(provider);
-            const layer = yield* providerLayer(provider, model);
+            const layer = yield* providerLayer(provider, model, settings.temperature);
             return { provider, model, layer };
           })
       );
