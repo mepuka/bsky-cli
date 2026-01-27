@@ -294,7 +294,9 @@ const takeOption = (
   input: string
 ) =>
   Effect.suspend(() => {
-    const normalizedKeys = keys.map(normalizeOptionKey);
+    const normalizedKeys = Array.from(
+      new Set(keys.map(normalizeOptionKey))
+    );
     const matches = normalizedKeys
       .map((key) => options.get(key))
       .filter((value): value is OptionValue => value !== undefined);

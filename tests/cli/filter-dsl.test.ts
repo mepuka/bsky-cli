@@ -165,4 +165,18 @@ describe("filter DSL", () => {
       handles: ["alice.bsky.social", "bob.bsky.social"]
     });
   });
+
+  test("parses engagement options with key=value syntax", async () => {
+    const result = await Effect.runPromise(
+      parseFilterDsl("engagement:minLikes=100,minReplies=5").pipe(
+        Effect.provide(emptyLibraryLayer)
+      )
+    );
+
+    expect(result).toMatchObject({
+      _tag: "Engagement",
+      minLikes: 100,
+      minReplies: 5
+    });
+  });
 });
