@@ -55,17 +55,43 @@ export class DataSourceNotifications extends Schema.TaggedClass<DataSourceNotifi
   {}
 ) {}
 
+export class DataSourceJetstream extends Schema.TaggedClass<DataSourceJetstream>()(
+  "Jetstream",
+  {
+    endpoint: Schema.optional(Schema.String),
+    collections: Schema.optional(Schema.Array(Schema.String)),
+    dids: Schema.optional(Schema.Array(Schema.String)),
+    compress: Schema.optional(Schema.Boolean),
+    maxMessageSizeBytes: Schema.optional(Schema.Number)
+  }
+) {}
+
 export const DataSourceSchema = Schema.Union(
   DataSourceTimeline,
   DataSourceFeed,
-  DataSourceNotifications
+  DataSourceNotifications,
+  DataSourceJetstream
 );
 export type DataSource = typeof DataSourceSchema.Type;
 
 export const DataSource = {
   timeline: (): DataSource => DataSourceTimeline.make({}),
   feed: (uri: string): DataSource => DataSourceFeed.make({ uri }),
-  notifications: (): DataSource => DataSourceNotifications.make({})
+  notifications: (): DataSource => DataSourceNotifications.make({}),
+  jetstream: (options?: {
+    readonly endpoint?: string;
+    readonly collections?: ReadonlyArray<string>;
+    readonly dids?: ReadonlyArray<string>;
+    readonly compress?: boolean;
+    readonly maxMessageSizeBytes?: number;
+  }): DataSource =>
+    DataSourceJetstream.make({
+      endpoint: options?.endpoint,
+      collections: options?.collections ? [...options.collections] : undefined,
+      dids: options?.dids ? [...options.dids] : undefined,
+      compress: options?.compress,
+      maxMessageSizeBytes: options?.maxMessageSizeBytes
+    })
 };
 
 export class WatchConfig extends Schema.Class<WatchConfig>("WatchConfig")({
@@ -97,6 +123,9 @@ export class SyncCheckpoint extends Schema.Class<SyncCheckpoint>("SyncCheckpoint
 }) {}
 
 export const dataSourceKey = (source: DataSource): string => {
+  const normalizeList = (items: ReadonlyArray<string> | undefined) =>
+    items && items.length > 0 ? [...items].sort().join(",") : "";
+
   switch (source._tag) {
     case "Timeline":
       return "timeline";
@@ -104,5 +133,15 @@ export const dataSourceKey = (source: DataSource): string => {
       return `feed:${source.uri}`;
     case "Notifications":
       return "notifications";
+    case "Jetstream": {
+      const endpoint = source.endpoint ?? "";
+      const collections = normalizeList(source.collections);
+      const dids = normalizeList(source.dids);
+      const compress = source.compress ? "1" : "0";
+      const maxMessageSize = source.maxMessageSizeBytes ?? "";
+      return `jetstream:${encodeURIComponent(endpoint)}:${encodeURIComponent(
+        collections
+      )}:${encodeURIComponent(dids)}:${compress}:${maxMessageSize}`;
+    }
   }
 };

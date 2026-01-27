@@ -41,6 +41,7 @@
     "@effect/printer": "^0.47.0",
     "@effect/printer-ansi": "^0.47.0",
     "@effect/typeclass": "^0.38.0",
-    "effect": "^3.19.15"
+    "effect": "^3.19.15",
+    "effect-jetstream": "^1.0.3"
   }
 }

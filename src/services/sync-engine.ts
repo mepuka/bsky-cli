@@ -59,6 +59,8 @@ const sourceLabel = (source: DataSource) => {
       return "feed";
     case "Notifications":
       return "notifications";
+    case "Jetstream":
+      return "jetstream";
   }
 };
 
@@ -70,6 +72,8 @@ const commandForSource = (source: DataSource) => {
       return `sync feed ${source.uri}`;
     case "Notifications":
       return "sync notifications";
+    case "Jetstream":
+      return "sync jetstream";
   }
 };
 
@@ -196,17 +200,28 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               Option.fromNullable(value.cursor)
             );
 
-            const stream =
-              source._tag === "Timeline"
-                ? client.getTimeline(
+            const stream = (() => {
+              switch (source._tag) {
+                case "Timeline":
+                  return client.getTimeline(
                     Option.match(cursorOption, {
                       onNone: () => undefined,
                       onSome: (value) => ({ cursor: value })
                     })
-                  )
-                : source._tag === "Feed"
-                  ? client.getFeed(source.uri)
-                  : client.getNotifications();
+                  );
+                case "Feed":
+                  return client.getFeed(source.uri);
+                case "Notifications":
+                  return client.getNotifications();
+                case "Jetstream":
+                  return Stream.fail(
+                    SyncError.make({
+                      stage: "source",
+                      message: "Jetstream sources require the jetstream sync engine."
+                    })
+                  );
+              }
+            })();
 
             const startTime = Date.now();
             const state = yield* stream.pipe(

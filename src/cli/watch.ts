@@ -1,9 +1,12 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Effect, Option, Stream } from "effect";
+import { Effect, Layer, Option, Stream } from "effect";
+import { Jetstream } from "effect-jetstream";
+import { filterExprSignature } from "../domain/filter.js";
 import { DataSource, WatchConfig } from "../domain/sync.js";
 import { StoreName } from "../domain/primitives.js";
 import { SyncEngine } from "../services/sync-engine.js";
 import { SyncReporter } from "../services/sync-reporter.js";
+import { JetstreamSyncEngine } from "../services/jetstream-sync.js";
 import { parseInterval } from "./interval.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { parseFilterExpr } from "./filter-input.js";
@@ -12,6 +15,7 @@ import { storeOptions } from "./store.js";
 import { logInfo, makeSyncReporter } from "./logging.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
+import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 
 const storeNameOption = Options.text("store").pipe(
   Options.withSchema(StoreName),
@@ -184,8 +188,90 @@ const notificationsCommand = Command.make(
   )
 );
 
+const jetstreamCommand = Command.make(
+  "jetstream",
+  {
+    store: storeNameOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    quiet: quietOption,
+    endpoint: jetstreamOptions.endpoint,
+    collections: jetstreamOptions.collections,
+    dids: jetstreamOptions.dids,
+    cursor: jetstreamOptions.cursor,
+    compress: jetstreamOptions.compress,
+    maxMessageSize: jetstreamOptions.maxMessageSize
+  },
+  ({
+    store,
+    filter,
+    filterJson,
+    quiet,
+    endpoint,
+    collections,
+    dids,
+    cursor,
+    compress,
+    maxMessageSize
+  }) =>
+    Effect.gen(function* () {
+      const monitor = yield* ResourceMonitor;
+      const output = yield* CliOutput;
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const expr = yield* parseFilter(filter, filterJson);
+      const filterHash = filterExprSignature(expr);
+      const selection = yield* buildJetstreamSelection(
+        {
+          endpoint,
+          collections,
+          dids,
+          cursor,
+          compress,
+          maxMessageSize
+        },
+        storeRef,
+        filterHash
+      );
+      const engineLayer = JetstreamSyncEngine.layer.pipe(
+        Layer.provideMerge(Jetstream.live(selection.config))
+      );
+      yield* logInfo("Starting watch", { source: "jetstream", store: storeRef.name });
+      const stream = yield* Effect.gen(function* () {
+        const engine = yield* JetstreamSyncEngine;
+        return engine.watch({
+          source: selection.source,
+          store: storeRef,
+          filter: expr,
+          command: "watch jetstream",
+          ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {})
+        });
+      }).pipe(Effect.provide(engineLayer));
+      const outputStream = stream.pipe(
+        Stream.map((event) => event.result),
+        Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+      );
+      yield* writeJsonStream(outputStream);
+    })
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Watch Jetstream updates and emit sync results (posts only)",
+      [
+        "skygent watch jetstream --store my-store",
+        "skygent watch jetstream --store my-store --quiet"
+      ],
+      ["Tip: use --collections to override subscribed collections."]
+    )
+  )
+);
+
 export const watchCommand = Command.make("watch", {}).pipe(
-  Command.withSubcommands([timelineCommand, feedCommand, notificationsCommand]),
+  Command.withSubcommands([
+    timelineCommand,
+    feedCommand,
+    notificationsCommand,
+    jetstreamCommand
+  ]),
   Command.withDescription(
     withExamples("Continuously sync and emit results", [
       "skygent watch timeline --store my-store --interval \"2 minutes\""

@@ -29,6 +29,9 @@ bun run index.ts sync timeline --store my-store --quiet
 
 # Query recent posts as a table
 bun run index.ts query my-store --limit 10 --format table
+
+# Stream Jetstream posts
+bun run index.ts watch jetstream --store my-store --quiet
 ```
 
 Tips:

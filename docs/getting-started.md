@@ -39,6 +39,13 @@ bun run index.ts sync feed <feed-uri> --store my-store
 bun run index.ts watch timeline --store my-store --interval "30 seconds"
 ```
 
+## Stream Jetstream
+
+```bash
+bun run index.ts watch jetstream --store my-store
+bun run index.ts sync jetstream --store my-store --limit 500
+```
+
 ## Use filters
 
 ```bash

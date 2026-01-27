@@ -66,13 +66,20 @@ One-off ingestion into a store.
 - `sync timeline --store <name> [--filter <dsl>] [--filter-json <json>] [--quiet]`
 - `sync feed <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--quiet]`
 - `sync notifications --store <name> [--filter <dsl>] [--filter-json <json>] [--quiet]`
+- `sync jetstream --store <name> [--filter <dsl>] [--filter-json <json>] [--limit <n> | --duration <duration>] [--endpoint <url>] [--collections <csv>] [--dids <csv>] [--cursor <micros>] [--compress] [--max-message-size <bytes>] [--quiet]`
 
 Examples:
 
 ```bash
 bun run index.ts sync timeline --store my-store
 bun run index.ts sync feed at://did:plc:... --store my-store
+bun run index.ts sync jetstream --store my-store --limit 500
 ```
+
+Notes:
+
+- Jetstream sync requires `--limit` or `--duration` to avoid infinite runs.
+- Default collections: `app.bsky.feed.post` (other collections are ignored for now).
 
 ### watch
 
@@ -81,6 +88,7 @@ Repeated polling + streaming NDJSON results to stdout.
 - `watch timeline --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--interval-ms <ms>] [--quiet]`
 - `watch feed <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--interval-ms <ms>] [--quiet]`
 - `watch notifications --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--interval-ms <ms>] [--quiet]`
+- `watch jetstream --store <name> [--filter <dsl>] [--filter-json <json>] [--endpoint <url>] [--collections <csv>] [--dids <csv>] [--cursor <micros>] [--compress] [--max-message-size <bytes>] [--quiet]`
 
 `--interval` accepts strings like "30 seconds" or "500 millis". Default is 30 seconds. `--interval-ms` is deprecated.
 

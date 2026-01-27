@@ -1,5 +1,6 @@
 import { AtpAgent } from "@atproto/api";
 import type {
+  AppBskyActorGetProfiles,
   AppBskyFeedDefs,
   AppBskyFeedGetFeed,
   AppBskyFeedGetPosts,
@@ -570,6 +571,19 @@ const toRawPostsFromFeed = (feed: ReadonlyArray<FeedViewPost>) =>
     })
   );
 
+const chunkArray = <A>(
+  items: ReadonlyArray<A>,
+  size: number
+): Array<Array<A>> => {
+  if (items.length === 0) return [];
+  const chunkSize = Math.max(1, Math.trunc(size));
+  const chunks: Array<Array<A>> = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+  return chunks;
+};
+
 const isPostRecord = (record: unknown): record is AppBskyFeedPost.Record =>
   typeof record === "object" &&
   record !== null &&
@@ -582,6 +596,9 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
     readonly getNotifications: () => Stream.Stream<RawPost, BskyError>;
     readonly getFeed: (uri: string) => Stream.Stream<RawPost, BskyError>;
     readonly getPost: (uri: string) => Effect.Effect<RawPost, BskyError>;
+    readonly getProfiles: (
+      actors: ReadonlyArray<string>
+    ) => Effect.Effect<ReadonlyArray<ProfileBasic>, BskyError>;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -747,6 +764,36 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           return yield* toRawPost(postView);
         });
 
+      const getProfiles = (actors: ReadonlyArray<string>) =>
+        Effect.gen(function* () {
+          const uniqueActors = Array.from(new Set(actors));
+          if (uniqueActors.length === 0) {
+            return [];
+          }
+          yield* ensureAuth(false);
+          const batches = chunkArray(uniqueActors, 25);
+          const results = yield* Effect.forEach(
+            batches,
+            (batch) =>
+              withRetry(
+                withRateLimit(
+                  Effect.tryPromise<AppBskyActorGetProfiles.Response>(() =>
+                    agent.app.bsky.actor.getProfiles({ actors: batch })
+                  )
+                )
+              ).pipe(
+                Effect.mapError(toBskyError("Failed to fetch profiles")),
+                Effect.flatMap((response) =>
+                  Effect.forEach(response.data.profiles, decodeProfileBasic, {
+                    concurrency: "unbounded"
+                  })
+                )
+              ),
+            { concurrency: "unbounded" }
+          );
+          return results.flat();
+        });
+
       const getNotifications = () =>
         paginate(undefined, (cursor) =>
           Effect.gen(function* () {
@@ -802,7 +849,8 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
         getTimeline,
         getNotifications,
         getFeed,
-        getPost
+        getPost,
+        getProfiles
       });
     })
   );

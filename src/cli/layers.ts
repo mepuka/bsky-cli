@@ -30,6 +30,7 @@ import { FilterCompiler } from "../services/filter-compiler.js";
 import { OutputManager } from "../services/output-manager.js";
 import { FilterLibrary } from "../services/filter-library.js";
 import { StoreStats } from "../services/store-stats.js";
+import { ProfileResolver } from "../services/profile-resolver.js";
 
 const appConfigLayer = AppConfigService.layer;
 const credentialLayer = CredentialStore.layer.pipe(Layer.provideMerge(appConfigLayer));
@@ -100,6 +101,9 @@ const syncLayer = SyncEngine.layer.pipe(
   Layer.provideMerge(bskyLayer),
   Layer.provideMerge(SyncReporter.layer)
 );
+const profileResolverLayer = ProfileResolver.layer.pipe(
+  Layer.provideMerge(bskyLayer)
+);
 const viewCheckpointLayer = ViewCheckpointStore.layer.pipe(
   Layer.provideMerge(storageLayer)
 );
@@ -161,5 +165,6 @@ export const CliLive = Layer.mergeAll(
   storeStatsLayer,
   compilerLayer,
   postParserLayer,
-  filterLibraryLayer
+  filterLibraryLayer,
+  profileResolverLayer
 );

@@ -1,8 +1,11 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Effect, Option } from "effect";
+import { Duration, Effect, Layer, Option } from "effect";
+import { Jetstream } from "effect-jetstream";
+import { filterExprSignature } from "../domain/filter.js";
 import { StoreName } from "../domain/primitives.js";
 import { DataSource, SyncResult } from "../domain/sync.js";
 import { SyncEngine } from "../services/sync-engine.js";
+import { JetstreamSyncEngine } from "../services/jetstream-sync.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJson } from "./output.js";
@@ -12,6 +15,8 @@ import { SyncReporter } from "../services/sync-reporter.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { OutputManager } from "../services/output-manager.js";
 import { withExamples } from "./help.js";
+import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
+import { CliInputError } from "./errors.js";
 
 const storeNameOption = Options.text("store").pipe(
   Options.withSchema(StoreName),
@@ -28,11 +33,58 @@ const filterJsonOption = Options.text("filter-json").pipe(
 const quietOption = Options.boolean("quiet").pipe(
   Options.withDescription("Suppress progress output")
 );
+const limitOption = Options.integer("limit").pipe(
+  Options.withDescription("Maximum number of Jetstream events to process"),
+  Options.optional
+);
+const durationOption = Options.text("duration").pipe(
+  Options.withDescription("Stop after a duration (e.g. \"2 minutes\")"),
+  Options.optional
+);
 
 const parseFilter = (
   filter: Option.Option<string>,
   filterJson: Option.Option<string>
 ) => parseFilterExpr(filter, filterJson);
+
+const parseLimit = (limit: Option.Option<number>) =>
+  Option.match(limit, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (value) =>
+      value <= 0
+        ? Effect.fail(
+            CliInputError.make({
+              message: "Limit must be a positive integer.",
+              cause: value
+            })
+          )
+        : Effect.succeed(Option.some(value))
+  });
+
+const parseDuration = (value: Option.Option<string>) =>
+  Option.match(value, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (raw) =>
+      Effect.try({
+        try: () => Duration.decode(raw as Duration.DurationInput),
+        catch: (cause) =>
+          CliInputError.make({
+            message: `Invalid duration: ${raw}. Use formats like \"2 minutes\".`,
+            cause
+          })
+      }).pipe(
+        Effect.flatMap((duration) =>
+          Duration.toMillis(duration) < 0
+            ? Effect.fail(
+                CliInputError.make({
+                  message: "Duration must be non-negative.",
+                  cause: duration
+                })
+              )
+            : Effect.succeed(Option.some(duration))
+        )
+      )
+  });
 
 const timelineCommand = Command.make(
   "timeline",
@@ -154,8 +206,118 @@ const notificationsCommand = Command.make(
   )
 );
 
+const jetstreamCommand = Command.make(
+  "jetstream",
+  {
+    store: storeNameOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    quiet: quietOption,
+    endpoint: jetstreamOptions.endpoint,
+    collections: jetstreamOptions.collections,
+    dids: jetstreamOptions.dids,
+    cursor: jetstreamOptions.cursor,
+    compress: jetstreamOptions.compress,
+    maxMessageSize: jetstreamOptions.maxMessageSize,
+    limit: limitOption,
+    duration: durationOption
+  },
+  ({
+    store,
+    filter,
+    filterJson,
+    quiet,
+    endpoint,
+    collections,
+    dids,
+    cursor,
+    compress,
+    maxMessageSize,
+    limit,
+    duration
+  }) =>
+    Effect.gen(function* () {
+      const monitor = yield* ResourceMonitor;
+      const output = yield* CliOutput;
+      const outputManager = yield* OutputManager;
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const expr = yield* parseFilter(filter, filterJson);
+      const filterHash = filterExprSignature(expr);
+      const selection = yield* buildJetstreamSelection(
+        {
+          endpoint,
+          collections,
+          dids,
+          cursor,
+          compress,
+          maxMessageSize
+        },
+        storeRef,
+        filterHash
+      );
+      const parsedLimit = yield* parseLimit(limit);
+      const parsedDuration = yield* parseDuration(duration);
+      if (Option.isNone(parsedLimit) && Option.isNone(parsedDuration)) {
+        return yield* CliInputError.make({
+          message:
+            "Jetstream sync requires --limit or --duration. Use watch jetstream for continuous streaming.",
+          cause: { limit, duration }
+        });
+      }
+      const engineLayer = JetstreamSyncEngine.layer.pipe(
+        Layer.provideMerge(Jetstream.live(selection.config))
+      );
+      yield* logInfo("Starting sync", {
+        source: "jetstream",
+        store: storeRef.name
+      });
+      const result = yield* Effect.gen(function* () {
+        const engine = yield* JetstreamSyncEngine;
+        const limitValue = Option.getOrUndefined(parsedLimit);
+        const durationValue = Option.getOrUndefined(parsedDuration);
+        return yield* engine.sync({
+          source: selection.source,
+          store: storeRef,
+          filter: expr,
+          command: "sync jetstream",
+          ...(limitValue !== undefined ? { limit: limitValue } : {}),
+          ...(durationValue !== undefined ? { duration: durationValue } : {}),
+          ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {})
+        });
+      }).pipe(
+        Effect.provide(engineLayer),
+        Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+      );
+      const materialized = yield* outputManager.materializeStore(storeRef);
+      if (materialized.filters.length > 0) {
+        yield* logInfo("Materialized filter outputs", {
+          store: storeRef.name,
+          filters: materialized.filters.map((spec) => spec.name)
+        });
+      }
+      yield* logInfo("Sync complete", { source: "jetstream", store: storeRef.name });
+      yield* writeJson(result as SyncResult);
+    })
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Sync Jetstream events into a store (posts only)",
+      [
+        "skygent sync jetstream --store my-store --limit 500",
+        "skygent sync jetstream --store my-store --duration \"2 minutes\""
+      ],
+      ["Tip: use watch jetstream for continuous streaming."]
+    )
+  )
+);
+
 export const syncCommand = Command.make("sync", {}).pipe(
-  Command.withSubcommands([timelineCommand, feedCommand, notificationsCommand]),
+  Command.withSubcommands([
+    timelineCommand,
+    feedCommand,
+    notificationsCommand,
+    jetstreamCommand
+  ]),
   Command.withDescription(
     withExamples("Sync content into stores", [
       "skygent sync timeline --store my-store"

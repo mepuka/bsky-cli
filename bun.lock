@@ -17,6 +17,7 @@
         "@effect/printer-ansi": "^0.47.0",
         "@effect/typeclass": "^0.38.0",
         "effect": "^3.19.15",
+        "effect-jetstream": "^1.0.3",
       },
       "devDependencies": {
         "@changesets/cli": "^2.29.8",
@@ -342,6 +343,8 @@
     "dir-glob": ["dir-glob@3.0.1", "", { "dependencies": { "path-type": "^4.0.0" } }, "sha512-WkrWp9GR4KXfKGYzOLmTuGVi1UWFfws377n9cc55/tb6DuqyF6pcQ5AbiHEshaDpY9v6oaSr2XCDidGmMwdzIA=="],
 
     "effect": ["effect@3.19.15", "", { "dependencies": { "@standard-schema/spec": "^1.0.0", "fast-check": "^3.23.1" } }, "sha512-vzMmgfZKLcojmUjBdlQx+uaKryO7yULlRxjpDnHdnvcp1NPHxJyoM6IOXBLlzz2I/uPtZpGKavt5hBv7IvGZkA=="],
+
+    "effect-jetstream": ["effect-jetstream@1.0.3", "", { "dependencies": { "@effect/platform": "^0.94.1", "effect": "^3.19.14" }, "peerDependencies": { "typescript": "^5" } }, "sha512-GRyQnFvAPQG8mzF7g0l2GN/h82MIcC6jwo7LmdQ628+C7IqWRfPramRo667rhF5G338aHV/8cz9VNnQ7qNbamQ=="],
 
     "enquirer": ["enquirer@2.4.1", "", { "dependencies": { "ansi-colors": "^4.1.1", "strip-ansi": "^6.0.1" } }, "sha512-rRqJg/6gd538VHvR3PSrdRBb/1Vy2YfzHqzvbhGIQpDRKIa4FgV/54b5Q1xYSxOOwKvjXweS26E0Q+nAMwp2pQ=="],
 
