@@ -15,9 +15,16 @@ import { CliInputError } from "./errors.js";
 import { logInfo } from "./logging.js";
 import type { FilterEvaluationMode } from "../domain/derivation.js";
 import { CliPreferences } from "./preferences.js";
+import { withExamples } from "./help.js";
 
-const sourceArg = Args.text({ name: "source" }).pipe(Args.withSchema(StoreName));
-const targetArg = Args.text({ name: "target" }).pipe(Args.withSchema(StoreName));
+const sourceArg = Args.text({ name: "source" }).pipe(
+  Args.withSchema(StoreName),
+  Args.withDescription("Source store name")
+);
+const targetArg = Args.text({ name: "target" }).pipe(
+  Args.withSchema(StoreName),
+  Args.withDescription("Target (derived) store name")
+);
 
 const filterOption = Options.text("filter").pipe(
   Options.withDescription(filterDslDescription()),
@@ -176,6 +183,13 @@ export const deriveCommand = Command.make(
     })
 ).pipe(
   Command.withDescription(
-    "Derive a target store from a source store by applying a filter"
+    withExamples(
+      "Derive a target store from a source store by applying a filter",
+      [
+        "skygent derive source-store derived-store --filter 'hashtag:#ai'",
+        "skygent derive source-store derived-store --filter 'hashtag:#ai' --mode derive-time"
+      ],
+      ["Tip: use --reset --yes if you need to rebuild with a new filter or mode."]
+    )
   )
 );

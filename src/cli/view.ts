@@ -3,9 +3,16 @@ import { Effect } from "effect";
 import { StoreName } from "../domain/primitives.js";
 import { DerivationValidator } from "../services/derivation-validator.js";
 import { writeJson } from "./output.js";
+import { withExamples } from "./help.js";
 
-const viewArg = Args.text({ name: "view" }).pipe(Args.withSchema(StoreName));
-const sourceArg = Args.text({ name: "source" }).pipe(Args.withSchema(StoreName));
+const viewArg = Args.text({ name: "view" }).pipe(
+  Args.withSchema(StoreName),
+  Args.withDescription("Derived view store name")
+);
+const sourceArg = Args.text({ name: "source" }).pipe(
+  Args.withSchema(StoreName),
+  Args.withDescription("Source store name")
+);
 
 const statusCommand = Command.make(
   "status",
@@ -21,9 +28,19 @@ const statusCommand = Command.make(
         status: isStale ? "stale" : "ready"
       });
     })
-).pipe(Command.withDescription("Check if a derived view is stale relative to its source"));
+).pipe(
+  Command.withDescription(
+    withExamples("Check if a derived view is stale relative to its source", [
+      "skygent view status derived-store source-store"
+    ])
+  )
+);
 
 export const viewCommand = Command.make("view", {}).pipe(
   Command.withSubcommands([statusCommand]),
-  Command.withDescription("View derivation status and metadata")
+  Command.withDescription(
+    withExamples("View derivation status and metadata", [
+      "skygent view status derived-store source-store"
+    ])
+  )
 );

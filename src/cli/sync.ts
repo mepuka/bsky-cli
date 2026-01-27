@@ -11,8 +11,12 @@ import { logInfo, makeSyncReporter } from "./logging.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { OutputManager } from "../services/output-manager.js";
+import { withExamples } from "./help.js";
 
-const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
+const storeNameOption = Options.text("store").pipe(
+  Options.withSchema(StoreName),
+  Options.withDescription("Store name to write into")
+);
 const filterOption = Options.text("filter").pipe(
   Options.withDescription(filterDslDescription()),
   Options.optional
@@ -57,9 +61,22 @@ const timelineCommand = Command.make(
       yield* logInfo("Sync complete", { source: "timeline", store: storeRef.name });
       yield* writeJson(result as SyncResult);
     })
-).pipe(Command.withDescription("Sync the authenticated timeline into a store"));
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Sync the authenticated timeline into a store",
+      [
+        "skygent sync timeline --store my-store",
+        "skygent sync timeline --store my-store --filter 'hashtag:#ai' --quiet"
+      ],
+      ["Tip: add --quiet to suppress progress logs."]
+    )
+  )
+);
 
-const feedUriArg = Args.text({ name: "uri" });
+const feedUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withDescription("Bluesky feed URI (at://...)")
+);
 
 const feedCommand = Command.make(
   "feed",
@@ -88,7 +105,17 @@ const feedCommand = Command.make(
       yield* logInfo("Sync complete", { source: "feed", uri, store: storeRef.name });
       yield* writeJson(result as SyncResult);
     })
-).pipe(Command.withDescription("Sync a feed URI into a store"));
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Sync a feed URI into a store",
+      [
+        "skygent sync feed at://did:plc:example/app.bsky.feed.generator/xyz --store my-store"
+      ],
+      ["Tip: add --quiet to suppress progress logs."]
+    )
+  )
+);
 
 const notificationsCommand = Command.make(
   "notifications",
@@ -117,8 +144,21 @@ const notificationsCommand = Command.make(
       yield* logInfo("Sync complete", { source: "notifications", store: storeRef.name });
       yield* writeJson(result as SyncResult);
     })
-).pipe(Command.withDescription("Sync notifications into a store"));
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Sync notifications into a store",
+      ["skygent sync notifications --store my-store --quiet"],
+      ["Tip: add --quiet to suppress progress logs."]
+    )
+  )
+);
 
 export const syncCommand = Command.make("sync", {}).pipe(
-  Command.withSubcommands([timelineCommand, feedCommand, notificationsCommand])
+  Command.withSubcommands([timelineCommand, feedCommand, notificationsCommand]),
+  Command.withDescription(
+    withExamples("Sync content into stores", [
+      "skygent sync timeline --store my-store"
+    ])
+  )
 );

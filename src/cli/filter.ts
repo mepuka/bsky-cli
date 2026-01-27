@@ -17,8 +17,12 @@ import { writeJson, writeText } from "./output.js";
 import { CliInputError, CliJsonError } from "./errors.js";
 import { storeOptions } from "./store.js";
 import { describeFilter, renderFilterDescription } from "../domain/filter-describe.js";
+import { withExamples } from "./help.js";
 
-const filterNameArg = Args.text({ name: "name" }).pipe(Args.withSchema(StoreName));
+const filterNameArg = Args.text({ name: "name" }).pipe(
+  Args.withSchema(StoreName),
+  Args.withDescription("Filter name")
+);
 
 const filterOption = Options.text("filter").pipe(
   Options.withDescription(filterDslDescription()),
@@ -145,7 +149,11 @@ export const filterList = Command.make("list", {}, () =>
     const names = yield* library.list();
     yield* writeJson(names);
   })
-).pipe(Command.withDescription("List saved filters"));
+).pipe(
+  Command.withDescription(
+    withExamples("List saved filters", ["skygent filter list"])
+  )
+);
 
 export const filterShow = Command.make(
   "show",
@@ -156,7 +164,11 @@ export const filterShow = Command.make(
       const expr = yield* library.get(name);
       yield* writeJson(expr);
     })
-).pipe(Command.withDescription("Show a saved filter"));
+).pipe(
+  Command.withDescription(
+    withExamples("Show a saved filter", ["skygent filter show tech"])
+  )
+);
 
 export const filterCreate = Command.make(
   "create",
@@ -169,7 +181,13 @@ export const filterCreate = Command.make(
       yield* library.save(name, expr);
       yield* writeJson({ name, saved: true });
     })
-).pipe(Command.withDescription("Create or update a saved filter"));
+).pipe(
+  Command.withDescription(
+    withExamples("Create or update a saved filter", [
+      "skygent filter create tech --filter 'hashtag:#tech'"
+    ])
+  )
+);
 
 export const filterDelete = Command.make(
   "delete",
@@ -180,7 +198,11 @@ export const filterDelete = Command.make(
       yield* library.remove(name);
       yield* writeJson({ name, deleted: true });
     })
-).pipe(Command.withDescription("Delete a saved filter"));
+).pipe(
+  Command.withDescription(
+    withExamples("Delete a saved filter", ["skygent filter delete tech"])
+  )
+);
 
 export const filterValidateAll = Command.make("validate-all", {}, () =>
   Effect.gen(function* () {
@@ -192,7 +214,11 @@ export const filterValidateAll = Command.make("validate-all", {}, () =>
     };
     yield* writeJson({ summary, results });
   })
-).pipe(Command.withDescription("Validate all saved filters"));
+).pipe(
+  Command.withDescription(
+    withExamples("Validate all saved filters", ["skygent filter validate-all"])
+  )
+);
 
 export const filterValidate = Command.make(
   "validate",
@@ -205,7 +231,13 @@ export const filterValidate = Command.make(
       yield* compiler.validate(expr);
       yield* writeJson({ ok: true });
     })
-).pipe(Command.withDescription("Validate a filter expression"));
+).pipe(
+  Command.withDescription(
+    withExamples("Validate a filter expression", [
+      "skygent filter validate --filter 'author:alice.bsky.social'"
+    ])
+  )
+);
 
 export const filterTest = Command.make(
   "test",
@@ -229,7 +261,13 @@ export const filterTest = Command.make(
         filter: expr
       });
     })
-).pipe(Command.withDescription("Test a filter against a single post"));
+).pipe(
+  Command.withDescription(
+    withExamples("Test a filter against a single post", [
+      "skygent filter test --filter 'hashtag:#ai' --post-uri at://did:plc:example/app.bsky.feed.post/xyz"
+    ])
+  )
+);
 
 export const filterExplain = Command.make(
   "explain",
@@ -253,7 +291,13 @@ export const filterExplain = Command.make(
         explanation
       });
     })
-).pipe(Command.withDescription("Explain why a post matches a filter"));
+).pipe(
+  Command.withDescription(
+    withExamples("Explain why a post matches a filter", [
+      "skygent filter explain --filter 'hashtag:#ai' --post-uri at://did:plc:example/app.bsky.feed.post/xyz"
+    ])
+  )
+);
 
 export const filterBenchmark = Command.make(
   "benchmark",
@@ -303,7 +347,13 @@ export const filterBenchmark = Command.make(
         sampleSize: limit
       });
     })
-).pipe(Command.withDescription("Benchmark filter performance over stored posts"));
+).pipe(
+  Command.withDescription(
+    withExamples("Benchmark filter performance over stored posts", [
+      "skygent filter benchmark --store my-store --filter 'hashtag:#ai' --sample-size 500"
+    ])
+  )
+);
 
 export const filterDescribe = Command.make(
   "describe",
@@ -320,7 +370,14 @@ export const filterDescribe = Command.make(
       }
       yield* writeText(renderFilterDescription(description));
     })
-).pipe(Command.withDescription("Describe a filter in human-readable form"));
+).pipe(
+  Command.withDescription(
+    withExamples("Describe a filter in human-readable form", [
+      "skygent filter describe --filter 'hashtag:#ai'",
+      "skygent filter describe --filter 'hashtag:#ai' --format json"
+    ])
+  )
+);
 
 export const filterCommand = Command.make("filter", {}).pipe(
   Command.withSubcommands([
@@ -334,5 +391,10 @@ export const filterCommand = Command.make("filter", {}).pipe(
     filterExplain,
     filterBenchmark,
     filterDescribe
-  ])
+  ]),
+  Command.withDescription(
+    withExamples("Manage saved filters and filter tooling", [
+      "skygent filter list"
+    ])
+  )
 );

@@ -17,6 +17,11 @@ These can be used with any command and override config/env defaults:
 - `--password <value>`: Override Bluesky password (redacted).
 - `--compact`: Reduce JSON output verbosity for agent consumption.
 
+Tips:
+
+- Prefer `--compact` for agent workflows to reduce output size.
+- For sync/watch commands, add `--quiet` to suppress progress logs.
+
 ## Commands
 
 ### store

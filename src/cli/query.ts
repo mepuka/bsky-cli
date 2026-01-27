@@ -16,8 +16,12 @@ import { storeOptions } from "./store.js";
 import { CliPreferences } from "./preferences.js";
 import { projectFields, resolveFieldSelectors } from "./query-fields.js";
 import { CliInputError } from "./errors.js";
+import { withExamples } from "./help.js";
 
-const storeNameArg = Args.text({ name: "store" }).pipe(Args.withSchema(StoreName));
+const storeNameArg = Args.text({ name: "store" }).pipe(
+  Args.withSchema(StoreName),
+  Args.withDescription("Store name to query")
+);
 const rangeOption = Options.text("range").pipe(
   Options.withDescription("ISO range as <start>..<end>"),
   Options.optional
@@ -129,4 +133,17 @@ export const queryCommand = Command.make(
           yield* writeJson(projectedPosts);
       }
     })
-).pipe(Command.withDescription("Query a store with optional range and filter"));
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Query a store with optional range and filter",
+      [
+        "skygent query my-store --limit 25 --format table",
+        "skygent query my-store --range 2024-01-01T00:00:00Z..2024-01-31T00:00:00Z --filter 'hashtag:#ai'"
+      ],
+      [
+        "Tip: use --fields @minimal or --compact to reduce JSON output size."
+      ]
+    )
+  )
+);

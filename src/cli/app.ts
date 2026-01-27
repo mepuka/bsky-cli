@@ -12,6 +12,7 @@ import { deriveCommand } from "./derive.js";
 import { viewCommand } from "./view.js";
 import { filterCommand } from "./filter.js";
 import { configOptions, toConfigOverrides, toCredentialsOverrides } from "./config.js";
+import { withExamples } from "./help.js";
 
 export const app = Command.make("skygent", configOptions).pipe(
   Command.withSubcommands([
@@ -36,5 +37,14 @@ export const app = Command.make("skygent", configOptions).pipe(
       Layer.succeed(CliPreferences, { compact: config.compact })
     )
   ),
-  Command.withDescription("Skygent CLI for Bluesky monitoring")
+  Command.withDescription(
+    withExamples(
+      "Skygent CLI for Bluesky monitoring",
+      [
+        "skygent store list --compact",
+        "skygent sync timeline --store my-store --quiet"
+      ],
+      ["Tip: add --compact for shorter JSON output."]
+    )
+  )
 );

@@ -16,6 +16,7 @@ import { formatStoreConfigParseError } from "./store-errors.js";
 import { formatFilterExpr } from "../domain/filter-describe.js";
 import { CliPreferences } from "./preferences.js";
 import { StoreStats } from "../services/store-stats.js";
+import { withExamples } from "./help.js";
 import {
   buildStoreTreeData,
   renderStoreTree,
@@ -23,8 +24,14 @@ import {
   renderStoreTreeTable
 } from "./store-tree.js";
 
-const storeNameArg = Args.text({ name: "name" }).pipe(Args.withSchema(StoreName));
-const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
+const storeNameArg = Args.text({ name: "name" }).pipe(
+  Args.withSchema(StoreName),
+  Args.withDescription("Store name")
+);
+const storeNameOption = Options.text("store").pipe(
+  Options.withSchema(StoreName),
+  Options.withDescription("Store name")
+);
 const forceOption = Options.boolean("force").pipe(
   Options.withAlias("f"),
   Options.withDescription("Confirm destructive store deletion")
@@ -110,7 +117,14 @@ export const storeCreate = Command.make(
       const store = yield* manager.createStore(name, parsed);
       yield* writeJson(store);
     })
-).pipe(Command.withDescription("Create or load a store"));
+).pipe(
+  Command.withDescription(
+    withExamples("Create or load a store", [
+      "skygent store create my-store",
+      "skygent store create my-store --config-json '{\"filters\":[]}'"
+    ])
+  )
+);
 
 export const storeList = Command.make("list", {}, () =>
   Effect.gen(function* () {
@@ -124,7 +138,14 @@ export const storeList = Command.make("list", {}, () =>
     }
     yield* writeJson(Chunk.toReadonlyArray(stores) as ReadonlyArray<StoreMetadata>);
   })
-).pipe(Command.withDescription("List known stores"));
+).pipe(
+  Command.withDescription(
+    withExamples("List known stores", [
+      "skygent store list",
+      "skygent store list --compact"
+    ])
+  )
+);
 
 export const storeShow = Command.make(
   "show",
@@ -156,7 +177,14 @@ export const storeShow = Command.make(
 
       yield* writeJson(finalOutput);
     })
-).pipe(Command.withDescription("Show store config and metadata"));
+).pipe(
+  Command.withDescription(
+    withExamples("Show store config and metadata", [
+      "skygent store show my-store",
+      "skygent store show my-store --compact"
+    ])
+  )
+);
 
 export const storeDelete = Command.make(
   "delete",
@@ -173,7 +201,13 @@ export const storeDelete = Command.make(
       const result = yield* cleaner.deleteStore(name);
       yield* writeJson(result);
     })
-).pipe(Command.withDescription("Delete a store and its data"));
+).pipe(
+  Command.withDescription(
+    withExamples("Delete a store and its data", [
+      "skygent store delete my-store --force"
+    ])
+  )
+);
 
 export const storeMaterialize = Command.make(
   "materialize",
@@ -207,7 +241,14 @@ export const storeMaterialize = Command.make(
         filters: results
       });
     })
-).pipe(Command.withDescription("Materialize configured filter outputs to disk"));
+).pipe(
+  Command.withDescription(
+    withExamples("Materialize configured filter outputs to disk", [
+      "skygent store materialize my-store",
+      "skygent store materialize my-store --filter ai-posts"
+    ])
+  )
+);
 
 export const storeStats = Command.make(
   "stats",
@@ -219,7 +260,13 @@ export const storeStats = Command.make(
       const result = yield* stats.stats(storeRef);
       yield* writeJson(result);
     })
-).pipe(Command.withDescription("Show summary stats for a store"));
+).pipe(
+  Command.withDescription(
+    withExamples("Show summary stats for a store", [
+      "skygent store stats my-store"
+    ])
+  )
+);
 
 export const storeSummary = Command.make("summary", {}, () =>
   Effect.gen(function* () {
@@ -227,7 +274,13 @@ export const storeSummary = Command.make("summary", {}, () =>
     const result = yield* stats.summary();
     yield* writeJson(result);
   })
-).pipe(Command.withDescription("Summarize all stores with counts and status"));
+).pipe(
+  Command.withDescription(
+    withExamples("Summarize all stores with counts and status", [
+      "skygent store summary --compact"
+    ])
+  )
+);
 
 export const storeTree = Command.make(
   "tree",
@@ -247,7 +300,13 @@ export const storeTree = Command.make(
           yield* writeText(renderStoreTree(data));
       }
     })
-).pipe(Command.withDescription("Visualize store lineage as an ASCII tree"));
+).pipe(
+  Command.withDescription(
+    withExamples("Visualize store lineage as an ASCII tree", [
+      "skygent store tree --format table"
+    ])
+  )
+);
 
 export const storeCommand = Command.make("store", {}).pipe(
   Command.withSubcommands([
@@ -259,7 +318,13 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeStats,
     storeSummary,
     storeTree
-  ])
+  ]),
+  Command.withDescription(
+    withExamples("Manage stores and lineage", [
+      "skygent store list",
+      "skygent store tree --format table"
+    ])
+  )
 );
 
 export const storeOptions = { storeNameOption, loadStoreRef };

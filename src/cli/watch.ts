@@ -11,8 +11,12 @@ import { CliOutput, writeJsonStream } from "./output.js";
 import { storeOptions } from "./store.js";
 import { logInfo, makeSyncReporter } from "./logging.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
+import { withExamples } from "./help.js";
 
-const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
+const storeNameOption = Options.text("store").pipe(
+  Options.withSchema(StoreName),
+  Options.withDescription("Store name to write into")
+);
 const filterOption = Options.text("filter").pipe(
   Options.withDescription(filterDslDescription()),
   Options.optional
@@ -72,9 +76,22 @@ const timelineCommand = Command.make(
         );
       yield* writeJsonStream(stream);
     })
-).pipe(Command.withDescription("Watch timeline updates and emit sync results"));
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Watch timeline updates and emit sync results",
+      [
+        "skygent watch timeline --store my-store",
+        "skygent watch timeline --store my-store --interval \"5 minutes\" --quiet"
+      ],
+      ["Tip: add --quiet to suppress progress logs."]
+    )
+  )
+);
 
-const feedUriArg = Args.text({ name: "uri" });
+const feedUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withDescription("Bluesky feed URI (at://...)")
+);
 
 const feedCommand = Command.make(
   "feed",
@@ -111,7 +128,17 @@ const feedCommand = Command.make(
         );
       yield* writeJsonStream(stream);
     })
-).pipe(Command.withDescription("Watch a feed URI and emit sync results"));
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Watch a feed URI and emit sync results",
+      [
+        "skygent watch feed at://did:plc:example/app.bsky.feed.generator/xyz --store my-store --interval \"2 minutes\""
+      ],
+      ["Tip: add --quiet to suppress progress logs."]
+    )
+  )
+);
 
 const notificationsCommand = Command.make(
   "notifications",
@@ -147,8 +174,21 @@ const notificationsCommand = Command.make(
         );
       yield* writeJsonStream(stream);
     })
-).pipe(Command.withDescription("Watch notifications and emit sync results"));
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Watch notifications and emit sync results",
+      ["skygent watch notifications --store my-store --interval \"1 minute\" --quiet"],
+      ["Tip: add --quiet to suppress progress logs."]
+    )
+  )
+);
 
 export const watchCommand = Command.make("watch", {}).pipe(
-  Command.withSubcommands([timelineCommand, feedCommand, notificationsCommand])
+  Command.withSubcommands([timelineCommand, feedCommand, notificationsCommand]),
+  Command.withDescription(
+    withExamples("Continuously sync and emit results", [
+      "skygent watch timeline --store my-store --interval \"2 minutes\""
+    ])
+  )
 );

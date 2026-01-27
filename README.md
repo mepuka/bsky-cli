@@ -18,6 +18,23 @@ To run:
 bun run index.ts
 ```
 
+## Quickstart
+
+```bash
+# List stores (compact JSON for agents)
+bun run index.ts store list --compact
+
+# Sync timeline into a store
+bun run index.ts sync timeline --store my-store --quiet
+
+# Query recent posts as a table
+bun run index.ts query my-store --limit 10 --format table
+```
+
+Tips:
+- Add `--compact` to reduce JSON output size.
+- Add `--quiet` to suppress progress logs during sync/watch commands.
+
 ## Documentation
 
 - docs/README.md
