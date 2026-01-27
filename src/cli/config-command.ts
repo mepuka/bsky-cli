@@ -1,0 +1,143 @@
+import { Command } from "@effect/cli";
+import { FileSystem, Path } from "@effect/platform";
+import { Effect, Duration, Option, Stream } from "effect";
+import { withExamples } from "./help.js";
+import { writeJson } from "./output.js";
+import { AppConfigService } from "../services/app-config.js";
+import { CredentialStore } from "../services/credential-store.js";
+import { BskyClient } from "../services/bsky-client.js";
+import { LlmDecision, LlmDecisionRequest, LlmPlan } from "../services/llm.js";
+
+type CheckStatus = "ok" | "warn" | "error";
+
+type CheckResult = {
+  readonly name: string;
+  readonly status: CheckStatus;
+  readonly message?: string;
+};
+
+const checkOk = (name: string, message?: string): CheckResult =>
+  message ? { name, status: "ok", message } : { name, status: "ok" };
+
+const checkWarn = (name: string, message: string): CheckResult => ({
+  name,
+  status: "warn",
+  message
+});
+
+const checkError = (name: string, message: string): CheckResult => ({
+  name,
+  status: "error",
+  message
+});
+
+const configCheckCommand = Command.make("check", {}, () =>
+  Effect.gen(function* () {
+    const results: Array<CheckResult> = [];
+
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* AppConfigService;
+    const credentials = yield* CredentialStore;
+    const bsky = yield* BskyClient;
+    const llmPlanOption = yield* Effect.serviceOption(LlmPlan);
+    const llmDecisionOption = yield* Effect.serviceOption(LlmDecision);
+
+    // Store root writable
+    const rootCheck = yield* Effect.gen(function* () {
+      yield* fs.makeDirectory(config.storeRoot, { recursive: true });
+      const probePath = path.join(
+        config.storeRoot,
+        `.skygent-check-${Date.now()}`
+      );
+      yield* fs.writeFileString(probePath, "ok");
+      yield* fs.remove(probePath);
+      return checkOk("store-root", "Store root is writable.");
+    }).pipe(
+      Effect.catchAll((error) =>
+        Effect.succeed(
+          checkError(
+            "store-root",
+            error instanceof Error ? error.message : String(error)
+          )
+        )
+      )
+    );
+    results.push(rootCheck);
+
+    // Credential file + key
+    const credentialCheck = yield* credentials.get().pipe(
+      Effect.match({
+        onFailure: (error) =>
+          checkError("credentials", error.message ?? "Failed to load credentials"),
+        onSuccess: (value) =>
+          Option.isSome(value)
+            ? checkOk("credentials", "Credentials loaded.")
+            : checkWarn("credentials", "No credentials configured.")
+      })
+    );
+    results.push(credentialCheck);
+
+    // Bluesky auth
+    if (credentialCheck.status === "ok") {
+      const bskyCheck = yield* bsky
+        .getTimeline({ limit: 1 })
+        .pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.as(checkOk("bluesky", "Bluesky login succeeded.")),
+          Effect.catchAll((error) =>
+            Effect.succeed(
+              checkError(
+                "bluesky",
+                error instanceof Error ? error.message : String(error)
+              )
+            )
+          )
+        );
+      results.push(bskyCheck);
+    } else {
+      results.push(
+        checkWarn("bluesky", "Skipped Bluesky login (credentials missing).")
+      );
+    }
+
+    // LLM provider
+    if (Option.isNone(llmPlanOption)) {
+      results.push(checkWarn("llm", "LLM not configured."));
+    } else if (Option.isNone(llmDecisionOption)) {
+      results.push(checkWarn("llm", "LLM decision service not available."));
+    } else {
+      const request = new LlmDecisionRequest({
+        prompt: "Keep this post?",
+        text: "Config check request.",
+        minConfidence: 0.5
+      });
+      const llmCheck = yield* llmDecisionOption.value
+        .decide(request)
+        .pipe(
+          Effect.timeout(Duration.seconds(10)),
+          Effect.as(checkOk("llm", "LLM request succeeded.")),
+          Effect.catchAll((error) =>
+            Effect.succeed(
+              checkError(
+                "llm",
+                error instanceof Error ? error.message : String(error)
+              )
+            )
+          )
+        );
+      results.push(llmCheck);
+    }
+
+    const ok = results.every((result) => result.status !== "error");
+    yield* writeJson({ ok, checks: results });
+  })
+);
+
+export const configCommand = Command.make("config", {}).pipe(
+  Command.withSubcommands([configCheckCommand]),
+  Command.withDescription(
+    withExamples("Configuration helpers", ["skygent config check"])
+  )
+);

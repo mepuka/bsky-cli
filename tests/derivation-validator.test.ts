@@ -1,5 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { Effect, Layer, Option, Schema } from "effect";
+import { FileSystem } from "@effect/platform";
+import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { DerivationValidator } from "../src/services/derivation-validator.js";
 import { ViewCheckpointStore } from "../src/services/view-checkpoint-store.js";
@@ -13,6 +15,7 @@ import { defaultStoreConfig } from "../src/domain/defaults.js";
 import { DerivationCheckpoint } from "../src/domain/derivation.js";
 import { PostUpsert, EventMeta } from "../src/domain/events.js";
 import { Post } from "../src/domain/post.js";
+import { AppConfigService, ConfigOverrides } from "../src/services/app-config.js";
 
 // Test helpers
 const createTestStoreName = (name: string) =>
@@ -54,33 +57,62 @@ const createTestPost = (uri: string, text: string): Post =>
 // Test layer setup - build complete layers with dependencies satisfied
 // CRITICAL: StoreIndex depends on StoreEventLog, so we build complete layers
 
-// Build StoreEventLog with KeyValueStore
-const StoreEventLogComplete = StoreEventLog.layer.pipe(
-  Layer.provideMerge(KeyValueStore.layerMemory)
-);
+const makeTempDir = () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return yield* fs.makeTempDirectory();
+    }).pipe(Effect.provide(BunContext.layer))
+  );
 
-// Build StoreIndex with StoreEventLog (which includes KeyValueStore)
-const StoreIndexComplete = StoreIndex.layer.pipe(
-  Layer.provideMerge(StoreEventLogComplete)
-);
+const removeTempDir = (path: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(path, { recursive: true });
+    }).pipe(Effect.provide(BunContext.layer))
+  );
 
-// Build other storage services with KeyValueStore
-const StorageServices = Layer.mergeAll(
-  StoreWriter.layer,
-  StoreManager.layer,
-  ViewCheckpointStore.layer
-).pipe(
-  Layer.provideMerge(KeyValueStore.layerMemory)
-);
+const buildTestLayer = (storeRoot: string) => {
+  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+  const storageLayer = KeyValueStore.layerMemory;
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+  const indexLayer = StoreIndex.layer.pipe(
+    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(eventLogLayer)
+  );
+  const storageServices = Layer.mergeAll(
+    StoreWriter.layer,
+    StoreManager.layer,
+    ViewCheckpointStore.layer
+  ).pipe(Layer.provideMerge(storageLayer));
 
-// Final test layer
-const TestLayer = DerivationValidator.layer.pipe(
-  Layer.provideMerge(StoreIndexComplete),
-  Layer.provideMerge(StorageServices)
-);
+  return Layer.mergeAll(
+    appConfigLayer,
+    storageLayer,
+    eventLogLayer,
+    indexLayer,
+    storageServices,
+    DerivationValidator.layer.pipe(
+      Layer.provideMerge(indexLayer),
+      Layer.provideMerge(storageServices)
+    )
+  ).pipe(Layer.provideMerge(BunContext.layer));
+};
+
+const withTestLayer = async <A>(program: Effect.Effect<A>) => {
+  const tempDir = await makeTempDir();
+  const layer = buildTestLayer(tempDir);
+  try {
+    return await Effect.runPromise(program.pipe(Effect.provide(layer)));
+  } finally {
+    await removeTempDir(tempDir);
+  }
+};
 
 describe("DerivationValidator", () => {
-  test("returns true when no checkpoint exists (never materialized)", () =>
+  test("returns true when no checkpoint exists (never materialized)", () => withTestLayer(
     Effect.gen(function* () {
       const validator = yield* DerivationValidator;
       const viewName = createTestStoreName("view-store");
@@ -89,10 +121,10 @@ describe("DerivationValidator", () => {
       const isStale = yield* validator.isStale(viewName, sourceName);
 
       expect(isStale).toBe(true);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("returns false when source store does not exist", () =>
+  test("returns false when source store does not exist", () => withTestLayer(
     Effect.gen(function* () {
       const validator = yield* DerivationValidator;
       const checkpoints = yield* ViewCheckpointStore;
@@ -116,10 +148,10 @@ describe("DerivationValidator", () => {
       const isStale = yield* validator.isStale(viewName, sourceName);
 
       expect(isStale).toBe(false);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("returns false when source store is empty", () =>
+  test("returns false when source store is empty", () => withTestLayer(
     Effect.gen(function* () {
       const validator = yield* DerivationValidator;
       const checkpoints = yield* ViewCheckpointStore;
@@ -150,10 +182,10 @@ describe("DerivationValidator", () => {
       const isStale = yield* validator.isStale(viewName, sourceName);
 
       expect(isStale).toBe(false);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("returns true when checkpoint has no lastSourceEventId", () =>
+  test("returns true when checkpoint has no lastSourceEventId", () => withTestLayer(
     Effect.gen(function* () {
       const validator = yield* DerivationValidator;
       const checkpoints = yield* ViewCheckpointStore;
@@ -192,10 +224,10 @@ describe("DerivationValidator", () => {
       const isStale = yield* validator.isStale(viewName, sourceName);
 
       expect(isStale).toBe(true);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("returns false when checkpoint is up-to-date with source", () =>
+  test("returns false when checkpoint is up-to-date with source", () => withTestLayer(
     Effect.gen(function* () {
       const validator = yield* DerivationValidator;
       const checkpoints = yield* ViewCheckpointStore;
@@ -234,10 +266,10 @@ describe("DerivationValidator", () => {
       const isStale = yield* validator.isStale(viewName, sourceName);
 
       expect(isStale).toBe(false);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("returns true when source has newer events than checkpoint", () =>
+  test("returns true when source has newer events than checkpoint", () => withTestLayer(
     Effect.gen(function* () {
       const validator = yield* DerivationValidator;
       const checkpoints = yield* ViewCheckpointStore;
@@ -282,6 +314,6 @@ describe("DerivationValidator", () => {
       const isStale = yield* validator.isStale(viewName, sourceName);
 
       expect(isStale).toBe(true);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 });

@@ -16,6 +16,7 @@ import { StoreWriter } from "../services/store-writer.js";
 import { SyncEngine } from "../services/sync-engine.js";
 import { SyncCheckpointStore } from "../services/sync-checkpoint-store.js";
 import { SyncReporter } from "../services/sync-reporter.js";
+import { SyncSettings } from "../services/sync-settings.js";
 import { StoreCleaner } from "../services/store-cleaner.js";
 import { IdGenerator } from "@effect/ai";
 import { LinkValidator } from "../services/link-validator.js";
@@ -51,7 +52,7 @@ const storageLayer = Layer.unwrapEffect(
 const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storageLayer));
 const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
 const indexLayer = StoreIndex.layer.pipe(
-  Layer.provideMerge(storageLayer),
+  Layer.provideMerge(appConfigLayer),
   Layer.provideMerge(eventLogLayer)
 );
 const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(storageLayer));
@@ -93,6 +94,7 @@ const runtimeLayer = FilterRuntime.layer.pipe(
   Layer.provideMerge(linkValidatorLayer),
   Layer.provideMerge(trendingTopicsLayer)
 );
+const syncSettingsLayer = SyncSettings.layer;
 const syncLayer = SyncEngine.layer.pipe(
   Layer.provideMerge(writerLayer),
   Layer.provideMerge(indexLayer),
@@ -100,7 +102,8 @@ const syncLayer = SyncEngine.layer.pipe(
   Layer.provideMerge(runtimeLayer),
   Layer.provideMerge(PostParser.layer),
   Layer.provideMerge(bskyLayer),
-  Layer.provideMerge(SyncReporter.layer)
+  Layer.provideMerge(SyncReporter.layer),
+  Layer.provideMerge(syncSettingsLayer)
 );
 const profileResolverLayer = ProfileResolver.layer.pipe(
   Layer.provideMerge(bskyLayer)

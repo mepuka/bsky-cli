@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { FileSystem, Path } from "@effect/platform";
+import { FileSystem } from "@effect/platform";
+import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { Effect, Layer, Schema } from "effect";
 import { StoreStats } from "../../src/services/store-stats.js";
@@ -11,29 +12,24 @@ import { LineageStore } from "../../src/services/lineage-store.js";
 import { SyncCheckpointStore } from "../../src/services/sync-checkpoint-store.js";
 import { ViewCheckpointStore } from "../../src/services/view-checkpoint-store.js";
 import { DerivationValidator } from "../../src/services/derivation-validator.js";
-import { AppConfigService } from "../../src/services/app-config.js";
-import { AppConfig } from "../../src/domain/config.js";
+import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { defaultStoreConfig } from "../../src/domain/defaults.js";
 import { StoreName } from "../../src/domain/primitives.js";
 import { EventMeta, PostUpsert } from "../../src/domain/events.js";
 import { Post } from "../../src/domain/post.js";
 
-const makeAppConfigLayer = () => {
-  const config = AppConfig.make({
-    service: "https://bsky.social",
-    storeRoot: "/tmp/skygent-test",
-    outputFormat: "ndjson"
-  });
-  return Layer.succeed(AppConfigService, AppConfigService.of(config));
+const makeAppConfigLayer = (storeRoot: string) => {
+  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+  return AppConfigService.layer.pipe(Layer.provide(overrides));
 };
 
-const testLayers = () => {
+const testLayers = (storeRoot: string) => {
   const kvLayer = KeyValueStore.layerMemory;
   const managerLayer = StoreManager.layer.pipe(Layer.provide(kvLayer));
   const writerLayer = StoreWriter.layer.pipe(Layer.provide(kvLayer));
   const eventLogLayer = StoreEventLog.layer.pipe(Layer.provide(kvLayer));
   const indexLayer = StoreIndex.layer.pipe(
-    Layer.provideMerge(kvLayer),
+    Layer.provideMerge(makeAppConfigLayer(storeRoot)),
     Layer.provideMerge(eventLogLayer)
   );
   const lineageLayer = LineageStore.layer.pipe(Layer.provide(kvLayer));
@@ -48,11 +44,7 @@ const testLayers = () => {
     Layer.provideMerge(eventLogLayer),
     Layer.provideMerge(managerLayer)
   );
-  const fsLayer = FileSystem.layerNoop({
-    exists: () => Effect.succeed(false)
-  });
-  const pathLayer = Path.layer;
-  const appConfigLayer = makeAppConfigLayer();
+  const appConfigLayer = makeAppConfigLayer(storeRoot);
   const storeStatsLayer = StoreStats.layer.pipe(
     Layer.provideMerge(appConfigLayer),
     Layer.provideMerge(managerLayer),
@@ -60,9 +52,7 @@ const testLayers = () => {
     Layer.provideMerge(lineageLayer),
     Layer.provideMerge(derivationValidatorLayer),
     Layer.provideMerge(eventLogLayer),
-    Layer.provideMerge(syncCheckpointLayer),
-    Layer.provideMerge(fsLayer),
-    Layer.provideMerge(pathLayer)
+    Layer.provideMerge(syncCheckpointLayer)
   );
 
   return Layer.mergeAll(
@@ -74,10 +64,8 @@ const testLayers = () => {
     lineageLayer,
     syncCheckpointLayer,
     derivationValidatorLayer,
-    appConfigLayer,
-    fsLayer,
-    pathLayer
-  );
+    appConfigLayer
+  ).pipe(Layer.provideMerge(BunContext.layer));
 };
 
 const sampleMeta = Schema.decodeUnknownSync(EventMeta)({
@@ -108,6 +96,13 @@ const samplePostLater = Schema.decodeUnknownSync(Post)({
 
 describe("StoreStats", () => {
   test("computes basic stats for a store", async () => {
+    const tempDir = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return yield* fs.makeTempDirectory();
+      }).pipe(Effect.provide(BunContext.layer))
+    );
+
     const program = Effect.gen(function* () {
       const manager = yield* StoreManager;
       const writer = yield* StoreWriter;
@@ -131,22 +126,41 @@ describe("StoreStats", () => {
       return yield* stats.stats(store);
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayers())));
+    const layer = testLayers(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    expect(result.posts).toBe(2);
-    expect(result.authors).toBe(2);
-    expect(result.status).toBe("source");
-    expect(result.dateRange).toMatchObject({
-      first: "2026-01-01",
-      last: "2026-01-03"
-    });
-    expect(result.hashtags).toEqual(expect.arrayContaining(["#ai", "#tech"]));
-    expect(result.topAuthors).toEqual(
-      expect.arrayContaining(["alice.bsky", "bob.bsky"])
-    );
+      expect(result.posts).toBe(2);
+      expect(result.authors).toBe(2);
+      expect(result.status).toBe("source");
+      expect(result.dateRange).toMatchObject({
+        first: "2026-01-01",
+        last: "2026-01-03"
+      });
+      expect(result.hashtags).toEqual(
+        expect.arrayContaining(["#ai", "#tech"])
+      );
+      expect(result.topAuthors).toEqual(
+        expect.arrayContaining(["alice.bsky", "bob.bsky"])
+      );
+    } finally {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.remove(tempDir, { recursive: true });
+        }).pipe(Effect.provide(BunContext.layer))
+      );
+    }
   });
 
   test("summarizes stores", async () => {
+    const tempDir = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return yield* fs.makeTempDirectory();
+      }).pipe(Effect.provide(BunContext.layer))
+    );
+
     const program = Effect.gen(function* () {
       const manager = yield* StoreManager;
       const stats = yield* StoreStats;
@@ -155,9 +169,19 @@ describe("StoreStats", () => {
       return yield* stats.summary();
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayers())));
+    const layer = testLayers(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    expect(result.total).toBeGreaterThanOrEqual(1);
-    expect(result.stores.some((store) => store.name === "summary")).toBe(true);
+      expect(result.total).toBeGreaterThanOrEqual(1);
+      expect(result.stores.some((store) => store.name === "summary")).toBe(true);
+    } finally {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.remove(tempDir, { recursive: true });
+        }).pipe(Effect.provide(BunContext.layer))
+      );
+    }
   });
 });

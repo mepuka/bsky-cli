@@ -6,9 +6,8 @@ import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { StoreIndex } from "../../src/services/store-index.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
 import { StoreWriter } from "../../src/services/store-writer.js";
-import { storePrefix } from "../../src/services/store-keys.js";
+import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { EventMeta, PostEventRecord, PostDelete, PostUpsert, StoreQuery } from "../../src/domain/events.js";
-import { PostIndexEntry } from "../../src/domain/indexes.js";
 import { EventId, Timestamp } from "../../src/domain/primitives.js";
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
@@ -40,17 +39,48 @@ const sampleMeta = Schema.decodeUnknownSync(EventMeta)({
 
 const sampleStore = Schema.decodeUnknownSync(StoreRef)({
   name: "arsenal",
-  root: "/tmp/arsenal"
+  root: "stores/arsenal"
 });
 
 const eventId = Schema.decodeUnknownSync(EventId)("01ARZ3NDEKTSV4RRFFQ69G5FAV");
 const rangeStart = Schema.decodeUnknownSync(Timestamp)("2026-01-01T00:00:00.000Z");
 const rangeEnd = Schema.decodeUnknownSync(Timestamp)("2026-01-03T00:00:00.000Z");
 
-const testLayer = Layer.mergeAll(StoreIndex.layer, StoreWriter.layer).pipe(
-  Layer.provideMerge(StoreEventLog.layer),
-  Layer.provideMerge(KeyValueStore.layerMemory)
-);
+const makeTempDir = () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return yield* fs.makeTempDirectory();
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const removeTempDir = (path: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(path, { recursive: true });
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const buildLayer = (storeRoot: string) => {
+  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+  const storageLayer = KeyValueStore.layerMemory;
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storageLayer));
+  const indexLayer = StoreIndex.layer.pipe(
+    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(eventLogLayer)
+  );
+
+  return Layer.mergeAll(
+    appConfigLayer,
+    storageLayer,
+    eventLogLayer,
+    writerLayer,
+    indexLayer
+  ).pipe(Layer.provideMerge(BunContext.layer));
+};
 
 describe("StoreIndex", () => {
   test("apply upsert updates date + hashtag indexes", async () => {
@@ -59,29 +89,28 @@ describe("StoreIndex", () => {
 
     const program = Effect.gen(function* () {
       const storeIndex = yield* StoreIndex;
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const uriIndex = KeyValueStore.prefix(
-        kv.forSchema(PostIndexEntry),
-        storePrefix(sampleStore)
-      );
 
       yield* storeIndex.apply(sampleStore, record);
 
       const date = "2026-01-01";
       const byDate = yield* storeIndex.getByDate(sampleStore, date);
       const byTag = yield* storeIndex.getByHashtag(sampleStore, "#effect");
-      const uriEntry = yield* uriIndex.get(`indexes/by-uri/${samplePost.uri}`);
       const post = yield* storeIndex.getPost(sampleStore, samplePost.uri);
 
-      return { byDate, byTag, uriEntry, post };
+      return { byDate, byTag, post };
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    expect(result.byDate).toEqual([samplePost.uri]);
-    expect(result.byTag).toEqual([samplePost.uri]);
-    expect(Option.isSome(result.uriEntry)).toBe(true);
-    expect(Option.isSome(result.post)).toBe(true);
+      expect(result.byDate).toEqual([samplePost.uri]);
+      expect(result.byTag).toEqual([samplePost.uri]);
+      expect(Option.isSome(result.post)).toBe(true);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 
   test("apply delete removes index entries when metadata exists", async () => {
@@ -100,29 +129,28 @@ describe("StoreIndex", () => {
 
     const program = Effect.gen(function* () {
       const storeIndex = yield* StoreIndex;
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const uriIndex = KeyValueStore.prefix(
-        kv.forSchema(PostIndexEntry),
-        storePrefix(sampleStore)
-      );
 
       yield* storeIndex.apply(sampleStore, upsertRecord);
       yield* storeIndex.apply(sampleStore, deleteRecord);
 
       const byDate = yield* storeIndex.getByDate(sampleStore, "2026-01-01");
       const byTag = yield* storeIndex.getByHashtag(sampleStore, "#effect");
-      const uriEntry = yield* uriIndex.get(`indexes/by-uri/${samplePost.uri}`);
       const post = yield* storeIndex.getPost(sampleStore, samplePost.uri);
 
-      return { byDate, byTag, uriEntry, post };
+      return { byDate, byTag, post };
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    expect(result.byDate).toEqual([]);
-    expect(result.byTag).toEqual([]);
-    expect(Option.isNone(result.uriEntry)).toBe(true);
-    expect(Option.isNone(result.post)).toBe(true);
+      expect(result.byDate).toEqual([]);
+      expect(result.byTag).toEqual([]);
+      expect(Option.isNone(result.post)).toBe(true);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 
   test("rebuild replays events from manifest into indexes", async () => {
@@ -141,10 +169,16 @@ describe("StoreIndex", () => {
       return { byDate, byTag };
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    expect(result.byDate).toEqual([samplePost.uri]);
-    expect(result.byTag).toEqual([samplePost.uri]);
+      expect(result.byDate).toEqual([samplePost.uri]);
+      expect(result.byTag).toEqual([samplePost.uri]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 
   test("query returns posts in range and respects limit", async () => {
@@ -173,8 +207,14 @@ describe("StoreIndex", () => {
       return collected;
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
-    expect(Chunk.toReadonlyArray(result)).toEqual([samplePost]);
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      expect(Chunk.toReadonlyArray(result)).toEqual([samplePost]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 
   test("clear ignores missing checkpoint files in filesystem stores", async () => {
@@ -186,8 +226,8 @@ describe("StoreIndex", () => {
     );
 
     const fsLayer = StoreIndex.layer.pipe(
-      Layer.provideMerge(StoreEventLog.layer),
-      Layer.provideMerge(KeyValueStore.layerFileSystem(tempDir)),
+      Layer.provideMerge(AppConfigService.layer.pipe(Layer.provide(Layer.succeed(ConfigOverrides, { storeRoot: tempDir })))),
+      Layer.provideMerge(StoreEventLog.layer.pipe(Layer.provideMerge(KeyValueStore.layerFileSystem(tempDir)))),
       Layer.provideMerge(BunContext.layer)
     );
 

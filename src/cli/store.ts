@@ -1,6 +1,7 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Chunk, Effect, Option } from "effect";
 import { StoreManager } from "../services/store-manager.js";
+import { Terminal } from "@effect/platform";
 import { StoreNotFound } from "../domain/errors.js";
 import { StoreName } from "../domain/primitives.js";
 import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
@@ -201,10 +202,27 @@ export const storeDelete = Command.make(
   ({ name, force }) =>
     Effect.gen(function* () {
       if (!force) {
-        return yield* CliInputError.make({
-          message: "--force is required to delete a store.",
-          cause: { name, force }
-        });
+        const terminal = yield* Terminal.Terminal;
+        const isTTY = yield* terminal.isTTY.pipe(Effect.orElseSucceed(() => false));
+        if (!isTTY) {
+          return yield* CliInputError.make({
+            message: "--force is required to delete a store.",
+            cause: { name, force }
+          });
+        }
+
+        yield* terminal.display(
+          `Delete store "${name}" and all its data? [y/N] `
+        );
+        const response = yield* terminal.readLine.pipe(
+          Effect.catchAll(() => Effect.succeed(""))
+        );
+        const normalized = response.trim().toLowerCase();
+        const confirmed = normalized === "y" || normalized === "yes";
+        if (!confirmed) {
+          yield* writeJson({ deleted: false, reason: "cancelled" });
+          return;
+        }
       }
       const cleaner = yield* StoreCleaner;
       const result = yield* cleaner.deleteStore(name);

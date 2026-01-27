@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { FileSystem } from "@effect/platform";
+import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { Jetstream, JetstreamMessage } from "effect-jetstream";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
@@ -14,6 +16,7 @@ import { SyncReporter } from "../../src/services/sync-reporter.js";
 import { TrendingTopics } from "../../src/services/trending-topics.js";
 import { JetstreamSyncEngine } from "../../src/services/jetstream-sync.js";
 import { ProfileResolver } from "../../src/services/profile-resolver.js";
+import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { all, filterExprSignature, none } from "../../src/domain/filter.js";
 import { Handle, Timestamp } from "../../src/domain/primitives.js";
 import { StoreRef } from "../../src/domain/store.js";
@@ -132,19 +135,54 @@ const filterRuntimeLayer = FilterRuntime.layer.pipe(
   Layer.provideMerge(TrendingTopics.testLayer)
 );
 
-const makeTestLayer = (stream: Stream.Stream<JetstreamMessage.JetstreamMessage>) =>
-  JetstreamSyncEngine.layer.pipe(
+const makeTempDir = () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return yield* fs.makeTempDirectory();
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const removeTempDir = (path: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(path, { recursive: true });
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const makeTestLayer = (
+  storeRoot: string,
+  stream: Stream.Stream<JetstreamMessage.JetstreamMessage>
+) => {
+  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+  const storageLayer = KeyValueStore.layerMemory;
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+  const indexLayer = StoreIndex.layer.pipe(
+    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(eventLogLayer)
+  );
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storageLayer));
+  const checkpointLayer = SyncCheckpointStore.layer.pipe(
+    Layer.provideMerge(storageLayer)
+  );
+
+  return JetstreamSyncEngine.layer.pipe(
     Layer.provideMerge(makeJetstreamLayer(stream)),
     Layer.provideMerge(profileLayer),
     Layer.provideMerge(PostParser.layer),
     Layer.provideMerge(filterRuntimeLayer),
-    Layer.provideMerge(StoreWriter.layer),
-    Layer.provideMerge(StoreIndex.layer),
-    Layer.provideMerge(StoreEventLog.layer),
-    Layer.provideMerge(SyncCheckpointStore.layer),
+    Layer.provideMerge(writerLayer),
+    Layer.provideMerge(indexLayer),
+    Layer.provideMerge(eventLogLayer),
+    Layer.provideMerge(checkpointLayer),
     Layer.provideMerge(SyncReporter.layer),
-    Layer.provideMerge(KeyValueStore.layerMemory)
+    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(storageLayer),
+    Layer.provideMerge(BunContext.layer)
   );
+};
 
 describe("JetstreamSyncEngine", () => {
   test("sync processes commit create/update/delete and saves checkpoint", async () => {
@@ -171,25 +209,30 @@ describe("JetstreamSyncEngine", () => {
       return { result, count, checkpoint };
     });
 
-    const outcome = await Effect.runPromise(
-      program.pipe(
-        Effect.provide(
-          makeTestLayer(Stream.fromIterable([commitCreate, commitUpdate, commitDelete]))
-        )
-      )
+    const tempDir = await makeTempDir();
+    const layer = makeTestLayer(
+      tempDir,
+      Stream.fromIterable([commitCreate, commitUpdate, commitDelete])
     );
+    try {
+      const outcome = await Effect.runPromise(
+        program.pipe(Effect.provide(layer))
+      );
 
-    expect(outcome.result.postsAdded).toBe(3);
-    expect(outcome.result.postsSkipped).toBe(0);
-    expect(outcome.result.errors).toEqual([]);
-    expect(outcome.count).toBe(0);
-    expect(Option.isSome(outcome.checkpoint)).toBe(true);
-    if (Option.isSome(outcome.checkpoint)) {
-      const value = outcome.checkpoint.value;
-      const updatedAt = Schema.decodeUnknownSync(Timestamp)(value.updatedAt);
-      expect(updatedAt).toBeInstanceOf(Date);
-      expect(value.cursor).toBe("3000000");
-      expect(value.filterHash).toBe(filterHash);
+      expect(outcome.result.postsAdded).toBe(3);
+      expect(outcome.result.postsSkipped).toBe(0);
+      expect(outcome.result.errors).toEqual([]);
+      expect(outcome.count).toBe(0);
+      expect(Option.isSome(outcome.checkpoint)).toBe(true);
+      if (Option.isSome(outcome.checkpoint)) {
+        const value = outcome.checkpoint.value;
+        const updatedAt = Schema.decodeUnknownSync(Timestamp)(value.updatedAt);
+        expect(updatedAt).toBeInstanceOf(Date);
+        expect(value.cursor).toBe("3000000");
+        expect(value.filterHash).toBe(filterHash);
+      }
+    } finally {
+      await removeTempDir(tempDir);
     }
   });
 
@@ -211,14 +254,20 @@ describe("JetstreamSyncEngine", () => {
       return { result, count };
     });
 
-    const outcome = await Effect.runPromise(
-      program.pipe(Effect.provide(makeTestLayer(Stream.fromIterable([commitCreate]))))
-    );
+    const tempDir = await makeTempDir();
+    const layer = makeTestLayer(tempDir, Stream.fromIterable([commitCreate]));
+    try {
+      const outcome = await Effect.runPromise(
+        program.pipe(Effect.provide(layer))
+      );
 
-    expect(outcome.result.postsAdded).toBe(0);
-    expect(outcome.result.postsSkipped).toBe(1);
-    expect(outcome.result.errors).toEqual([]);
-    expect(outcome.count).toBe(0);
+      expect(outcome.result.postsAdded).toBe(0);
+      expect(outcome.result.postsSkipped).toBe(1);
+      expect(outcome.result.errors).toEqual([]);
+      expect(outcome.count).toBe(0);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 
   test("deduplicates repeated commit create events", async () => {
@@ -239,18 +288,23 @@ describe("JetstreamSyncEngine", () => {
       return { result, count };
     });
 
-    const outcome = await Effect.runPromise(
-      program.pipe(
-        Effect.provide(
-          makeTestLayer(Stream.fromIterable([commitCreate, commitCreateDuplicate]))
-        )
-      )
+    const tempDir = await makeTempDir();
+    const layer = makeTestLayer(
+      tempDir,
+      Stream.fromIterable([commitCreate, commitCreateDuplicate])
     );
+    try {
+      const outcome = await Effect.runPromise(
+        program.pipe(Effect.provide(layer))
+      );
 
-    expect(outcome.result.postsAdded).toBe(1);
-    expect(outcome.result.postsSkipped).toBe(1);
-    expect(outcome.result.errors).toEqual([]);
-    expect(outcome.count).toBe(1);
+      expect(outcome.result.postsAdded).toBe(1);
+      expect(outcome.result.postsSkipped).toBe(1);
+      expect(outcome.result.errors).toEqual([]);
+      expect(outcome.count).toBe(1);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 
   test("strict mode stops on first error and does not save checkpoint", async () => {
@@ -274,12 +328,18 @@ describe("JetstreamSyncEngine", () => {
       return { outcome, checkpoint };
     });
 
-    const result = await Effect.runPromise(
-      program.pipe(Effect.provide(makeTestLayer(Stream.fromIterable([commitInvalid]))))
-    );
+    const tempDir = await makeTempDir();
+    const layer = makeTestLayer(tempDir, Stream.fromIterable([commitInvalid]));
+    try {
+      const result = await Effect.runPromise(
+        program.pipe(Effect.provide(layer))
+      );
 
-    expect(result.outcome._tag).toBe("Left");
-    expect(Option.isNone(result.checkpoint)).toBe(true);
+      expect(result.outcome._tag).toBe("Left");
+      expect(Option.isNone(result.checkpoint)).toBe(true);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 
   test("max-errors stops after threshold is exceeded", async () => {
@@ -300,12 +360,19 @@ describe("JetstreamSyncEngine", () => {
         .pipe(Effect.either);
     });
 
-    const result = await Effect.runPromise(
-      program.pipe(
-        Effect.provide(makeTestLayer(Stream.fromIterable([commitInvalid, commitInvalid])))
-      )
+    const tempDir = await makeTempDir();
+    const layer = makeTestLayer(
+      tempDir,
+      Stream.fromIterable([commitInvalid, commitInvalid])
     );
+    try {
+      const result = await Effect.runPromise(
+        program.pipe(Effect.provide(layer))
+      );
 
-    expect(result._tag).toBe("Left");
+      expect(result._tag).toBe("Left");
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 });

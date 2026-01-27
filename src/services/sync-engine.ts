@@ -25,6 +25,14 @@ import {
 } from "../domain/sync.js";
 import { SyncCheckpointStore } from "./sync-checkpoint-store.js";
 import { SyncReporter } from "./sync-reporter.js";
+import { SyncSettings } from "./sync-settings.js";
+
+type PreparedOutcome =
+  | { readonly _tag: "Store"; readonly post: Post; readonly llm: ReadonlyArray<LlmDecisionMeta> }
+  | { readonly _tag: "Skip" }
+  | { readonly _tag: "Error"; readonly error: SyncError };
+
+const skippedPrepared: PreparedOutcome = { _tag: "Skip" };
 
 type SyncOutcome =
   | { readonly _tag: "Stored"; readonly eventId: EventId }
@@ -98,6 +106,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
       const index = yield* StoreIndex;
       const checkpoints = yield* SyncCheckpointStore;
       const reporter = yield* SyncReporter;
+      const settings = yield* SyncSettings;
 
       const sync = Effect.fn("SyncEngine.sync")(
         (source: DataSource, target: StoreRef, filter: FilterExpr) =>
@@ -151,7 +160,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                 return record.id;
               });
 
-            const processRaw = (raw: RawPost): Effect.Effect<SyncOutcome, SyncError> =>
+            const prepareRaw = (raw: RawPost): Effect.Effect<PreparedOutcome, SyncError> =>
               parser.parsePost(raw).pipe(
                 Effect.mapError(toSyncError("parse", "Failed to parse post")),
                 Effect.flatMap((post) =>
@@ -161,22 +170,15 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                     ),
                     Effect.flatMap((exists) =>
                       exists
-                        ? Effect.succeed(skippedOutcome)
+                        ? Effect.succeed(skippedPrepared)
                         : predicate(post).pipe(
                             Effect.mapError(
                               toSyncError("filter", "Filter evaluation failed")
                             ),
-                            Effect.flatMap(({ ok, llm }) =>
+                            Effect.map(({ ok, llm }) =>
                               ok
-                                ? storePost(post, llm).pipe(
-                                    Effect.map(
-                                      (eventId): SyncOutcome => ({
-                                        _tag: "Stored",
-                                        eventId
-                                      })
-                                    )
-                                  )
-                                : Effect.succeed(skippedOutcome)
+                                ? ({ _tag: "Store", post, llm } as const)
+                                : skippedPrepared
                             )
                           )
                     )
@@ -188,6 +190,32 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                     : Effect.succeed({ _tag: "Error", error } as const)
                 )
               );
+
+            const applyPrepared = (
+              prepared: PreparedOutcome
+            ): Effect.Effect<SyncOutcome, SyncError> =>
+              Effect.gen(function* () {
+                switch (prepared._tag) {
+                  case "Skip":
+                    return skippedOutcome;
+                  case "Error":
+                    return { _tag: "Error", error: prepared.error } as const;
+                  case "Store": {
+                    const exists = yield* index
+                      .hasUri(target, prepared.post.uri)
+                      .pipe(
+                        Effect.mapError(
+                          toSyncError("store", "Failed to check store index")
+                        )
+                      );
+                    if (exists) {
+                      return skippedOutcome;
+                    }
+                    const eventId = yield* storePost(prepared.post, prepared.llm);
+                    return { _tag: "Stored", eventId } as const;
+                  }
+                }
+              });
 
             const initial = SyncResultMonoid.empty;
             const previousCheckpoint = yield* checkpoints.load(target, source).pipe(
@@ -223,22 +251,76 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               }
             })();
 
+            type SyncState = {
+              readonly result: SyncResult;
+              readonly lastEventId: Option.Option<EventId>;
+              readonly processed: number;
+              readonly stored: number;
+              readonly skipped: number;
+              readonly errors: number;
+              readonly lastReportAt: number;
+              readonly lastCheckpointAt: number;
+            };
+
+            const resolveLastEventId = (candidate: Option.Option<EventId>) =>
+              Option.match(candidate, {
+                onNone: () =>
+                  Option.flatMap(activeCheckpoint, (value) =>
+                    Option.fromNullable(value.lastEventId)
+                  ),
+                onSome: Option.some
+              });
+
+            const saveCheckpoint = (state: SyncState, now: number) => {
+              const lastEventId = resolveLastEventId(state.lastEventId);
+              const shouldSave =
+                Option.isSome(lastEventId) || Option.isSome(activeCheckpoint);
+              if (!shouldSave) {
+                return Effect.void;
+              }
+              return Schema.decodeUnknown(Timestamp)(new Date(now).toISOString()).pipe(
+                Effect.mapError(
+                  toSyncError("store", "Failed to create checkpoint timestamp")
+                ),
+                Effect.flatMap((updatedAt) => {
+                  const checkpoint = SyncCheckpoint.make({
+                    source,
+                    cursor: Option.getOrUndefined(cursorOption),
+                    lastEventId: Option.getOrUndefined(lastEventId),
+                    filterHash,
+                    updatedAt
+                  });
+                  return checkpoints
+                    .save(target, checkpoint)
+                    .pipe(
+                      Effect.mapError(
+                        toSyncError("store", "Failed to save checkpoint")
+                      )
+                    );
+                })
+              );
+            };
+
             const startTime = Date.now();
+            const initialState: SyncState = {
+              result: initial,
+              lastEventId: Option.none<EventId>(),
+              processed: 0,
+              stored: 0,
+              skipped: 0,
+              errors: 0,
+              lastReportAt: startTime,
+              lastCheckpointAt: startTime
+            };
+
             const state = yield* stream.pipe(
               Stream.mapError(toSyncError("source", "Source stream failed")),
-              Stream.mapEffect(processRaw),
+              Stream.mapEffect(prepareRaw, { concurrency: settings.concurrency }),
               Stream.runFoldEffect(
-                {
-                  result: initial,
-                  lastEventId: Option.none<EventId>(),
-                  processed: 0,
-                  stored: 0,
-                  skipped: 0,
-                  errors: 0,
-                  lastReportAt: startTime
-                },
-                (state, outcome) =>
+                initialState,
+                (state, prepared) =>
                   Effect.gen(function* () {
+                    const outcome = yield* applyPrepared(prepared);
                     const delta = (() => {
                       switch (outcome._tag) {
                         case "Stored":
@@ -262,74 +344,64 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       }
                     })();
 
-                  const processed = state.processed + 1;
-                  const stored = state.stored + (outcome._tag === "Stored" ? 1 : 0);
-                  const skipped =
-                    state.skipped + (outcome._tag === "Skipped" ? 1 : 0);
-                  const errors =
-                    state.errors + (outcome._tag === "Error" ? 1 : 0);
-                  const now = Date.now();
-                  const shouldReport =
-                    processed % 100 === 0 || now - state.lastReportAt >= 5000;
-                  if (shouldReport) {
-                    const elapsedMs = now - startTime;
-                    const rate = elapsedMs > 0 ? processed / (elapsedMs / 1000) : 0;
-                    yield* reporter.report(
-                      SyncProgress.make({
-                        processed,
-                        stored,
-                        skipped,
-                        errors,
-                        elapsedMs,
-                        rate
-                      })
-                    );
-                  }
+                    const processed = state.processed + 1;
+                    const stored =
+                      state.stored + (outcome._tag === "Stored" ? 1 : 0);
+                    const skipped =
+                      state.skipped + (outcome._tag === "Skipped" ? 1 : 0);
+                    const errors =
+                      state.errors + (outcome._tag === "Error" ? 1 : 0);
+                    const now = Date.now();
+                    const shouldReport =
+                      processed % 100 === 0 || now - state.lastReportAt >= 5000;
+                    if (shouldReport) {
+                      const elapsedMs = now - startTime;
+                      const rate =
+                        elapsedMs > 0 ? processed / (elapsedMs / 1000) : 0;
+                      yield* reporter.report(
+                        SyncProgress.make({
+                          processed,
+                          stored,
+                          skipped,
+                          errors,
+                          elapsedMs,
+                          rate
+                        })
+                      );
+                    }
 
-                  return {
-                    result: SyncResultMonoid.combine(state.result, delta),
-                    lastEventId:
-                      outcome._tag === "Stored"
-                        ? Option.some(outcome.eventId)
-                        : state.lastEventId,
-                    processed,
-                    stored,
-                    skipped,
-                    errors,
-                    lastReportAt: shouldReport ? now : state.lastReportAt
-                  };
-                })
-              )
+                    const nextState: SyncState = {
+                      result: SyncResultMonoid.combine(state.result, delta),
+                      lastEventId:
+                        outcome._tag === "Stored"
+                          ? Option.some(outcome.eventId)
+                          : state.lastEventId,
+                      processed,
+                      stored,
+                      skipped,
+                      errors,
+                      lastReportAt: shouldReport ? now : state.lastReportAt,
+                      lastCheckpointAt: state.lastCheckpointAt
+                    };
+
+                    const shouldCheckpoint =
+                      processed > 0 &&
+                      (processed % settings.checkpointEvery === 0 ||
+                        (settings.checkpointIntervalMs > 0 &&
+                          now - state.lastCheckpointAt >=
+                            settings.checkpointIntervalMs));
+                    if (shouldCheckpoint) {
+                      yield* saveCheckpoint(nextState, now);
+                      return { ...nextState, lastCheckpointAt: now };
+                    }
+
+                    return nextState;
+                  })
+              ),
+              Effect.withRequestBatching(true)
             );
 
-            const lastEventId = Option.match(state.lastEventId, {
-              onNone: () =>
-                Option.flatMap(activeCheckpoint, (value) =>
-                  Option.fromNullable(value.lastEventId)
-                ),
-              onSome: Option.some
-            });
-
-            const shouldSave = Option.isSome(lastEventId) || Option.isSome(activeCheckpoint);
-            if (shouldSave) {
-              const updatedAt = yield* Schema.decodeUnknown(Timestamp)(
-                new Date().toISOString()
-              ).pipe(
-                Effect.mapError(
-                  toSyncError("store", "Failed to create checkpoint timestamp")
-                )
-              );
-              const checkpoint = SyncCheckpoint.make({
-                source,
-                cursor: Option.getOrUndefined(cursorOption),
-                lastEventId: Option.getOrUndefined(lastEventId),
-                filterHash,
-                updatedAt
-              });
-              yield* checkpoints
-                .save(target, checkpoint)
-                .pipe(Effect.mapError(toSyncError("store", "Failed to save checkpoint")));
-            }
+            yield* saveCheckpoint(state, Date.now());
 
             return state.result;
           })

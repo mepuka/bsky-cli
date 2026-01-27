@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Schema, Stream } from "effect";
+import { FileSystem } from "@effect/platform";
+import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { BskyClient } from "../../src/services/bsky-client.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
@@ -13,6 +15,8 @@ import { SyncEngine } from "../../src/services/sync-engine.js";
 import { SyncCheckpointStore } from "../../src/services/sync-checkpoint-store.js";
 import { SyncReporter } from "../../src/services/sync-reporter.js";
 import { TrendingTopics } from "../../src/services/trending-topics.js";
+import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
+import { SyncSettings, SyncSettingsOverrides } from "../../src/services/sync-settings.js";
 import { all } from "../../src/domain/filter.js";
 import { RawPost } from "../../src/domain/raw.js";
 import { StoreRef } from "../../src/domain/store.js";
@@ -48,17 +52,53 @@ const filterRuntimeLayer = FilterRuntime.layer.pipe(
   Layer.provideMerge(TrendingTopics.testLayer)
 );
 
-const testLayer = SyncEngine.layer.pipe(
-  Layer.provideMerge(bskyLayer),
-  Layer.provideMerge(PostParser.layer),
-  Layer.provideMerge(filterRuntimeLayer),
-  Layer.provideMerge(StoreWriter.layer),
-  Layer.provideMerge(StoreIndex.layer),
-  Layer.provideMerge(StoreEventLog.layer),
-  Layer.provideMerge(SyncCheckpointStore.layer),
-  Layer.provideMerge(SyncReporter.layer),
-  Layer.provideMerge(KeyValueStore.layerMemory)
-);
+const makeTempDir = () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return yield* fs.makeTempDirectory();
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const removeTempDir = (path: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(path, { recursive: true });
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const buildLayer = (storeRoot: string) => {
+  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+  const syncOverrides = Layer.succeed(SyncSettingsOverrides, {});
+  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+  const syncSettingsLayer = SyncSettings.layer.pipe(Layer.provide(syncOverrides));
+  const storageLayer = KeyValueStore.layerMemory;
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+  const indexLayer = StoreIndex.layer.pipe(
+    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(eventLogLayer)
+  );
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storageLayer));
+  const checkpointLayer = SyncCheckpointStore.layer.pipe(
+    Layer.provideMerge(storageLayer)
+  );
+
+  return SyncEngine.layer.pipe(
+    Layer.provideMerge(bskyLayer),
+    Layer.provideMerge(PostParser.layer),
+    Layer.provideMerge(filterRuntimeLayer),
+    Layer.provideMerge(writerLayer),
+    Layer.provideMerge(indexLayer),
+    Layer.provideMerge(eventLogLayer),
+    Layer.provideMerge(checkpointLayer),
+    Layer.provideMerge(SyncReporter.layer),
+    Layer.provideMerge(syncSettingsLayer),
+    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(storageLayer),
+    Layer.provideMerge(BunContext.layer)
+  );
+};
 
 describe("SyncEngine", () => {
   test("sync processes timeline posts into event log + index", async () => {
@@ -77,14 +117,19 @@ describe("SyncEngine", () => {
 
       return { result, byDate, byTag };
     });
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const outcome = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    const outcome = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
-
-    expect(outcome.result.postsAdded).toBe(1);
-    expect(outcome.result.postsSkipped).toBe(0);
-    expect(outcome.result.errors).toEqual([]);
-    expect(outcome.byDate).toEqual([sampleRaw.uri]);
-    expect(outcome.byTag).toEqual([sampleRaw.uri]);
+      expect(outcome.result.postsAdded).toBe(1);
+      expect(outcome.result.postsSkipped).toBe(0);
+      expect(outcome.result.errors).toEqual([]);
+      expect(outcome.byDate).toEqual([sampleRaw.uri]);
+      expect(outcome.byTag).toEqual([sampleRaw.uri]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 
   test("sync deduplicates previously stored posts", async () => {
@@ -104,11 +149,16 @@ describe("SyncEngine", () => {
 
       return { first, second };
     });
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const outcome = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    const outcome = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
-
-    expect(outcome.first.postsAdded).toBe(1);
-    expect(outcome.second.postsAdded).toBe(0);
-    expect(outcome.second.postsSkipped).toBe(1);
+      expect(outcome.first.postsAdded).toBe(1);
+      expect(outcome.second.postsAdded).toBe(0);
+      expect(outcome.second.postsSkipped).toBe(1);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 });

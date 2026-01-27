@@ -51,7 +51,7 @@ const buildLayer = (storeRoot: string) => {
   const storageLayer = KeyValueStore.layerMemory;
   const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
   const indexLayer = StoreIndex.layer.pipe(
-    Layer.provideMerge(storageLayer),
+    Layer.provideMerge(appConfigLayer),
     Layer.provideMerge(eventLogLayer)
   );
   const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storageLayer));

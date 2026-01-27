@@ -1,5 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { Effect, Layer, Option } from "effect";
+import { FileSystem } from "@effect/platform";
+import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { DerivationEngine } from "../src/services/derivation-engine.js";
 import { StoreEventLog } from "../src/services/store-event-log.js";
@@ -19,6 +21,7 @@ import { LlmDecision } from "../src/services/llm.js";
 import { LinkValidator } from "../src/services/link-validator.js";
 import { TrendingTopics } from "../src/services/trending-topics.js";
 import { ExcludeOnError } from "../src/domain/policies.js";
+import { AppConfigService, ConfigOverrides } from "../src/services/app-config.js";
 
 // Mock services
 const MockLlmDecision = Layer.succeed(LlmDecision, {
@@ -45,41 +48,69 @@ const MockTrendingTopics = Layer.succeed(TrendingTopics, {
 // is available when StoreIndex.layer is being constructed. We do this by building
 // complete layers with their dependencies satisfied.
 
-// Build StoreEventLog with KeyValueStore
-const StoreEventLogComplete = StoreEventLog.layer.pipe(
-  Layer.provideMerge(KeyValueStore.layerMemory)
-);
+const makeTempDir = () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return yield* fs.makeTempDirectory();
+    }).pipe(Effect.provide(BunContext.layer))
+  );
 
-// Build StoreIndex with StoreEventLog (which includes KeyValueStore)
-const StoreIndexComplete = StoreIndex.layer.pipe(
-  Layer.provideMerge(StoreEventLogComplete)
-);
+const removeTempDir = (path: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(path, { recursive: true });
+    }).pipe(Effect.provide(BunContext.layer))
+  );
 
-// Build other storage services with KeyValueStore
-const OtherStorageServices = Layer.mergeAll(
-  StoreWriter.layer,
-  ViewCheckpointStore.layer,
-  LineageStore.layer
-).pipe(
-  Layer.provideMerge(KeyValueStore.layerMemory)
-);
+const buildTestLayer = (storeRoot: string) => {
+  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+  const storageLayer = KeyValueStore.layerMemory;
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+  const indexLayer = StoreIndex.layer.pipe(
+    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(eventLogLayer)
+  );
+  const otherStorage = Layer.mergeAll(
+    StoreWriter.layer,
+    ViewCheckpointStore.layer,
+    LineageStore.layer
+  ).pipe(Layer.provideMerge(storageLayer));
+  const filterServices = Layer.mergeAll(
+    FilterRuntime.layer,
+    FilterCompiler.layer
+  ).pipe(
+    Layer.provideMerge(MockLlmDecision),
+    Layer.provideMerge(MockLinkValidator),
+    Layer.provideMerge(MockTrendingTopics)
+  );
 
-// Build filter services with mocks
-const FilterServices = Layer.mergeAll(
-  FilterRuntime.layer,
-  FilterCompiler.layer
-).pipe(
-  Layer.provideMerge(MockLlmDecision),
-  Layer.provideMerge(MockLinkValidator),
-  Layer.provideMerge(MockTrendingTopics)
-);
+  return Layer.mergeAll(
+    appConfigLayer,
+    storageLayer,
+    eventLogLayer,
+    indexLayer,
+    otherStorage,
+    filterServices,
+    DerivationEngine.layer.pipe(
+      Layer.provideMerge(indexLayer),
+      Layer.provideMerge(otherStorage),
+      Layer.provideMerge(filterServices)
+    )
+  ).pipe(Layer.provideMerge(BunContext.layer));
+};
 
-// Assemble everything for DerivationEngine
-const TestLayer = DerivationEngine.layer.pipe(
-  Layer.provideMerge(StoreIndexComplete),
-  Layer.provideMerge(OtherStorageServices),
-  Layer.provideMerge(FilterServices)
-);
+const withTestLayer = async <A>(program: Effect.Effect<A>) => {
+  const tempDir = await makeTempDir();
+  const layer = buildTestLayer(tempDir);
+  try {
+    return await Effect.runPromise(program.pipe(Effect.provide(layer)));
+  } finally {
+    await removeTempDir(tempDir);
+  }
+};
 
 const createTestPost = (uri: string, text: string, hashtags: ReadonlyArray<string> = []): Post =>
   Post.make({
@@ -102,10 +133,10 @@ const createTestMeta = (): EventMeta =>
   });
 
 describe("DerivationEngine", () => {
-  const sourceRef = StoreRef.make({ name: "source", root: "/tmp/source" });
-  const targetRef = StoreRef.make({ name: "target", root: "/tmp/target" });
+  const sourceRef = StoreRef.make({ name: "source", root: "stores/source" });
+  const targetRef = StoreRef.make({ name: "target", root: "stores/target" });
 
-  test("EventTime mode rejects Llm filters", () =>
+  test("EventTime mode rejects Llm filters", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const filter: FilterExpr = { _tag: "Llm", prompt: "test", minConfidence: 0.8, onError: { _tag: "Exclude" } };
@@ -123,10 +154,10 @@ describe("DerivationEngine", () => {
           expect(error.reason).toContain("EventTime mode only supports pure filters");
         }
       }
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("rejects when source and target are the same store", () =>
+  test("rejects when source and target are the same store", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
 
@@ -143,10 +174,10 @@ describe("DerivationEngine", () => {
           expect(error.reason).toContain("Source and target stores must be different");
         }
       }
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("EventTime mode accepts pure filters", () =>
+  test("EventTime mode accepts pure filters", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -171,10 +202,10 @@ describe("DerivationEngine", () => {
 
       expect(result.eventsProcessed).toBe(2);
       expect(result.eventsMatched).toBe(2);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("DeriveTime mode accepts Llm filters", () =>
+  test("DeriveTime mode accepts Llm filters", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -193,10 +224,10 @@ describe("DerivationEngine", () => {
 
       expect(result.eventsProcessed).toBe(1);
       expect(result.eventsMatched).toBe(1);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("PostDelete events propagate unfiltered", () =>
+  test("PostDelete events propagate unfiltered", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -224,10 +255,10 @@ describe("DerivationEngine", () => {
       expect(result.eventsProcessed).toBe(2);
       expect(result.deletesPropagated).toBe(1);
       expect(result.eventsMatched).toBe(0); // Post doesn't match filter
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("URI deduplication prevents duplicates", () =>
+  test("URI deduplication prevents duplicates", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -254,10 +285,10 @@ describe("DerivationEngine", () => {
       expect(result.eventsProcessed).toBe(3);
       expect(result.eventsMatched).toBe(2); // Only unique URIs
       expect(result.eventsSkipped).toBe(1);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("Lineage is saved", () =>
+  test("Lineage is saved", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const lineageStore = yield* LineageStore;
@@ -278,10 +309,10 @@ describe("DerivationEngine", () => {
         expect(lineage.sources.length).toBe(1);
         expect(lineage.sources[0]!.storeName).toBe(sourceRef.name);
       }
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("Reset clears target store", () =>
+  test("Reset clears target store", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -313,10 +344,10 @@ describe("DerivationEngine", () => {
       // Old post should be gone
       const afterReset = yield* index.hasUri(targetRef, existingPost.uri);
       expect(afterReset).toBe(false);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("Idempotence: derive twice yields same result", () =>
+  test("Idempotence: derive twice yields same result", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -363,10 +394,10 @@ describe("DerivationEngine", () => {
       expect(hasPost1).toBe(true);
       expect(hasPost2).toBe(true);
       expect(hasPost3).toBe(true);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("rejects filter changes without reset", () =>
+  test("rejects filter changes without reset", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -397,10 +428,10 @@ describe("DerivationEngine", () => {
           expect(error.reason).toContain("Derivation settings have changed");
         }
       }
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("rejects non-empty target without checkpoint", () =>
+  test("rejects non-empty target without checkpoint", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -424,10 +455,10 @@ describe("DerivationEngine", () => {
           expect(error.reason).toContain("Target store has existing data");
         }
       }
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("Checkpoint enables incremental derivation", () =>
+  test("Checkpoint enables incremental derivation", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -486,10 +517,10 @@ describe("DerivationEngine", () => {
       expect(hasPost2).toBe(true);
       expect(hasPost3).toBe(true);
       expect(hasPost4).toBe(true);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("Count invariant: processed = matched + skipped + deletes", () =>
+  test("Count invariant: processed = matched + skipped + deletes", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -534,10 +565,10 @@ describe("DerivationEngine", () => {
       expect(result.eventsSkipped).toBe(1); // Non-matching #science post
       expect(result.deletesPropagated).toBe(1); // Delete event
       expect(result.eventsProcessed).toBe(3); // Total
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 
-  test("Reset ignores existing checkpoint", () =>
+  test("Reset ignores existing checkpoint", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const writer = yield* StoreWriter;
@@ -563,6 +594,6 @@ describe("DerivationEngine", () => {
         reset: true
       });
       expect(second.eventsMatched).toBe(1);
-    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    }))
   );
 });

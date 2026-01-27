@@ -1,150 +1,258 @@
-# Issues Remediation Plan (Effect‑Idiomatic)
+# Issues Remediation Plan (Effect-Idiomatic)
 
 **Date:** 2026-01-27  
-**Scope:** docs/issues/001–005  
-**Status:** Draft for review
+**Scope:** docs/issues/001-005  
+**Status:** Updated after SQLite StoreIndex implementation
 
-## Goals
+## Executive Summary
 
-1. Eliminate data‑integrity risks in store indexing and concurrent syncs.
-2. Make syncs resumable and cost‑efficient (checkpointing + LLM batching).
-3. Establish a scalable indexing strategy with an Effect‑native storage backend.
-4. Improve CLI usability while preserving agentic JSON output defaults.
+- **Resolved:** Issue 001 (storage scalability) and Issue 004 (store index concurrency) are addressed by the SQLite StoreIndex backend now in `src/services/store-index.ts` + migrations in `src/db/migrations/store-index/`.
+- **Open:** Issue 002 (incremental checkpointing), Issue 003 (LLM batching), Issue 005 (CLI UX improvements).
+- **Next:** Implement incremental checkpoints + batching in `SyncEngine`, then CLI UX improvements.
 
-## Research Summary (Effect‑native primitives)
+## Research Notes (Effect References)
 
-This plan is informed by the local Effect reference tree in `.reference/effect` and the codebase:
+Sources consulted:
+- `effect-solutions show` topics: basics, services-and-layers, error-handling, config, testing, cli.
+- `.reference/effect/docs/index.md` (local docs index; high-level overview with external links).
+- `.reference/effect`:
+  - `Stream.ensuring` / `Stream.ensuringWith` and `Stream.mapAccumEffect` (Stream.ts) for interruption-safe checkpointing.
+  - `Stream.mapEffect` options including `concurrency` (Stream.ts) for parallel processing.
+  - `Effect.withRequestBatching` (Effect.ts) and `RequestResolver.makeBatched` / `batchN` (RequestResolver.ts) for batching.
+  - `Terminal.isTTY`, `Terminal.readLine`, `Terminal.display` (@effect/platform/Terminal.ts) for interactive UX.
 
-- **Resource lifecycles:** `Effect.acquireRelease` is the canonical scoped resource pattern and ensures finalizers run on interruption. (`.reference/effect/packages/effect/src/Effect.ts`)
-- **Concurrency control:** `Effect.makeSemaphore` and `Semaphore.withPermits(1)` provide a mutex for write‑critical sections. (`Effect.ts`, Semaphore section)
-- **Incremental stream state:** `Stream.mapAccumEffect` is the idiomatic way to evolve state while streaming and perform effects at each step (used for incremental checkpoints). (`Stream.ts`)
-- **Stream finalizers:** `Stream.ensuring` / `Stream.ensuringWith` allow cleanup or persistence even on interruption. (`Stream.ts`)
-- **TTY UX:** `@effect/platform/Terminal` provides `isTTY` and `readLine` for interactive prompts and human‑readable output. (`Terminal.ts`)
-- **KV Store limitation:** `KeyValueStore` has no `scan` / prefix listing, so prefix‑key indexing cannot be done without changing the backend. (`KeyValueStore.ts`)
+These are the APIs we will use in the remediation steps below.
 
-## Current State
+### Effect Source References (paths + key signatures)
 
-- A **per‑store file lock** was added to serialize `sync`/`watch` across processes (prevents cross‑process races). This is correct and aligns with `Effect.acquireRelease` scoping.
-- Store index updates remain **read‑modify‑write**, which is unsafe under in‑process concurrency and is O(N) for growing lists.
+**Stream checkpointing and finalizers**
+- `Stream.mapAccumEffect`  
+  `.reference/effect/packages/effect/src/Stream.ts`  
+  ```
+  export const mapAccumEffect: {
+    <S, A, A2, E2, R2>(
+      s: S,
+      f: (s: S, a: A) => Effect.Effect<readonly [S, A2], E2, R2>
+    ): <E, R>(self: Stream<A, E, R>) => Stream<A2, E2 | E, R2 | R>
+  }
+  ```
+- `Stream.ensuringWith`  
+  `.reference/effect/packages/effect/src/Stream.ts`  
+  ```
+  export const ensuringWith: {
+    <E, R2>(
+      finalizer: (exit: Exit.Exit<unknown, E>) => Effect.Effect<unknown, never, R2>
+    ): <A, R>(self: Stream<A, E, R>) => Stream<A, E, R2 | R>
+  }
+  ```
+- `Stream.groupedWithin` (optional chunk/time checkpointing)  
+  `.reference/effect/packages/effect/src/Stream.ts`  
+  ```
+  export const groupedWithin: {
+    (chunkSize: number, duration: Duration.DurationInput):
+      <A, E, R>(self: Stream<A, E, R>) => Stream<Chunk.Chunk<A>, E, R>
+  }
+  ```
 
-## Issues and Validations
+**Stream concurrency for batching**
+- `Stream.mapEffect` concurrency options  
+  `.reference/effect/packages/effect/src/Stream.ts`  
+  ```
+  export const mapEffect: {
+    <A, A2, E2, R2>(
+      f: (a: A) => Effect.Effect<A2, E2, R2>,
+      options?: { concurrency?: number | "unbounded"; unordered?: boolean }
+    ): <E, R>(self: Stream<A, E, R>) => Stream<A2, E2 | E, R2 | R>
+  }
+  ```
 
-### 001 — Storage scalability (O(N) index writes)
-- **Valid.** `upsertList` reads and re‑writes entire JSON arrays. Complexity grows quadratically over many posts.
-- **Constraint:** KV store cannot scan keys → prefix‑key indexing not viable without a new backend.
+**Request batching controls**
+- `Effect.withRequestBatching`  
+  `.reference/effect/packages/effect/src/Effect.ts`  
+  ```
+  export const withRequestBatching: {
+    (requestBatching: boolean): <A, E, R>(self: Effect<A, E, R>) => Effect<A, E, R>
+  }
+  ```
+- `RequestResolver.makeBatched` / `RequestResolver.batchN`  
+  `.reference/effect/packages/effect/src/RequestResolver.ts`  
+  ```
+  export const makeBatched: <A extends Request.Request<any, any>, R>(
+    run: (requests: NonEmptyArray<A>) => Effect.Effect<void, never, R>
+  ) => RequestResolver<A, R>
 
-### 002 — Sync checkpointing only on completion
-- **Valid.** Checkpoints saved only after stream completes; interruption loses progress.
+  export const batchN: {
+    (n: number): <A, R>(self: RequestResolver<A, R>) => RequestResolver<A, R>
+  }
+  ```
 
-### 003 — LLM batching ineffective due to sequential processing
-- **Valid.** Sequential `Stream.mapEffect` prevents request batching.
-- **Blocked by 004** until store writes are concurrency‑safe.
+**TTY-aware CLI UX**
+- `Terminal` service contract  
+  `.reference/effect/packages/platform/src/Terminal.ts`  
+  ```
+  export interface Terminal {
+    readonly isTTY: Effect<boolean>
+    readonly readLine: Effect<string, QuitException>
+    readonly display: (text: string) => Effect<void, PlatformError>
+  }
+  ```
 
-### 004 — Store index concurrency safety violation
-- **Valid.** `upsertList` is read‑modify‑write with no mutex.
-- **Cross‑process** concurrency fixed by store lock; **in‑process** still unsafe if we enable concurrency for batching.
+## Status Matrix
 
-### 005 — Usability improvements
-- **Valid.** CLI is JSON‑only and non‑interactive, which is machine‑friendly but harsh for human UX.
+| Issue | Status | Evidence |
+| --- | --- | --- |
+| 001 Storage scalability | **Resolved** | StoreIndex now backed by SQLite with indexes and migrations; no JSON list rewrites. |
+| 002 Sync checkpointing | **Implemented** | Incremental checkpointing in `SyncEngine` with count + interval triggers. |
+| 003 LLM batching | **Implemented** | Concurrent prepare phase via `Stream.mapEffect` + `Effect.withRequestBatching`. |
+| 004 Store concurrency | **Resolved** | SQLite transactions replace non-atomic KV updates. |
+| 005 CLI UX | **Implemented** | TTY-aware logs, interactive delete prompt, and `skygent config check`. |
 
-## Phased Remediation Plan
+## Implemented Changes (Issue 001 + 004)
 
-### Phase 0 — Spec + Safety Baselines (this document)
-- Confirm all acceptance criteria and migrate into implementation issues.
-- Ensure lock usage remains per‑store and scoped to command lifetimes.
+**Summary**
+- `StoreIndex` now uses SQLite via `@effect/sql` + `@effect/sql-sqlite-bun`.
+- Per-store DB stored at `${storeRoot}/${store.root}/index.sqlite`.
+- Migrations create `posts`, `post_hashtag`, `index_checkpoints` with indexes.
+- Writes are transactional and no longer read-modify-write on shared lists.
 
-### Phase 1 — In‑Process Index Mutex (unblocks batching safely)
+**Acceptance criteria met**
+- Index updates are O(1) per post (insert/update rows).
+- Index reads no longer allocate large JSON arrays.
+- Concurrency-safe writes (SQLite transactions) remove KV corruption risk.
 
-**Goal:** Make `StoreIndex` write operations safe under concurrency.
+## Remaining Work: Production Spec
 
-- Add a **store‑scoped semaphore** in `StoreIndex`.
-- Wrap `applyUpsert` / `applyDelete` in `semaphore.withPermits(1)`.
-- Use a `Ref<HashMap<StoreName, Semaphore>>` so each store has a dedicated mutex.
+### Issue 002: Incremental Sync Checkpointing
 
-**Effect idioms**
-- `Effect.makeSemaphore(1)` to create a mutex.
-- `Semaphore.withPermits(1)` for critical sections.
+**Goal**
+Persist checkpoints periodically so long syncs can resume without full replay.
+
+**Requirements**
+- Save checkpoint after a configurable number of processed posts (count-based).
+- Save checkpoint after a configurable time interval (time-based).
+- Ensure a final checkpoint is saved on completion or interruption.
+- Maintain backward compatibility with current checkpoint schema.
+
+**Design**
+1. **State model**
+   - Track `processed`, `stored`, `skipped`, `errors`, `lastEventId`, and `cursor` as part of stream state.
+2. **Streaming algorithm**
+   - Use `Stream.mapAccumEffect` to evolve state for each post.
+   - Compute `shouldCheckpoint` when either:
+     - `processed % checkpointEvery === 0`, or
+     - `now - lastCheckpointAt >= checkpointIntervalMs`.
+   - When `shouldCheckpoint`, call `SyncCheckpointStore.save` with current state.
+3. **Interruption safety**
+   - Use `Stream.ensuringWith` to persist the latest checkpoint on interruption (if any progress was made).
+4. **Error handling**
+   - Checkpoint errors are fatal for sync (store failure indicates inconsistent state).
+   - Non-store errors still count toward error metrics and are appended to result.
+
+**Proposed API/config**
+- `SKYGENT_SYNC_CHECKPOINT_EVERY` (default: 100)
+- `SKYGENT_SYNC_CHECKPOINT_INTERVAL_MS` (default: 5000)
+- CLI options: `--checkpoint-every`, `--checkpoint-interval-ms`
 
 **Acceptance criteria**
-- Concurrent in‑process write operations do not corrupt index.
-- Existing tests still pass; add a targeted concurrency test if feasible.
+- Killing sync mid-run resumes within the last checkpoint interval.
+- Checkpoints persist even when stream exits via interrupt or error.
+- Tests verify incremental save cadence and resume correctness.
 
-### Phase 2 — Sync Checkpointing + LLM Batching (Prepare/Apply split)
+---
 
-**Goal:** Make sync resilient and cost‑efficient.
+### Issue 003: LLM Batching in SyncEngine
 
-**Approach**
-- Use `Stream.groupedWithin` or `Stream.mapAccumEffect` in `SyncEngine`.
-- Split processing into **prepare** (parse + filter + LLM) and **apply** (store writes).
-- Run prepare concurrently with `Effect.withRequestBatching(true)` and bounded concurrency.
-- Apply sequentially (or via the StoreIndex mutex if needed) to preserve correctness.
+**Goal**
+Enable `RequestResolver` batching by running filter/LLM evaluation concurrently.
 
-**Effect idioms**
-- `Stream.mapAccumEffect` for incremental checkpoint saves.
-- `Stream.ensuring` to persist final checkpoint on interruption.
-- `Effect.forEach(... { batching: true, concurrency: n })` for LLM batching.
+**Requirements**
+- Preserve processing order for storage writes.
+- Avoid store corruption (already mitigated by SQLite).
+- Keep concurrency bounded and configurable.
 
-**Acceptance criteria**
-- Checkpoints saved periodically during long syncs.
-- Resume after interruption starts near last checkpoint.
-- LLM batching reduces request count in batch strategy.
+**Design**
+1. **Prepare vs apply**
+   - **Prepare** phase: parse + filter + LLM decision, executed in parallel.
+   - **Apply** phase: store event + index update, executed sequentially.
+2. **Concurrency controls**
+   - Use `Stream.mapEffect(processRaw, { concurrency, unordered: false })`.
+   - Wrap LLM evaluation in `Effect.withRequestBatching(true)`.
+   - If LLM uses a batched resolver, apply `RequestResolver.batchN` to cap batch size.
+3. **Safety**
+   - Keep apply phase sequential to maintain event ordering and simplify checkpointing.
 
-### Phase 3 — Storage Scalability (Index backend upgrade)
-
-**Goal:** Remove O(N) list behavior and scale to large datasets.
-
-Detailed design: docs/plans/2026-01-27-store-index-sqlite-plan.md
-
-**Option A (short‑term KV)**
-- Shard index lists into fixed‑size segments.
-- Maintain a segment manifest per index.
-- Update query and rebuild logic accordingly.
-
-**Option B (preferred)**
-- Implement `StoreIndexBackend` using SQLite (bun:sqlite or `@effect/sql-sqlite-bun`).
-- Store per‑index rows and add SQL indexes.
-- Keep `StoreIndex` interface stable, swap backend via Layer.
+**Proposed API/config**
+- `SKYGENT_SYNC_CONCURRENCY` (default: 5 or 10)
+- CLI option: `--sync-concurrency`
 
 **Acceptance criteria**
-- Index update cost is near O(1) per post.
-- Index queries remain correct and bounded in memory.
+- With batch strategy enabled, batch size > 1 is observed in tests.
+- Throughput improves under concurrency without data loss.
 
-### Phase 4 — CLI Usability Improvements
+---
 
-**Goal:** Keep agent‑friendly JSON defaults but improve human UX.
+### Issue 005: CLI Usability Improvements
 
-- If `Terminal.isTTY`, use human‑readable logs; otherwise JSON.
-- Add interactive confirmation for `store delete` when TTY and `--force` missing.
-- Add `config check` command to validate creds, LLM keys, and store root.
+**Goal**
+Improve human UX without breaking agent-friendly JSON defaults.
 
-**Effect idioms**
-- `Terminal.isTTY`, `Terminal.readLine`, `Terminal.display`.
+**Requirements**
+- Human-readable logs when stderr is a TTY.
+- JSON output preserved for non-TTY or `--log-format=json`.
+- Interactive confirmation for `store delete` when TTY and `--force` missing.
+- Add `config check` command.
+
+**Design**
+1. **Logging**
+   - Use `Terminal.isTTY` to select default log formatter.
+   - Add `--log-format=json|human` with `human` only when TTY.
+2. **Store delete prompt**
+   - If TTY and `--force` missing, prompt: `Delete store <name>? [y/N]`.
+   - Use `Terminal.readLine` and handle `QuitException` as a safe cancel.
+3. **Config check**
+   - Add `skygent config check`:
+     - Validate credentials key format.
+     - Validate Bluesky auth.
+     - Validate LLM API key.
+     - Validate store root is writable.
 
 **Acceptance criteria**
-- Humans get readable logs and prompts; agent workflows unchanged.
+- TTY users see readable logs, non-TTY stays JSON.
+- Delete is safe and interactive by default for humans.
+- `config check` reports actionable diagnostics.
 
-## Testing Strategy
+## Testing Plan
 
-- **Unit tests** for concurrency: simulate parallel apply operations and ensure no data loss.
-- **Integration tests** for checkpointing: interrupt mid‑sync and resume; verify no reprocessing.
-- **LLM batching**: instrumentation or mocked RequestResolver to assert batch sizes.
-- **CLI UX**: TTY vs non‑TTY behavior in tests (platform mocks).
+**Checkpointing**
+- Unit: checkpoint saved every N items and at time intervals.
+- Integration: simulate mid-stream interruption, resume near last checkpoint.
 
-## Risks & Mitigations
+**LLM batching**
+- Use a test RequestResolver to capture batch size.
+- Ensure at least one batch size > 1 when concurrency > 1.
 
-- **Mutex reduces throughput:** keep prepare phase concurrent and apply sequential. This keeps correctness and still enables LLM batching.
-- **KV sharding complexity:** mitigate by moving to SQLite backend where possible.
-- **Behavior changes in CLI:** keep JSON output as default for non‑TTY to preserve agent workflows.
+**CLI UX**
+- Mock `Terminal.isTTY` true/false.
+- Assert log formatting and interactive prompts.
 
-## Decision Points
+## Rollout and Migration
 
-1. **Index backend**: short‑term sharding vs SQLite migration.
-2. **Checkpoint frequency**: per chunk, time‑based, or both.
-3. **LLM batching concurrency limit**: define initial safe default (e.g. 5–10).
+**StoreIndex**
+- SQLite index is already in use.
+- For existing stores, `StoreIndex` bootstrap rebuilds from event log if DB is empty.
 
-## Proposed Deliverables
+**SyncEngine changes**
+- Backward compatible: checkpoint schema remains unchanged.
+- New config options have defaults that maintain current behavior if unset.
 
-- Phase 1 PR: StoreIndex mutex + tests.
-- Phase 2 PR: SyncEngine batching + incremental checkpoints + tests.
-- Phase 3 PR: Index backend refactor (SQLite or sharded KV) + migration path.
-- Phase 4 PR: CLI UX enhancements + tests + docs.
+## Risks and Mitigations
+
+- **Checkpoint overhead:** mitigate with count/time thresholds.
+- **LLM rate limits:** cap concurrency; add retry/backoff.
+- **CLI behavior change:** only apply interactive flow when TTY.
+
+## Deliverables
+
+1. **SyncEngine checkpointing + batching** (Issue 002 + 003)
+2. **CLI UX improvements** (Issue 005)
+3. **Documentation updates** to README and CLI help

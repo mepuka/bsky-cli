@@ -1,136 +1,113 @@
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
-import type { PlatformError } from "@effect/platform/Error";
-import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import { FileSystem, Path } from "@effect/platform";
+import { Chunk, Context, Effect, Exit, Layer, Option, Ref, Schema, Scope, Stream } from "effect";
+import * as Reactivity from "@effect/experimental/Reactivity";
+import * as Migrator from "@effect/sql/Migrator";
+import * as MigratorFileSystem from "@effect/sql/Migrator/FileSystem";
+import * as SqlClient from "@effect/sql/SqlClient";
+import * as SqlSchema from "@effect/sql/SqlSchema";
+import { SqliteClient } from "@effect/sql-sqlite-bun";
 import { StoreIndexError } from "../domain/errors.js";
 import { PostEventRecord } from "../domain/events.js";
 import type { PostEvent, StoreQuery } from "../domain/events.js";
-import { PostIndexEntry, IndexCheckpoint } from "../domain/indexes.js";
-import { PostUri, Timestamp } from "../domain/primitives.js";
+import { IndexCheckpoint, PostIndexEntry } from "../domain/indexes.js";
+import { EventId, Handle, PostUri, Timestamp } from "../domain/primitives.js";
 import { Post } from "../domain/post.js";
 import type { StoreRef } from "../domain/store.js";
+import { AppConfigService } from "./app-config.js";
 import { StoreEventLog } from "./store-event-log.js";
-import { storePrefix } from "./store-keys.js";
 
-const indexListSchema = Schema.Array(PostUri);
+const migrationsDir = decodeURIComponent(
+  new URL("../db/migrations/store-index", import.meta.url).pathname
+);
+const indexName = "primary";
+const entryPageSize = 500;
 
-const dateIndexKey = (date: string) => `indexes/by-date/${date}`;
-const hashtagIndexKey = (tag: string) => `indexes/by-hashtag/${tag}`;
-const uriIndexKey = (uri: PostUri) => `indexes/by-uri/${uri}`;
-const postsByUriKey = (uri: PostUri) => `posts/by-uri/${uri}`;
-const urisKey = "indexes/uris";
-const checkpointKey = (name: string) => `checkpoints/indexes/${name}`;
+const postUriRow = Schema.Struct({ uri: PostUri });
+const postJsonRow = Schema.Struct({ post_json: Schema.String });
+const postEntryRow = Schema.Struct({
+  uri: PostUri,
+  created_date: Schema.String,
+  author: Schema.NullOr(Handle),
+  hashtags: Schema.NullOr(Schema.String)
+});
+const checkpointRow = Schema.Struct({
+  index_name: Schema.String,
+  version: Schema.Number,
+  last_event_id: EventId,
+  event_count: Schema.Number,
+  updated_at: Schema.String
+});
 
 const toStoreIndexError = (message: string) => (cause: unknown) =>
-  StoreIndexError.make({ message, cause });
+  cause instanceof StoreIndexError
+    ? cause
+    : StoreIndexError.make({ message, cause });
 
-const upsertList = (
-  store: KeyValueStore.SchemaStore<ReadonlyArray<PostUri>, never>,
-  key: string,
-  uri: PostUri
-) =>
-  store.get(key).pipe(
-    Effect.flatMap(
-      Option.match({
-        onNone: () => store.set(key, [uri]),
-        onSome: (current) =>
-          current.includes(uri)
-            ? Effect.void
-            : store.set(key, [...current, uri])
-      })
-    )
+const encodePostJson = (post: Post) =>
+  Schema.encode(Schema.parseJson(Post))(post);
+
+const decodePostJson = (raw: string) =>
+  Schema.decodeUnknown(Schema.parseJson(Post))(raw).pipe(
+    Effect.mapError(toStoreIndexError("StoreIndex.post decode failed"))
   );
 
-const removeFromList = (
-  store: KeyValueStore.SchemaStore<ReadonlyArray<PostUri>, never>,
-  key: string,
-  uri: PostUri
-) =>
-  store.get(key).pipe(
-    Effect.flatMap(
-      Option.match({
-        onNone: () => Effect.void,
-        onSome: (current) => {
-          const next = current.filter((value) => value !== uri);
-          return next.length === 0 ? store.remove(key) : store.set(key, next);
-        }
-      })
-    )
-  );
+const decodeEntryRow = (row: typeof postEntryRow.Type) =>
+  Schema.decodeUnknown(PostIndexEntry)({
+    uri: row.uri,
+    createdDate: row.created_date,
+    hashtags: row.hashtags ? row.hashtags.split(",") : [],
+    author: row.author ?? undefined
+  }).pipe(Effect.mapError(toStoreIndexError("StoreIndex.entry decode failed")));
+
+const decodeCheckpointRow = (row: typeof checkpointRow.Type) =>
+  Schema.decodeUnknown(IndexCheckpoint)({
+    index: row.index_name,
+    version: row.version,
+    lastEventId: row.last_event_id,
+    eventCount: row.event_count,
+    updatedAt: row.updated_at
+  }).pipe(Effect.mapError(toStoreIndexError("StoreIndex.checkpoint decode failed")));
+
+const toIso = (value: Date | string) =>
+  value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 
 const applyUpsert = (
-  dateIndex: KeyValueStore.SchemaStore<ReadonlyArray<PostUri>, never>,
-  hashtagIndex: KeyValueStore.SchemaStore<ReadonlyArray<PostUri>, never>,
-  uriIndex: KeyValueStore.SchemaStore<PostIndexEntry, never>,
-  postStore: KeyValueStore.SchemaStore<Post, never>,
-  urisIndex: KeyValueStore.SchemaStore<ReadonlyArray<PostUri>, never>,
+  sql: SqlClient.SqlClient,
   event: Extract<PostEvent, { _tag: "PostUpsert" }>
 ) =>
-  Effect.gen(function* () {
-    const createdDate = event.post.createdAt.toISOString().slice(0, 10);
-    const entry = PostIndexEntry.make({
-      uri: event.post.uri,
-      createdDate,
-      hashtags: event.post.hashtags,
-      author: event.post.author
-    });
+  sql.withTransaction(
+    Effect.gen(function* () {
+      const createdAt = toIso(event.post.createdAt);
+      const createdDate = createdAt.slice(0, 10);
+      const postJson = yield* encodePostJson(event.post).pipe(
+        Effect.mapError(toStoreIndexError("StoreIndex.post encode failed"))
+      );
 
-    yield* uriIndex.set(uriIndexKey(entry.uri), entry);
-    yield* postStore.set(postsByUriKey(entry.uri), event.post);
-    yield* upsertList(urisIndex, urisKey, entry.uri);
-    yield* upsertList(dateIndex, dateIndexKey(entry.createdDate), entry.uri);
-    yield* Effect.forEach(
-      entry.hashtags,
-      (tag) => upsertList(hashtagIndex, hashtagIndexKey(tag), entry.uri),
-      { discard: true }
-    );
-  });
+      yield* sql`INSERT INTO posts (uri, created_at, created_date, author, post_json)
+        VALUES (${event.post.uri}, ${createdAt}, ${createdDate}, ${event.post.author}, ${postJson})
+        ON CONFLICT(uri) DO UPDATE SET
+          created_at = excluded.created_at,
+          created_date = excluded.created_date,
+          author = excluded.author,
+          post_json = excluded.post_json`;
+
+      yield* sql`DELETE FROM post_hashtag WHERE uri = ${event.post.uri}`;
+
+      const tags = Array.from(new Set(event.post.hashtags));
+      if (tags.length > 0) {
+        const rows = tags.map((tag) => ({ uri: event.post.uri, tag }));
+        yield* sql`INSERT INTO post_hashtag ${sql.insert(rows)}`;
+      }
+    })
+  );
 
 const applyDelete = (
-  dateIndex: KeyValueStore.SchemaStore<ReadonlyArray<PostUri>, never>,
-  hashtagIndex: KeyValueStore.SchemaStore<ReadonlyArray<PostUri>, never>,
-  uriIndex: KeyValueStore.SchemaStore<PostIndexEntry, never>,
-  postStore: KeyValueStore.SchemaStore<Post, never>,
-  urisIndex: KeyValueStore.SchemaStore<ReadonlyArray<PostUri>, never>,
+  sql: SqlClient.SqlClient,
   event: Extract<PostEvent, { _tag: "PostDelete" }>
 ) =>
-  Effect.gen(function* () {
-    const existing = yield* uriIndex.get(uriIndexKey(event.uri));
-    if (Option.isNone(existing)) {
-      return;
-    }
-    const entry = existing.value;
-
-    yield* removeFromList(dateIndex, dateIndexKey(entry.createdDate), entry.uri);
-    yield* Effect.forEach(
-      entry.hashtags,
-      (tag) => removeFromList(hashtagIndex, hashtagIndexKey(tag), entry.uri),
-      { discard: true }
-    );
-    yield* removeFromList(urisIndex, urisKey, entry.uri);
-    yield* uriIndex.remove(uriIndexKey(entry.uri));
-    yield* postStore.remove(postsByUriKey(entry.uri));
-  });
-
-const dateKeysInRange = (start: Date, end: Date): ReadonlyArray<string> => {
-  const startUtc = Date.UTC(
-    start.getUTCFullYear(),
-    start.getUTCMonth(),
-    start.getUTCDate()
+  sql.withTransaction(
+    sql`DELETE FROM posts WHERE uri = ${event.uri}`.pipe(Effect.asVoid)
   );
-  const endUtc = Date.UTC(
-    end.getUTCFullYear(),
-    end.getUTCMonth(),
-    end.getUTCDate()
-  );
-  if (Number.isNaN(startUtc) || Number.isNaN(endUtc) || startUtc > endUtc) {
-    return [];
-  }
-  const dates: Array<string> = [];
-  for (let ts = startUtc; ts <= endUtc; ts += 24 * 60 * 60 * 1000) {
-    dates.push(new Date(ts).toISOString().slice(0, 10));
-  }
-  return dates;
-};
 
 export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
   StoreIndex,
@@ -175,221 +152,128 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
     ) => Effect.Effect<void, StoreIndexError>;
   }
 >() {
-  static readonly layer = Layer.effect(
+  static readonly layer = Layer.scoped(
     StoreIndex,
     Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const dateIndex = kv.forSchema(indexListSchema);
-      const hashtagIndex = kv.forSchema(indexListSchema);
-      const uriIndex = kv.forSchema(PostIndexEntry);
-      const postStore = kv.forSchema(Post);
-      const urisIndex = kv.forSchema(indexListSchema);
-      const checkpoints = kv.forSchema(IndexCheckpoint);
-      const indexName = "primary";
+      const config = yield* AppConfigService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const eventLog = yield* StoreEventLog;
-      const storeIndexes = (store: StoreRef) => {
-        const prefix = storePrefix(store);
-        return {
-          dateIndex: KeyValueStore.prefix(dateIndex, prefix),
-          hashtagIndex: KeyValueStore.prefix(hashtagIndex, prefix),
-          uriIndex: KeyValueStore.prefix(uriIndex, prefix),
-          postStore: KeyValueStore.prefix(postStore, prefix),
-          urisIndex: KeyValueStore.prefix(urisIndex, prefix),
-          checkpoints: KeyValueStore.prefix(checkpoints, prefix)
-        };
-      };
+      const reactivity = yield* Reactivity.Reactivity;
 
-      const apply = Effect.fn("StoreIndex.apply")(
-        (store: StoreRef, record: PostEventRecord) =>
-          Effect.gen(function* () {
-            const indexes = storeIndexes(store);
-            if (record.event._tag === "PostUpsert") {
-              yield* applyUpsert(
-                indexes.dateIndex,
-                indexes.hashtagIndex,
-                indexes.uriIndex,
-                indexes.postStore,
-                indexes.urisIndex,
-                record.event
-              );
-              return;
-            }
-            if (record.event._tag === "PostDelete") {
-              yield* applyDelete(
-                indexes.dateIndex,
-                indexes.hashtagIndex,
-                indexes.uriIndex,
-                indexes.postStore,
-                indexes.urisIndex,
-                record.event
-              );
-            }
-          }).pipe(Effect.mapError(toStoreIndexError("StoreIndex.apply failed")))
-      );
+      const scope = yield* Scope.make();
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 
-      const getByDate = Effect.fn("StoreIndex.getByDate")(
-        (store: StoreRef, date: string) =>
-          storeIndexes(store).dateIndex
-            .get(dateIndexKey(date))
-            .pipe(
-              Effect.map(Option.getOrElse(() => [] as ReadonlyArray<PostUri>)),
-              Effect.mapError(toStoreIndexError("StoreIndex.getByDate failed"))
-            )
-      );
+      const clients = yield* Ref.make(new Map<string, SqlClient.SqlClient>());
+      const clientLock = yield* Effect.makeSemaphore(1);
 
-      const getByHashtag = Effect.fn("StoreIndex.getByHashtag")(
-        (store: StoreRef, tag: string) =>
-          storeIndexes(store).hashtagIndex
-            .get(hashtagIndexKey(tag))
-            .pipe(
-              Effect.map(Option.getOrElse(() => [] as ReadonlyArray<PostUri>)),
-              Effect.mapError(toStoreIndexError("StoreIndex.getByHashtag failed"))
-            )
-      );
+      const migrate = Migrator.make({})({
+        loader: MigratorFileSystem.fromFileSystem(migrationsDir)
+      });
 
-      const getPost = Effect.fn("StoreIndex.getPost")((store: StoreRef, uri: PostUri) =>
-        storeIndexes(store).postStore
-          .get(postsByUriKey(uri))
-          .pipe(Effect.mapError(toStoreIndexError("StoreIndex.getPost failed")))
-      );
-
-      const hasUri = Effect.fn("StoreIndex.hasUri")((store: StoreRef, uri: PostUri) =>
-        getPost(store, uri).pipe(
-          Effect.map(Option.isSome)
-        )
-      );
-
-      const clear = Effect.fn("StoreIndex.clear")((store: StoreRef) =>
+      const openClient = (store: StoreRef) =>
         Effect.gen(function* () {
-          const indexes = storeIndexes(store);
-          const removeIfExists = (effect: Effect.Effect<void, PlatformError>) =>
-            effect.pipe(
-              Effect.catchAll((error) =>
-                error._tag === "SystemError" && error.reason === "NotFound"
-                  ? Effect.void
-                  : Effect.fail(error)
-              )
-            );
-          const urisOption = yield* indexes.urisIndex
-            .get(urisKey)
-            .pipe(Effect.mapError(toStoreIndexError("StoreIndex.clear failed")));
-          if (Option.isSome(urisOption)) {
-            yield* Effect.forEach(
-              urisOption.value,
-              (uri) =>
-                Effect.gen(function* () {
-                  const entry = yield* indexes.uriIndex.get(uriIndexKey(uri));
-                  if (Option.isSome(entry)) {
-                    yield* removeFromList(
-                      indexes.dateIndex,
-                      dateIndexKey(entry.value.createdDate),
-                      entry.value.uri
-                    );
-                    yield* Effect.forEach(
-                      entry.value.hashtags,
-                      (tag) =>
-                        removeFromList(
-                          indexes.hashtagIndex,
-                          hashtagIndexKey(tag),
-                          entry.value.uri
-                        ),
-                      { discard: true }
-                    );
-                  }
-                  yield* removeIfExists(indexes.uriIndex.remove(uriIndexKey(uri)));
-                  yield* removeIfExists(indexes.postStore.remove(postsByUriKey(uri)));
-                }),
-              { discard: true }
-            );
-            yield* removeIfExists(indexes.urisIndex.remove(urisKey));
-          }
-          yield* removeIfExists(indexes.checkpoints.remove(checkpointKey(indexName)));
-        }).pipe(Effect.mapError(toStoreIndexError("StoreIndex.clear failed")))
-      );
+          const dbPath = path.join(config.storeRoot, store.root, "index.sqlite");
+          const dbDir = path.dirname(dbPath);
+          yield* fs.makeDirectory(dbDir, { recursive: true });
 
-      const loadCheckpoint = Effect.fn("StoreIndex.loadCheckpoint")(
-        (store: StoreRef, index: string) =>
-          storeIndexes(store).checkpoints
-            .get(checkpointKey(index))
-            .pipe(
-              Effect.mapError(toStoreIndexError("StoreIndex.loadCheckpoint failed"))
-            )
-      );
-
-      const saveCheckpoint = Effect.fn("StoreIndex.saveCheckpoint")(
-        (store: StoreRef, checkpoint: IndexCheckpoint) =>
-          storeIndexes(store).checkpoints
-            .set(checkpointKey(checkpoint.index), checkpoint)
-            .pipe(
-              Effect.mapError(toStoreIndexError("StoreIndex.saveCheckpoint failed"))
-            )
-      );
-
-      const listUris = (store: StoreRef) =>
-        storeIndexes(store).urisIndex
-          .get(urisKey)
-          .pipe(
-            Effect.map(Option.getOrElse(() => [] as ReadonlyArray<PostUri>)),
-            Effect.mapError(toStoreIndexError("StoreIndex.query failed"))
+          const client = yield* SqliteClient.make({ filename: dbPath }).pipe(
+            Effect.provideService(Scope.Scope, scope),
+            Effect.provideService(Reactivity.Reactivity, reactivity)
           );
 
-      const query = (store: StoreRef, query: StoreQuery) => {
-        const indexes = storeIndexes(store);
-        const baseStream = query.range
-          ? Stream.fromIterable(dateKeysInRange(query.range.start, query.range.end)).pipe(
-              Stream.mapEffect((date) =>
-                indexes.dateIndex
-                  .get(dateIndexKey(date))
-                  .pipe(
-                    Effect.map(Option.getOrElse(() => [] as ReadonlyArray<PostUri>)),
-                    Effect.mapError(toStoreIndexError("StoreIndex.query failed"))
-                  )
-              ),
-              Stream.mapConcat((uris) => uris)
-            )
-          : Stream.fromIterableEffect(listUris(store));
+          yield* client`PRAGMA foreign_keys = ON`;
+          yield* migrate.pipe(
+            Effect.provideService(SqlClient.SqlClient, client),
+            Effect.provideService(FileSystem.FileSystem, fs)
+          );
 
-        const postStream = baseStream.pipe(
-          Stream.mapEffect((uri) =>
-            indexes.postStore
-              .get(postsByUriKey(uri))
-              .pipe(Effect.mapError(toStoreIndexError("StoreIndex.query failed")))
-          ),
-          Stream.filterMap((post) => post)
+          yield* bootstrapStore(store, client);
+
+          return client;
+        });
+
+      const getClient = (store: StoreRef) =>
+        Effect.gen(function* () {
+          const cached = (yield* Ref.get(clients)).get(store.name);
+          if (cached) {
+            return cached;
+          }
+
+          return yield* clientLock.withPermits(1)(
+            Effect.gen(function* () {
+              const current = yield* Ref.get(clients);
+              const existing = current.get(store.name);
+              if (existing) {
+                return existing;
+              }
+
+              const client = yield* openClient(store);
+
+              const next = new Map(current);
+              next.set(store.name, client);
+              yield* Ref.set(clients, next);
+
+              return client;
+            })
+          );
+        });
+
+      const withClient = <A, E>(
+        store: StoreRef,
+        message: string,
+        run: (client: SqlClient.SqlClient) => Effect.Effect<A, E>
+      ) =>
+        getClient(store).pipe(
+          Effect.flatMap(run),
+          Effect.mapError(toStoreIndexError(message))
         );
 
-        return query.limit ? postStream.pipe(Stream.take(query.limit)) : postStream;
+      const loadCheckpointWithClient = (client: SqlClient.SqlClient, index: string) => {
+        const load = SqlSchema.findOne({
+          Request: Schema.String,
+          Result: checkpointRow,
+          execute: (name) =>
+            client`SELECT index_name, version, last_event_id, event_count, updated_at
+              FROM index_checkpoints
+              WHERE index_name = ${name}`
+        });
+
+        return load(index).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeed(Option.none()),
+              onSome: (row) => decodeCheckpointRow(row).pipe(Effect.map(Option.some))
+            })
+          )
+        );
       };
 
-      const entries = (store: StoreRef) =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const indexes = storeIndexes(store);
-            const uris = yield* listUris(store);
-            if (uris.length === 0) {
-              return Stream.empty;
-            }
-            return Stream.fromIterable(uris).pipe(
-              Stream.mapEffect((uri) =>
-                indexes.uriIndex
-                  .get(uriIndexKey(uri))
-                  .pipe(Effect.mapError(toStoreIndexError("StoreIndex.entries failed")))
-              ),
-              Stream.filterMap((entry) => entry)
-            );
-          })
-        );
+      const saveCheckpointWithClient = (client: SqlClient.SqlClient, checkpoint: IndexCheckpoint) => {
+        const updatedAt = toIso(checkpoint.updatedAt);
+        return client`INSERT INTO index_checkpoints (index_name, version, last_event_id, event_count, updated_at)
+          VALUES (${checkpoint.index}, ${checkpoint.version}, ${checkpoint.lastEventId}, ${checkpoint.eventCount}, ${updatedAt})
+          ON CONFLICT(index_name) DO UPDATE SET
+            version = excluded.version,
+            last_event_id = excluded.last_event_id,
+            event_count = excluded.event_count,
+            updated_at = excluded.updated_at`.pipe(Effect.asVoid);
+      };
 
-      const count = Effect.fn("StoreIndex.count")((store: StoreRef) =>
-        listUris(store).pipe(
-          Effect.map((uris) => uris.length),
-          Effect.mapError(toStoreIndexError("StoreIndex.count failed"))
-        )
-      );
-
-      const rebuild = Effect.fn("StoreIndex.rebuild")((store: StoreRef) =>
+      const applyWithClient = (client: SqlClient.SqlClient, record: PostEventRecord) =>
         Effect.gen(function* () {
-          const checkpoint = yield* loadCheckpoint(store, indexName);
+          if (record.event._tag === "PostUpsert") {
+            yield* applyUpsert(client, record.event);
+            return;
+          }
+          if (record.event._tag === "PostDelete") {
+            yield* applyDelete(client, record.event);
+          }
+        });
+
+      const rebuildWithClient = (store: StoreRef, client: SqlClient.SqlClient) =>
+        Effect.gen(function* () {
+          const checkpoint = yield* loadCheckpointWithClient(client, indexName);
           const lastEventId = Option.map(checkpoint, (value) => value.lastEventId);
 
           const stream = eventLog.stream(store).pipe(
@@ -408,7 +292,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
                 lastId: Option.none<PostEventRecord["id"]>()
               },
               (state, record) =>
-                apply(store, record).pipe(
+                applyWithClient(client, record).pipe(
                   Effect.as({
                     count: state.count + 1,
                     lastId: Option.some(record.id)
@@ -435,8 +319,212 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
             updatedAt
           });
 
-          yield* saveCheckpoint(store, nextCheckpoint);
-        }).pipe(Effect.mapError(toStoreIndexError("StoreIndex.rebuild failed")))
+          yield* saveCheckpointWithClient(client, nextCheckpoint);
+        });
+
+      const bootstrapStore = (store: StoreRef, client: SqlClient.SqlClient) =>
+        Effect.gen(function* () {
+          const countRows = yield* client`SELECT COUNT(*) as count FROM posts`;
+          const count = Number(countRows[0]?.count ?? 0);
+          if (count > 0) {
+            return;
+          }
+
+          const lastEventId = yield* eventLog.getLastEventId(store);
+          if (Option.isNone(lastEventId)) {
+            return;
+          }
+
+          yield* rebuildWithClient(store, client);
+        });
+
+      const apply = Effect.fn("StoreIndex.apply")(
+        (store: StoreRef, record: PostEventRecord) =>
+          withClient(store, "StoreIndex.apply failed", (client) =>
+            applyWithClient(client, record)
+          )
+      );
+
+      const getByDate = Effect.fn("StoreIndex.getByDate")(
+        (store: StoreRef, date: string) =>
+          withClient(store, "StoreIndex.getByDate failed", (client) => {
+            const find = SqlSchema.findAll({
+              Request: Schema.String,
+              Result: postUriRow,
+              execute: (value) =>
+                client`SELECT uri FROM posts WHERE created_date = ${value} ORDER BY created_at ASC`
+            });
+
+            return find(date).pipe(
+              Effect.map((rows) => rows.map((row) => row.uri))
+            );
+          })
+      );
+
+      const getByHashtag = Effect.fn("StoreIndex.getByHashtag")(
+        (store: StoreRef, tag: string) =>
+          withClient(store, "StoreIndex.getByHashtag failed", (client) => {
+            const find = SqlSchema.findAll({
+              Request: Schema.String,
+              Result: postUriRow,
+              execute: (value) =>
+                client`SELECT uri FROM post_hashtag WHERE tag = ${value} ORDER BY uri ASC`
+            });
+
+            return find(tag).pipe(
+              Effect.map((rows) => rows.map((row) => row.uri))
+            );
+          })
+      );
+
+      const getPost = Effect.fn("StoreIndex.getPost")(
+        (store: StoreRef, uri: PostUri) =>
+          withClient(store, "StoreIndex.getPost failed", (client) => {
+            const find = SqlSchema.findOne({
+              Request: PostUri,
+              Result: postJsonRow,
+              execute: (value) =>
+                client`SELECT post_json FROM posts WHERE uri = ${value}`
+            });
+
+            return find(uri).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.succeed(Option.none()),
+                  onSome: (row) =>
+                    decodePostJson(row.post_json).pipe(Effect.map(Option.some))
+                })
+              )
+            );
+          })
+      );
+
+      const hasUri = Effect.fn("StoreIndex.hasUri")((store: StoreRef, uri: PostUri) =>
+        withClient(store, "StoreIndex.hasUri failed", (client) =>
+          client`SELECT 1 FROM posts WHERE uri = ${uri} LIMIT 1`.pipe(
+            Effect.map((rows) => rows.length > 0)
+          )
+        )
+      );
+
+      const clear = Effect.fn("StoreIndex.clear")((store: StoreRef) =>
+        withClient(store, "StoreIndex.clear failed", (client) =>
+          client.withTransaction(
+            Effect.gen(function* () {
+              yield* client`DELETE FROM post_hashtag`;
+              yield* client`DELETE FROM posts`;
+              yield* client`DELETE FROM index_checkpoints`;
+            })
+          )
+        )
+      );
+
+      const loadCheckpoint = Effect.fn("StoreIndex.loadCheckpoint")(
+        (store: StoreRef, index: string) =>
+          withClient(store, "StoreIndex.loadCheckpoint failed", (client) =>
+            loadCheckpointWithClient(client, index)
+          )
+      );
+
+      const saveCheckpoint = Effect.fn("StoreIndex.saveCheckpoint")(
+        (store: StoreRef, checkpoint: IndexCheckpoint) =>
+          withClient(store, "StoreIndex.saveCheckpoint failed", (client) =>
+            saveCheckpointWithClient(client, checkpoint)
+          )
+      );
+
+      const query = (store: StoreRef, query: StoreQuery) =>
+        Stream.unwrap(
+          withClient(store, "StoreIndex.query failed", (client) => {
+            const start = query.range ? toIso(query.range.start) : undefined;
+            const end = query.range ? toIso(query.range.end) : undefined;
+
+            const fetchRows = () => {
+              if (query.range && query.limit) {
+                return client`SELECT post_json FROM posts
+                  WHERE created_at >= ${start} AND created_at <= ${end}
+                  ORDER BY created_at ASC
+                  LIMIT ${query.limit}`;
+              }
+              if (query.range) {
+                return client`SELECT post_json FROM posts
+                  WHERE created_at >= ${start} AND created_at <= ${end}
+                  ORDER BY created_at ASC`;
+              }
+              if (query.limit) {
+                return client`SELECT post_json FROM posts
+                  ORDER BY created_at ASC
+                  LIMIT ${query.limit}`;
+              }
+              return client`SELECT post_json FROM posts ORDER BY created_at ASC`;
+            };
+
+            return Effect.gen(function* () {
+              const rows = yield* fetchRows();
+              const decoded = yield* Schema.decodeUnknown(
+                Schema.Array(postJsonRow)
+              )(rows).pipe(
+                Effect.mapError(toStoreIndexError("StoreIndex.query decode failed"))
+              );
+              const posts = yield* Effect.forEach(
+                decoded,
+                (row) => decodePostJson(row.post_json),
+                { discard: false }
+              );
+              return Stream.fromIterable(posts);
+            });
+          })
+        );
+
+      const entries = (store: StoreRef) =>
+        Stream.paginateChunkEffect(0, (offset) =>
+          withClient(store, "StoreIndex.entries failed", (client) =>
+            Effect.gen(function* () {
+              const rows = yield* client`SELECT
+                  p.uri as uri,
+                  p.created_date as created_date,
+                  p.author as author,
+                  group_concat(h.tag) as hashtags
+                FROM posts p
+                LEFT JOIN post_hashtag h ON p.uri = h.uri
+                GROUP BY p.uri
+                ORDER BY p.created_at ASC
+                LIMIT ${entryPageSize} OFFSET ${offset}`;
+
+              const decoded = yield* Schema.decodeUnknown(
+                Schema.Array(postEntryRow)
+              )(rows).pipe(
+                Effect.mapError(toStoreIndexError("StoreIndex.entries decode failed"))
+              );
+
+              const entries = yield* Effect.forEach(
+                decoded,
+                (row) => decodeEntryRow(row),
+                { discard: false }
+              );
+
+              const next =
+                entries.length < entryPageSize
+                  ? Option.none<number>()
+                  : Option.some(offset + entryPageSize);
+
+              return [Chunk.fromIterable(entries), next] as const;
+            })
+          )
+        );
+
+      const count = Effect.fn("StoreIndex.count")((store: StoreRef) =>
+        withClient(store, "StoreIndex.count failed", (client) =>
+          client`SELECT COUNT(*) as count FROM posts`.pipe(
+            Effect.map((rows) => Number(rows[0]?.count ?? 0))
+          )
+        )
+      );
+
+      const rebuild = Effect.fn("StoreIndex.rebuild")((store: StoreRef) =>
+        withClient(store, "StoreIndex.rebuild failed", (client) =>
+          rebuildWithClient(store, client)
+        )
       );
 
       return StoreIndex.of({
@@ -454,5 +542,5 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         rebuild
       });
     })
-  );
+  ).pipe(Layer.provide(Reactivity.layer));
 }
