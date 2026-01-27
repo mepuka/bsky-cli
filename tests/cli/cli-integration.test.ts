@@ -9,6 +9,7 @@ import { storeCommand } from "../../src/cli/store.js";
 import { LineageStore } from "../../src/services/lineage-store.js";
 import { StoreManager } from "../../src/services/store-manager.js";
 import { StoreCleaner } from "../../src/services/store-cleaner.js";
+import { CliPreferences } from "../../src/cli/preferences.js";
 
 const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
 
@@ -78,7 +79,14 @@ describe("CLI store command", () => {
         deleteStore: () => Effect.succeed({ deleted: false } as const)
       })
     );
-    const appLayer = Layer.mergeAll(layer, storeLayer, cleanerLayer, BunContext.layer);
+    const preferencesLayer = Layer.succeed(CliPreferences, { compact: false });
+    const appLayer = Layer.mergeAll(
+      layer,
+      storeLayer,
+      cleanerLayer,
+      preferencesLayer,
+      BunContext.layer
+    );
 
     await Effect.runPromise(
       Effect.gen(function* () {

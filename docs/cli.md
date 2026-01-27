@@ -15,6 +15,7 @@ These can be used with any command and override config/env defaults:
 - `--output-format <json|ndjson|markdown|table>`: Default output format (used by `query`).
 - `--identifier <handle>`: Override Bluesky identifier.
 - `--password <value>`: Override Bluesky password (redacted).
+- `--compact`: Reduce JSON output verbosity for agent consumption.
 
 ## Commands
 
@@ -113,6 +114,7 @@ Manage saved filters (for reuse in DSL via `@name`).
 - `filter test --filter <dsl> --post-uri <uri>`
 - `filter test --filter-json <json> --post-json <raw-post-json>`
 - `filter explain --filter <dsl> --post-uri <uri>`
+- `filter describe --filter <dsl> [--format <text|json>]`
 - `filter benchmark --store <name> --filter <dsl> [--sample-size <n>]`
 
 ## Exit codes

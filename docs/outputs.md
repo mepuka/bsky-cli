@@ -19,6 +19,7 @@ Notes:
 - `watch` always emits NDJSON `SyncResult` objects to stdout (one per poll interval).
 - `sync`, `store`, `derive`, `filter`, and `view` emit a single JSON object.
 - `query` uses `--format` or the configured `outputFormat` (default: `ndjson`).
+- Use `--compact` to reduce JSON payload size for agent workflows (store list/show, query, derive).
 
 ## Logs and progress
 

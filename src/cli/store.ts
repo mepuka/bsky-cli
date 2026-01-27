@@ -3,7 +3,8 @@ import { Chunk, Effect, Option } from "effect";
 import { StoreManager } from "../services/store-manager.js";
 import { StoreNotFound } from "../domain/errors.js";
 import { StoreName } from "../domain/primitives.js";
-import { StoreConfig, StoreMetadata } from "../domain/store.js";
+import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
+import type { StoreLineage } from "../domain/derivation.js";
 import { defaultStoreConfig } from "../domain/defaults.js";
 import { decodeJson } from "./parse.js";
 import { writeJson } from "./output.js";
@@ -12,6 +13,8 @@ import { LineageStore } from "../services/lineage-store.js";
 import { CliInputError } from "./errors.js";
 import { OutputManager } from "../services/output-manager.js";
 import { formatStoreConfigParseError } from "./store-errors.js";
+import { formatFilterExpr } from "../domain/filter-describe.js";
+import { CliPreferences } from "./preferences.js";
 
 const storeNameArg = Args.text({ name: "name" }).pipe(Args.withSchema(StoreName));
 const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
@@ -50,6 +53,42 @@ const loadStoreRef = (name: StoreName) =>
     });
   });
 
+const compactLineage = (store: StoreRef, lineage: StoreLineage | undefined) => {
+  if (!lineage) {
+    return { store: store.name, derived: false, status: "ready" };
+  }
+  if (!lineage.isDerived || lineage.sources.length === 0) {
+    return {
+      store: store.name,
+      derived: lineage.isDerived,
+      status: lineage.isDerived ? "derived" : "ready",
+      updatedAt: lineage.updatedAt.toISOString()
+    };
+  }
+  const sources = lineage.sources.map((source) => ({
+    store: source.storeName,
+    filter: formatFilterExpr(source.filter),
+    mode: source.evaluationMode,
+    derivedAt: source.derivedAt.toISOString()
+  }));
+  const base = {
+    store: store.name,
+    derived: true,
+    status: "derived",
+    updatedAt: lineage.updatedAt.toISOString()
+  };
+  if (sources.length === 1) {
+    const source = sources[0]!;
+    return {
+      ...base,
+      source: source.store,
+      filter: source.filter,
+      mode: source.mode
+    };
+  }
+  return { ...base, sources };
+};
+
 export const storeCreate = Command.make(
   "create",
   { name: storeNameArg, config: configJsonOption },
@@ -65,7 +104,13 @@ export const storeCreate = Command.make(
 export const storeList = Command.make("list", {}, () =>
   Effect.gen(function* () {
     const manager = yield* StoreManager;
+    const preferences = yield* CliPreferences;
     const stores = yield* manager.listStores();
+    if (preferences.compact) {
+      const names = Chunk.toReadonlyArray(stores).map((store) => store.name);
+      yield* writeJson(names);
+      return;
+    }
     yield* writeJson(Chunk.toReadonlyArray(stores) as ReadonlyArray<StoreMetadata>);
   })
 ).pipe(Command.withDescription("List known stores"));
@@ -77,9 +122,16 @@ export const storeShow = Command.make(
     Effect.gen(function* () {
       const manager = yield* StoreManager;
       const lineageStore = yield* LineageStore;
+      const preferences = yield* CliPreferences;
       const store = yield* loadStoreRef(name);
       const config = yield* manager.getConfig(name);
       const lineageOption = yield* lineageStore.get(name);
+
+      if (preferences.compact) {
+        const lineage = Option.getOrUndefined(lineageOption);
+        yield* writeJson(compactLineage(store, lineage));
+        return;
+      }
 
       const output = Option.match(config, {
         onNone: () => ({ store }),

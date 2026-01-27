@@ -3,6 +3,7 @@ import { Chunk, Effect, Option, Stream } from "effect";
 import { all } from "../domain/filter.js";
 import { StoreQuery } from "../domain/events.js";
 import { StoreName } from "../domain/primitives.js";
+import type { Post } from "../domain/post.js";
 import { FilterRuntime } from "../services/filter-runtime.js";
 import { AppConfigService } from "../services/app-config.js";
 import { StoreIndex } from "../services/store-index.js";
@@ -12,6 +13,7 @@ import { parseOptionalFilterExpr } from "./filter-input.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { parseRange } from "./range.js";
 import { storeOptions } from "./store.js";
+import { CliPreferences } from "./preferences.js";
 
 const storeNameArg = Args.text({ name: "store" }).pipe(Args.withSchema(StoreName));
 const rangeOption = Options.text("range").pipe(
@@ -48,6 +50,13 @@ const parseRangeOption = (range: Option.Option<string>) =>
     onSome: (raw) => parseRange(raw).pipe(Effect.map(Option.some))
   });
 
+const compactPost = (post: Post) => ({
+  uri: post.uri,
+  author: post.author,
+  text: post.text,
+  createdAt: post.createdAt.toISOString()
+});
+
 export const queryCommand = Command.make(
   "query",
   {
@@ -63,11 +72,13 @@ export const queryCommand = Command.make(
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
       const runtime = yield* FilterRuntime;
+      const preferences = yield* CliPreferences;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const parsedRange = yield* parseRangeOption(range);
       const parsedFilter = yield* parseFilter(filter, filterJson);
       const expr = Option.getOrElse(parsedFilter, () => all());
       const outputFormat = Option.getOrElse(format, () => appConfig.outputFormat);
+      const compact = preferences.compact;
 
       const query = StoreQuery.make({
         range: Option.getOrUndefined(parsedRange),
@@ -81,16 +92,21 @@ export const queryCommand = Command.make(
         .pipe(Stream.filterEffect((post) => predicate(post)));
 
       if (outputFormat === "ndjson") {
+        if (compact) {
+          yield* writeJsonStream(stream.pipe(Stream.map(compactPost)));
+          return;
+        }
         yield* writeJsonStream(stream);
         return;
       }
 
       const collected = yield* Stream.runCollect(stream);
       const posts = Chunk.toReadonlyArray(collected);
+      const compactPosts = compact ? posts.map(compactPost) : posts;
 
       switch (outputFormat) {
         case "json":
-          yield* writeJson(posts);
+          yield* writeJson(compactPosts);
           return;
         case "markdown":
           yield* writeText(renderPostsMarkdown(posts));
@@ -99,7 +115,7 @@ export const queryCommand = Command.make(
           yield* writeText(renderPostsTable(posts));
           return;
         default:
-          yield* writeJson(posts);
+          yield* writeJson(compactPosts);
       }
     })
 ).pipe(Command.withDescription("Query a store with optional range and filter"));

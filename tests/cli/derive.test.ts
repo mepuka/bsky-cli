@@ -13,6 +13,7 @@ import { StoreManager } from "../../src/services/store-manager.js";
 import { ViewCheckpointStore } from "../../src/services/view-checkpoint-store.js";
 import { FilterLibrary } from "../../src/services/filter-library.js";
 import { FilterNotFound } from "../../src/domain/errors.js";
+import { CliPreferences } from "../../src/cli/preferences.js";
 
 const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
 
@@ -116,13 +117,15 @@ describe("CLI derive command", () => {
         validateAll: () => Effect.succeed([])
       })
     );
+    const preferencesLayer = Layer.succeed(CliPreferences, { compact: false });
     const appLayer = Layer.mergeAll(
       outputLayer,
       storeLayer,
       engineLayer,
       checkpointsLayer,
       outputManagerLayer,
-      filterLibraryLayer
+      filterLibraryLayer,
+      preferencesLayer
     );
 
     const result = await Effect.runPromise(

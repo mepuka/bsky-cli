@@ -14,6 +14,7 @@ import { storeOptions } from "./store.js";
 import { CliInputError } from "./errors.js";
 import { logInfo } from "./logging.js";
 import type { FilterEvaluationMode } from "../domain/derivation.js";
+import { CliPreferences } from "./preferences.js";
 
 const sourceArg = Args.text({ name: "source" }).pipe(Args.withSchema(StoreName));
 const targetArg = Args.text({ name: "target" }).pipe(Args.withSchema(StoreName));
@@ -64,6 +65,7 @@ export const deriveCommand = Command.make(
       const checkpoints = yield* ViewCheckpointStore;
       const manager = yield* StoreManager;
       const outputManager = yield* OutputManager;
+      const preferences = yield* CliPreferences;
 
       // Parse filter expression
       const filterExpr = yield* parseFilterExpr(filter, filterJson);
@@ -155,6 +157,16 @@ export const deriveCommand = Command.make(
       }
 
       // Output result with context
+      if (preferences.compact) {
+        yield* writeJson({
+          source: sourceRef.name,
+          target: targetRef.name,
+          mode: evaluationMode,
+          ...result
+        });
+        return;
+      }
+
       yield* writeJson({
         source: sourceRef.name,
         target: targetRef.name,

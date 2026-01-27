@@ -13,9 +13,10 @@ import { StoreIndex } from "../services/store-index.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { decodeJson } from "./parse.js";
-import { writeJson } from "./output.js";
+import { writeJson, writeText } from "./output.js";
 import { CliInputError, CliJsonError } from "./errors.js";
 import { storeOptions } from "./store.js";
+import { describeFilter, renderFilterDescription } from "../domain/filter-describe.js";
 
 const filterNameArg = Args.text({ name: "name" }).pipe(Args.withSchema(StoreName));
 
@@ -41,6 +42,10 @@ const storeOption = Options.text("store").pipe(
 );
 const sampleSizeOption = Options.integer("sample-size").pipe(
   Options.withDescription("Number of posts to evaluate (default: 1000)"),
+  Options.optional
+);
+const describeFormatOption = Options.choice("format", ["text", "json"]).pipe(
+  Options.withDescription("Output format for filter descriptions"),
   Options.optional
 );
 
@@ -300,6 +305,23 @@ export const filterBenchmark = Command.make(
     })
 ).pipe(Command.withDescription("Benchmark filter performance over stored posts"));
 
+export const filterDescribe = Command.make(
+  "describe",
+  { filter: filterOption, filterJson: filterJsonOption, format: describeFormatOption },
+  ({ filter, filterJson, format }) =>
+    Effect.gen(function* () {
+      yield* requireFilterExpr(filter, filterJson);
+      const expr = yield* parseFilterExpr(filter, filterJson);
+      const description = describeFilter(expr);
+      const outputFormat = Option.getOrElse(format, () => "text" as const);
+      if (outputFormat === "json") {
+        yield* writeJson(description);
+        return;
+      }
+      yield* writeText(renderFilterDescription(description));
+    })
+).pipe(Command.withDescription("Describe a filter in human-readable form"));
+
 export const filterCommand = Command.make("filter", {}).pipe(
   Command.withSubcommands([
     filterList,
@@ -310,6 +332,7 @@ export const filterCommand = Command.make("filter", {}).pipe(
     filterValidate,
     filterTest,
     filterExplain,
-    filterBenchmark
+    filterBenchmark,
+    filterDescribe
   ])
 );

@@ -24,6 +24,12 @@ skygent filter explain \
   --post-uri 'at://did:plc:.../app.bsky.feed.post/xyz'
 ```
 
+## Describe a filter
+
+```
+skygent filter describe --filter 'hashtag:#tech AND engagement:minLikes=50'
+```
+
 ## Benchmark against a store
 
 ```
@@ -32,4 +38,3 @@ skygent filter benchmark \
   --filter 'hashtag:#tech' \
   --sample-size 1000
 ```
-

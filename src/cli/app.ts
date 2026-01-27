@@ -3,6 +3,7 @@ import { Layer } from "effect";
 import { CliLive } from "./layers.js";
 import { ConfigOverrides } from "../services/app-config.js";
 import { CredentialsOverrides } from "../services/credential-store.js";
+import { CliPreferences } from "./preferences.js";
 import { storeCommand } from "./store.js";
 import { syncCommand } from "./sync.js";
 import { queryCommand } from "./query.js";
@@ -23,13 +24,16 @@ export const app = Command.make("skygent", configOptions).pipe(
     filterCommand
   ]),
   Command.provide((config) =>
-    CliLive.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          Layer.succeed(ConfigOverrides, toConfigOverrides(config)),
-          Layer.succeed(CredentialsOverrides, toCredentialsOverrides(config))
+    Layer.mergeAll(
+      CliLive.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ConfigOverrides, toConfigOverrides(config)),
+            Layer.succeed(CredentialsOverrides, toCredentialsOverrides(config))
+          )
         )
-      )
+      ),
+      Layer.succeed(CliPreferences, { compact: config.compact })
     )
   ),
   Command.withDescription("Skygent CLI for Bluesky monitoring")

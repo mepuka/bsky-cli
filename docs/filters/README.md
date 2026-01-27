@@ -26,7 +26,7 @@ skygent sync timeline --store tech --filter-json '{"_tag":"Hashtag","tag":"#tech
 - `reference.md` - full filter syntax reference (JSON + DSL)
 - `performance.md` - performance characteristics and best practices
 - `examples.md` - common filter patterns
-- `testing.md` - validate/test/explain/benchmark commands
+- `testing.md` - validate/test/describe/explain/benchmark commands
 
 ## Sync vs store config filters
 
@@ -34,4 +34,3 @@ Sync/query filters control **what gets ingested or returned**. Store config filt
 
 - Sync/query: `--filter` / `--filter-json`
 - Store config: `StoreConfig.filters[]` + `store materialize`
-

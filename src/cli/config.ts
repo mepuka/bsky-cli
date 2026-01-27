@@ -31,6 +31,9 @@ export const configOptions = {
   password: Options.redacted("password").pipe(
     Options.optional,
     Options.withDescription("Override Bluesky password (redacted)")
+  ),
+  compact: Options.boolean("compact").pipe(
+    Options.withDescription("Reduce JSON output verbosity for agent consumption")
   )
 };
 
@@ -40,6 +43,7 @@ export type ConfigOptions = {
   readonly outputFormat: Option.Option<OutputFormat>;
   readonly identifier: Option.Option<string>;
   readonly password: Option.Option<Redacted.Redacted<string>>;
+  readonly compact: boolean;
 };
 
 export const toConfigOverrides = (options: ConfigOptions): Partial<AppConfig> =>
