@@ -13,6 +13,8 @@
         "@effect/cli": "^0.73.1",
         "@effect/platform": "^0.94.2",
         "@effect/platform-bun": "^0.87.1",
+        "@effect/printer": "^0.47.0",
+        "@effect/printer-ansi": "^0.47.0",
         "@effect/typeclass": "^0.38.0",
         "effect": "^3.19.15",
       },

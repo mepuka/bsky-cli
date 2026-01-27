@@ -64,4 +64,4 @@ Use `store summary` for a compact overview across all stores, including derived 
 
 Use `store tree` to visualize lineage relationships as ASCII output. `--format table` prints
 separate `Stores` and `Derivations` sections with labeled columns. Use `--format json` for
-structured output.
+structured output. Pass `--ansi` for colored output and `--width` to control wrapping.

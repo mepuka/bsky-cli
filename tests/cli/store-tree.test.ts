@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
-import { renderStoreTree, renderStoreTreeTable, type StoreTreeData } from "../../src/cli/store-tree.js";
+import {
+  renderStoreTree,
+  renderStoreTreeAnsi,
+  renderStoreTreeTable,
+  type StoreTreeData
+} from "../../src/cli/store-tree.js";
 import { Handle, StoreName } from "../../src/domain/primitives.js";
 
 describe("store tree rendering", () => {
@@ -56,5 +61,30 @@ describe("store tree rendering", () => {
     expect(output).toContain("Store");
     expect(output).toContain("root");
     expect(output).toContain("leaf");
+  });
+
+  test("renders ANSI tree output", () => {
+    const source = Schema.decodeUnknownSync(StoreName)("root");
+    const child = Schema.decodeUnknownSync(StoreName)("leaf");
+    const handle = Schema.decodeUnknownSync(Handle)("carol.bsky.social");
+
+    const data: StoreTreeData = {
+      roots: [source],
+      stores: [
+        { name: source, posts: 5, derived: false, status: "source" },
+        { name: child, posts: 1, derived: true, status: "ready" }
+      ],
+      edges: [
+        {
+          source,
+          target: child,
+          filter: { _tag: "Author", handle },
+          mode: "EventTime"
+        }
+      ]
+    };
+
+    const output = renderStoreTreeAnsi(data);
+    expect(output).toMatch(/\u001b\[[0-9;]*m/);
   });
 });

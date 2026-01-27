@@ -30,6 +30,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@atproto/api": "^0.18.17",
     "@effect/ai": "^0.33.2",
     "@effect/ai-anthropic": "^0.23.0",
     "@effect/ai-google": "^0.12.1",
@@ -37,8 +38,9 @@
     "@effect/cli": "^0.73.1",
     "@effect/platform": "^0.94.2",
     "@effect/platform-bun": "^0.87.1",
+    "@effect/printer": "^0.47.0",
+    "@effect/printer-ansi": "^0.47.0",
     "@effect/typeclass": "^0.38.0",
-    "@atproto/api": "^0.18.17",
     "effect": "^3.19.15"
   }
 }

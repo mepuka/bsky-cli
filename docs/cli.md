@@ -33,7 +33,7 @@ Manage stores.
 - `store show <name>`
 - `store stats <name>`
 - `store summary`
-- `store tree [--format <tree|table|json>]`
+- `store tree [--format <tree|table|json>] [--ansi] [--width <n>]`
 - `store delete <name> --force`
 - `store materialize <name> [--filter <filter-name>]`
 
@@ -45,10 +45,12 @@ bun run index.ts store show my-store
 bun run index.ts store stats my-store
 bun run index.ts store summary
 bun run index.ts store tree --format table
+bun run index.ts store tree --ansi --width 100
 bun run index.ts store delete my-store --force
 ```
 
 `store tree --format table` prints two labeled sections (`Stores` and `Derivations`) with column headers.
+Use `--ansi` to enable colored tree output and `--width` to control wrapping width.
 
 Provide store config as JSON (single quotes recommended):
 

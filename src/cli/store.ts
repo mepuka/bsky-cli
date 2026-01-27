@@ -20,8 +20,10 @@ import { withExamples } from "./help.js";
 import {
   buildStoreTreeData,
   renderStoreTree,
+  renderStoreTreeAnsi,
   renderStoreTreeJson,
-  renderStoreTreeTable
+  renderStoreTreeTable,
+  type StoreTreeRenderOptions
 } from "./store-tree.js";
 
 const storeNameArg = Args.text({ name: "name" }).pipe(
@@ -42,6 +44,13 @@ const filterNameOption = Options.text("filter").pipe(
 );
 const treeFormatOption = Options.choice("format", ["tree", "table", "json"]).pipe(
   Options.withDescription("Output format for store tree"),
+  Options.optional
+);
+const treeAnsiOption = Options.boolean("ansi").pipe(
+  Options.withDescription("Enable ANSI color output for tree format")
+);
+const treeWidthOption = Options.integer("width").pipe(
+  Options.withDescription("Line width for tree rendering (enables wrapping)"),
   Options.optional
 );
 
@@ -284,11 +293,15 @@ export const storeSummary = Command.make("summary", {}, () =>
 
 export const storeTree = Command.make(
   "tree",
-  { format: treeFormatOption },
-  ({ format }) =>
+  { format: treeFormatOption, ansi: treeAnsiOption, width: treeWidthOption },
+  ({ format, ansi, width }) =>
     Effect.gen(function* () {
       const data = yield* buildStoreTreeData;
       const outputFormat = Option.getOrElse(format, () => "tree" as const);
+      const renderOptions: StoreTreeRenderOptions | undefined = Option.match(width, {
+        onNone: () => undefined,
+        onSome: (value) => ({ width: value })
+      });
       switch (outputFormat) {
         case "json":
           yield* writeJson(renderStoreTreeJson(data));
@@ -297,13 +310,16 @@ export const storeTree = Command.make(
           yield* writeText(renderStoreTreeTable(data));
           return;
         default:
-          yield* writeText(renderStoreTree(data));
+          yield* writeText(
+            ansi ? renderStoreTreeAnsi(data, renderOptions) : renderStoreTree(data, renderOptions)
+          );
       }
     })
 ).pipe(
   Command.withDescription(
     withExamples("Visualize store lineage as an ASCII tree", [
-      "skygent store tree --format table"
+      "skygent store tree --format table",
+      "skygent store tree --ansi --width 100"
     ])
   )
 );
