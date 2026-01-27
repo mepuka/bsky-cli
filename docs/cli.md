@@ -82,6 +82,7 @@ Notes:
 - Only `app.bsky.feed.post` is supported for `--collections` currently.
 - `--strict` stops on the first error and does not advance the checkpoint.
 - `--max-errors` stops after exceeding N errors.
+- Sync commands acquire an exclusive lock per store; concurrent syncs to the same store will fail with a "store busy" error.
 
 ### watch
 
@@ -93,6 +94,7 @@ Repeated polling + streaming NDJSON results to stdout.
 - `watch jetstream --store <name> [--filter <dsl>] [--filter-json <json>] [--endpoint <url>] [--collections <csv>] [--dids <csv>] [--cursor <micros>] [--compress] [--max-message-size <bytes>] [--strict] [--max-errors <n>] [--quiet]`
 
 `--interval` accepts strings like "30 seconds" or "500 millis". Default is 30 seconds. `--interval-ms` is deprecated.
+Watch commands also acquire an exclusive lock per store; concurrent watch/sync commands against the same store will fail with a "store busy" error.
 
 ### query
 

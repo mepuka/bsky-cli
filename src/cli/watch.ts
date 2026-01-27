@@ -17,6 +17,7 @@ import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { CliInputError } from "./errors.js";
+import { StoreLock } from "../services/store-lock.js";
 
 const storeNameOption = Options.text("store").pipe(
   Options.withSchema(StoreName),
@@ -80,27 +81,33 @@ const timelineCommand = Command.make(
   },
   ({ store, filter, filterJson, interval, intervalMs, quiet }) =>
     Effect.gen(function* () {
+      const storeLock = yield* StoreLock;
       const sync = yield* SyncEngine;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter, filterJson);
       const parsedInterval = yield* parseInterval(interval, intervalMs);
-      yield* logInfo("Starting watch", { source: "timeline", store: storeRef.name });
-      const stream = sync
-        .watch(
-          WatchConfig.make({
-            source: DataSource.timeline(),
-            store: storeRef,
-            filter: expr,
-            interval: parsedInterval
-          })
-        )
-        .pipe(
-          Stream.map((event) => event.result),
-          Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-        );
-      yield* writeJsonStream(stream);
+      return yield* storeLock.withStoreLock(
+        storeRef,
+        Effect.gen(function* () {
+          yield* logInfo("Starting watch", { source: "timeline", store: storeRef.name });
+          const stream = sync
+            .watch(
+              WatchConfig.make({
+                source: DataSource.timeline(),
+                store: storeRef,
+                filter: expr,
+                interval: parsedInterval
+              })
+            )
+            .pipe(
+              Stream.map((event) => event.result),
+              Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+            );
+          yield* writeJsonStream(stream);
+        })
+      );
     })
 ).pipe(
   Command.withDescription(
@@ -132,27 +139,33 @@ const feedCommand = Command.make(
   },
   ({ uri, store, filter, filterJson, interval, intervalMs, quiet }) =>
     Effect.gen(function* () {
+      const storeLock = yield* StoreLock;
       const sync = yield* SyncEngine;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter, filterJson);
       const parsedInterval = yield* parseInterval(interval, intervalMs);
-      yield* logInfo("Starting watch", { source: "feed", uri, store: storeRef.name });
-      const stream = sync
-        .watch(
-          WatchConfig.make({
-            source: DataSource.feed(uri),
-            store: storeRef,
-            filter: expr,
-            interval: parsedInterval
-          })
-        )
-        .pipe(
-          Stream.map((event) => event.result),
-          Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-        );
-      yield* writeJsonStream(stream);
+      return yield* storeLock.withStoreLock(
+        storeRef,
+        Effect.gen(function* () {
+          yield* logInfo("Starting watch", { source: "feed", uri, store: storeRef.name });
+          const stream = sync
+            .watch(
+              WatchConfig.make({
+                source: DataSource.feed(uri),
+                store: storeRef,
+                filter: expr,
+                interval: parsedInterval
+              })
+            )
+            .pipe(
+              Stream.map((event) => event.result),
+              Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+            );
+          yield* writeJsonStream(stream);
+        })
+      );
     })
 ).pipe(
   Command.withDescription(
@@ -178,27 +191,33 @@ const notificationsCommand = Command.make(
   },
   ({ store, filter, filterJson, interval, intervalMs, quiet }) =>
     Effect.gen(function* () {
+      const storeLock = yield* StoreLock;
       const sync = yield* SyncEngine;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter, filterJson);
       const parsedInterval = yield* parseInterval(interval, intervalMs);
-      yield* logInfo("Starting watch", { source: "notifications", store: storeRef.name });
-      const stream = sync
-        .watch(
-          WatchConfig.make({
-            source: DataSource.notifications(),
-            store: storeRef,
-            filter: expr,
-            interval: parsedInterval
-          })
-        )
-        .pipe(
-          Stream.map((event) => event.result),
-          Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-        );
-      yield* writeJsonStream(stream);
+      return yield* storeLock.withStoreLock(
+        storeRef,
+        Effect.gen(function* () {
+          yield* logInfo("Starting watch", { source: "notifications", store: storeRef.name });
+          const stream = sync
+            .watch(
+              WatchConfig.make({
+                source: DataSource.notifications(),
+                store: storeRef,
+                filter: expr,
+                interval: parsedInterval
+              })
+            )
+            .pipe(
+              Stream.map((event) => event.result),
+              Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+            );
+          yield* writeJsonStream(stream);
+        })
+      );
     })
 ).pipe(
   Command.withDescription(
@@ -241,6 +260,7 @@ const jetstreamCommand = Command.make(
     maxErrors
   }) =>
     Effect.gen(function* () {
+      const storeLock = yield* StoreLock;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
@@ -262,25 +282,30 @@ const jetstreamCommand = Command.make(
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
-      yield* logInfo("Starting watch", { source: "jetstream", store: storeRef.name });
-      const stream = yield* Effect.gen(function* () {
-        const engine = yield* JetstreamSyncEngine;
-        const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
-        return engine.watch({
-          source: selection.source,
-          store: storeRef,
-          filter: expr,
-          command: "watch jetstream",
-          ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {}),
-          ...(strict ? { strict } : {}),
-          ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
-        });
-      }).pipe(Effect.provide(engineLayer));
-      const outputStream = stream.pipe(
-        Stream.map((event) => event.result),
-        Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+      return yield* storeLock.withStoreLock(
+        storeRef,
+        Effect.gen(function* () {
+          yield* logInfo("Starting watch", { source: "jetstream", store: storeRef.name });
+          const stream = yield* Effect.gen(function* () {
+            const engine = yield* JetstreamSyncEngine;
+            const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
+            return engine.watch({
+              source: selection.source,
+              store: storeRef,
+              filter: expr,
+              command: "watch jetstream",
+              ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {}),
+              ...(strict ? { strict } : {}),
+              ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
+            });
+          }).pipe(Effect.provide(engineLayer));
+          const outputStream = stream.pipe(
+            Stream.map((event) => event.result),
+            Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+          );
+          yield* writeJsonStream(outputStream);
+        })
       );
-      yield* writeJsonStream(outputStream);
     })
 ).pipe(
   Command.withDescription(

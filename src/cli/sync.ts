@@ -14,6 +14,7 @@ import { logInfo, makeSyncReporter } from "./logging.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { OutputManager } from "../services/output-manager.js";
+import { StoreLock } from "../services/store-lock.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { CliInputError } from "./errors.js";
@@ -112,27 +113,33 @@ const timelineCommand = Command.make(
   { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption },
   ({ store, filter, filterJson, quiet }) =>
     Effect.gen(function* () {
+      const storeLock = yield* StoreLock;
       const sync = yield* SyncEngine;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter, filterJson);
-      yield* logInfo("Starting sync", { source: "timeline", store: storeRef.name });
-      const result = yield* sync
-        .sync(DataSource.timeline(), storeRef, expr)
-        .pipe(
-          Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-        );
-      const materialized = yield* outputManager.materializeStore(storeRef);
-      if (materialized.filters.length > 0) {
-        yield* logInfo("Materialized filter outputs", {
-          store: storeRef.name,
-          filters: materialized.filters.map((spec) => spec.name)
-        });
-      }
-      yield* logInfo("Sync complete", { source: "timeline", store: storeRef.name });
-      yield* writeJson(result as SyncResult);
+      return yield* storeLock.withStoreLock(
+        storeRef,
+        Effect.gen(function* () {
+          yield* logInfo("Starting sync", { source: "timeline", store: storeRef.name });
+          const result = yield* sync
+            .sync(DataSource.timeline(), storeRef, expr)
+            .pipe(
+              Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+            );
+          const materialized = yield* outputManager.materializeStore(storeRef);
+          if (materialized.filters.length > 0) {
+            yield* logInfo("Materialized filter outputs", {
+              store: storeRef.name,
+              filters: materialized.filters.map((spec) => spec.name)
+            });
+          }
+          yield* logInfo("Sync complete", { source: "timeline", store: storeRef.name });
+          yield* writeJson(result as SyncResult);
+        })
+      );
     })
 ).pipe(
   Command.withDescription(
@@ -156,27 +163,33 @@ const feedCommand = Command.make(
   { uri: feedUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption },
   ({ uri, store, filter, filterJson, quiet }) =>
     Effect.gen(function* () {
+      const storeLock = yield* StoreLock;
       const sync = yield* SyncEngine;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter, filterJson);
-      yield* logInfo("Starting sync", { source: "feed", uri, store: storeRef.name });
-      const result = yield* sync
-        .sync(DataSource.feed(uri), storeRef, expr)
-        .pipe(
-          Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-        );
-      const materialized = yield* outputManager.materializeStore(storeRef);
-      if (materialized.filters.length > 0) {
-        yield* logInfo("Materialized filter outputs", {
-          store: storeRef.name,
-          filters: materialized.filters.map((spec) => spec.name)
-        });
-      }
-      yield* logInfo("Sync complete", { source: "feed", uri, store: storeRef.name });
-      yield* writeJson(result as SyncResult);
+      return yield* storeLock.withStoreLock(
+        storeRef,
+        Effect.gen(function* () {
+          yield* logInfo("Starting sync", { source: "feed", uri, store: storeRef.name });
+          const result = yield* sync
+            .sync(DataSource.feed(uri), storeRef, expr)
+            .pipe(
+              Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+            );
+          const materialized = yield* outputManager.materializeStore(storeRef);
+          if (materialized.filters.length > 0) {
+            yield* logInfo("Materialized filter outputs", {
+              store: storeRef.name,
+              filters: materialized.filters.map((spec) => spec.name)
+            });
+          }
+          yield* logInfo("Sync complete", { source: "feed", uri, store: storeRef.name });
+          yield* writeJson(result as SyncResult);
+        })
+      );
     })
 ).pipe(
   Command.withDescription(
@@ -195,27 +208,33 @@ const notificationsCommand = Command.make(
   { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption },
   ({ store, filter, filterJson, quiet }) =>
     Effect.gen(function* () {
+      const storeLock = yield* StoreLock;
       const sync = yield* SyncEngine;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter, filterJson);
-      yield* logInfo("Starting sync", { source: "notifications", store: storeRef.name });
-      const result = yield* sync
-        .sync(DataSource.notifications(), storeRef, expr)
-        .pipe(
-          Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-        );
-      const materialized = yield* outputManager.materializeStore(storeRef);
-      if (materialized.filters.length > 0) {
-        yield* logInfo("Materialized filter outputs", {
-          store: storeRef.name,
-          filters: materialized.filters.map((spec) => spec.name)
-        });
-      }
-      yield* logInfo("Sync complete", { source: "notifications", store: storeRef.name });
-      yield* writeJson(result as SyncResult);
+      return yield* storeLock.withStoreLock(
+        storeRef,
+        Effect.gen(function* () {
+          yield* logInfo("Starting sync", { source: "notifications", store: storeRef.name });
+          const result = yield* sync
+            .sync(DataSource.notifications(), storeRef, expr)
+            .pipe(
+              Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+            );
+          const materialized = yield* outputManager.materializeStore(storeRef);
+          if (materialized.filters.length > 0) {
+            yield* logInfo("Materialized filter outputs", {
+              store: storeRef.name,
+              filters: materialized.filters.map((spec) => spec.name)
+            });
+          }
+          yield* logInfo("Sync complete", { source: "notifications", store: storeRef.name });
+          yield* writeJson(result as SyncResult);
+        })
+      );
     })
 ).pipe(
   Command.withDescription(
@@ -262,6 +281,7 @@ const jetstreamCommand = Command.make(
     maxErrors
   }) =>
     Effect.gen(function* () {
+      const storeLock = yield* StoreLock;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
@@ -293,39 +313,44 @@ const jetstreamCommand = Command.make(
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
-      yield* logInfo("Starting sync", {
-        source: "jetstream",
-        store: storeRef.name
-      });
-      const result = yield* Effect.gen(function* () {
-        const engine = yield* JetstreamSyncEngine;
-        const limitValue = Option.getOrUndefined(parsedLimit);
-        const durationValue = Option.getOrUndefined(parsedDuration);
-        const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
-        return yield* engine.sync({
-          source: selection.source,
-          store: storeRef,
-          filter: expr,
-          command: "sync jetstream",
-          ...(limitValue !== undefined ? { limit: limitValue } : {}),
-          ...(durationValue !== undefined ? { duration: durationValue } : {}),
-          ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {}),
-          ...(strict ? { strict } : {}),
-          ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
-        });
-      }).pipe(
-        Effect.provide(engineLayer),
-        Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+      return yield* storeLock.withStoreLock(
+        storeRef,
+        Effect.gen(function* () {
+          yield* logInfo("Starting sync", {
+            source: "jetstream",
+            store: storeRef.name
+          });
+          const result = yield* Effect.gen(function* () {
+            const engine = yield* JetstreamSyncEngine;
+            const limitValue = Option.getOrUndefined(parsedLimit);
+            const durationValue = Option.getOrUndefined(parsedDuration);
+            const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
+            return yield* engine.sync({
+              source: selection.source,
+              store: storeRef,
+              filter: expr,
+              command: "sync jetstream",
+              ...(limitValue !== undefined ? { limit: limitValue } : {}),
+              ...(durationValue !== undefined ? { duration: durationValue } : {}),
+              ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {}),
+              ...(strict ? { strict } : {}),
+              ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
+            });
+          }).pipe(
+            Effect.provide(engineLayer),
+            Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
+          );
+          const materialized = yield* outputManager.materializeStore(storeRef);
+          if (materialized.filters.length > 0) {
+            yield* logInfo("Materialized filter outputs", {
+              store: storeRef.name,
+              filters: materialized.filters.map((spec) => spec.name)
+            });
+          }
+          yield* logInfo("Sync complete", { source: "jetstream", store: storeRef.name });
+          yield* writeJson(result as SyncResult);
+        })
       );
-      const materialized = yield* outputManager.materializeStore(storeRef);
-      if (materialized.filters.length > 0) {
-        yield* logInfo("Materialized filter outputs", {
-          store: storeRef.name,
-          filters: materialized.filters.map((spec) => spec.name)
-        });
-      }
-      yield* logInfo("Sync complete", { source: "jetstream", store: storeRef.name });
-      yield* writeJson(result as SyncResult);
     })
 ).pipe(
   Command.withDescription(
