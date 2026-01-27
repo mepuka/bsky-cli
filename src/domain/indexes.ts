@@ -1,10 +1,11 @@
 import { Schema } from "effect";
-import { EventId, Hashtag, PostUri, Timestamp } from "./primitives.js";
+import { EventId, Handle, Hashtag, PostUri, Timestamp } from "./primitives.js";
 
 export class PostIndexEntry extends Schema.Class<PostIndexEntry>("PostIndexEntry")({
   uri: PostUri,
   createdDate: Schema.String,
-  hashtags: Schema.Array(Hashtag)
+  hashtags: Schema.Array(Hashtag),
+  author: Schema.optional(Handle)
 }) {}
 
 export class IndexCheckpoint extends Schema.Class<IndexCheckpoint>("IndexCheckpoint")({

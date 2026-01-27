@@ -54,3 +54,8 @@ Notes:
   - `manifest.json`
 
 Use `store materialize <name>` to regenerate outputs.
+
+## Stats and summary
+
+Use `store stats <name>` for per-store counts (posts, authors, top hashtags/authors, date range, size).
+Use `store summary` for a compact overview across all stores, including derived staleness status.

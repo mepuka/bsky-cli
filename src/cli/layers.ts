@@ -29,6 +29,7 @@ import { LineageStore } from "../services/lineage-store.js";
 import { FilterCompiler } from "../services/filter-compiler.js";
 import { OutputManager } from "../services/output-manager.js";
 import { FilterLibrary } from "../services/filter-library.js";
+import { StoreStats } from "../services/store-stats.js";
 
 const appConfigLayer = AppConfigService.layer;
 const credentialLayer = CredentialStore.layer.pipe(Layer.provideMerge(appConfigLayer));
@@ -131,6 +132,15 @@ const outputManagerLayer = OutputManager.layer.pipe(
 const filterLibraryLayer = FilterLibrary.layer.pipe(
   Layer.provideMerge(appConfigLayer)
 );
+const storeStatsLayer = StoreStats.layer.pipe(
+  Layer.provideMerge(appConfigLayer),
+  Layer.provideMerge(managerLayer),
+  Layer.provideMerge(indexLayer),
+  Layer.provideMerge(lineageLayer),
+  Layer.provideMerge(derivationValidatorLayer),
+  Layer.provideMerge(eventLogLayer),
+  Layer.provideMerge(checkpointLayer)
+);
 
 export const CliLive = Layer.mergeAll(
   appConfigLayer,
@@ -139,13 +149,16 @@ export const CliLive = Layer.mergeAll(
   resourceMonitorLayer,
   managerLayer,
   indexLayer,
+  eventLogLayer,
   cleanerLayer,
   syncLayer,
+  checkpointLayer,
   viewCheckpointLayer,
   derivationEngineLayer,
   derivationValidatorLayer,
   lineageLayer,
   outputManagerLayer,
+  storeStatsLayer,
   compilerLayer,
   postParserLayer,
   filterLibraryLayer

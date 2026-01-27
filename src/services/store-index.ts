@@ -70,7 +70,8 @@ const applyUpsert = (
     const entry = PostIndexEntry.make({
       uri: event.post.uri,
       createdDate,
-      hashtags: event.post.hashtags
+      hashtags: event.post.hashtags,
+      author: event.post.author
     });
 
     yield* uriIndex.set(uriIndexKey(entry.uri), entry);
@@ -167,6 +168,8 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
       store: StoreRef,
       query: StoreQuery
     ) => Stream.Stream<Post, StoreIndexError>;
+    readonly entries: (store: StoreRef) => Stream.Stream<PostIndexEntry, StoreIndexError>;
+    readonly count: (store: StoreRef) => Effect.Effect<number, StoreIndexError>;
     readonly rebuild: (
       store: StoreRef
     ) => Effect.Effect<void, StoreIndexError>;
@@ -322,6 +325,14 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
             )
       );
 
+      const listUris = (store: StoreRef) =>
+        storeIndexes(store).urisIndex
+          .get(urisKey)
+          .pipe(
+            Effect.map(Option.getOrElse(() => [] as ReadonlyArray<PostUri>)),
+            Effect.mapError(toStoreIndexError("StoreIndex.query failed"))
+          );
+
       const query = (store: StoreRef, query: StoreQuery) => {
         const indexes = storeIndexes(store);
         const baseStream = query.range
@@ -336,14 +347,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
               ),
               Stream.mapConcat((uris) => uris)
             )
-          : Stream.fromIterableEffect(
-              indexes.urisIndex
-                .get(urisKey)
-                .pipe(
-                  Effect.map(Option.getOrElse(() => [] as ReadonlyArray<PostUri>)),
-                  Effect.mapError(toStoreIndexError("StoreIndex.query failed"))
-                )
-            );
+          : Stream.fromIterableEffect(listUris(store));
 
         const postStream = baseStream.pipe(
           Stream.mapEffect((uri) =>
@@ -356,6 +360,32 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
 
         return query.limit ? postStream.pipe(Stream.take(query.limit)) : postStream;
       };
+
+      const entries = (store: StoreRef) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const indexes = storeIndexes(store);
+            const uris = yield* listUris(store);
+            if (uris.length === 0) {
+              return Stream.empty;
+            }
+            return Stream.fromIterable(uris).pipe(
+              Stream.mapEffect((uri) =>
+                indexes.uriIndex
+                  .get(uriIndexKey(uri))
+                  .pipe(Effect.mapError(toStoreIndexError("StoreIndex.entries failed")))
+              ),
+              Stream.filterMap((entry) => entry)
+            );
+          })
+        );
+
+      const count = Effect.fn("StoreIndex.count")((store: StoreRef) =>
+        listUris(store).pipe(
+          Effect.map((uris) => uris.length),
+          Effect.mapError(toStoreIndexError("StoreIndex.count failed"))
+        )
+      );
 
       const rebuild = Effect.fn("StoreIndex.rebuild")((store: StoreRef) =>
         Effect.gen(function* () {
@@ -419,6 +449,8 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         loadCheckpoint,
         saveCheckpoint,
         query,
+        entries,
+        count,
         rebuild
       });
     })

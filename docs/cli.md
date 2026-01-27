@@ -26,6 +26,8 @@ Manage stores.
 - `store create <name> [--config-json '<StoreConfig JSON>']`
 - `store list`
 - `store show <name>`
+- `store stats <name>`
+- `store summary`
 - `store delete <name> --force`
 - `store materialize <name> [--filter <filter-name>]`
 
@@ -34,6 +36,8 @@ Examples:
 ```bash
 bun run index.ts store create my-store
 bun run index.ts store show my-store
+bun run index.ts store stats my-store
+bun run index.ts store summary
 bun run index.ts store delete my-store --force
 ```
 

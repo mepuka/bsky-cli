@@ -15,6 +15,7 @@ import { OutputManager } from "../services/output-manager.js";
 import { formatStoreConfigParseError } from "./store-errors.js";
 import { formatFilterExpr } from "../domain/filter-describe.js";
 import { CliPreferences } from "./preferences.js";
+import { StoreStats } from "../services/store-stats.js";
 
 const storeNameArg = Args.text({ name: "name" }).pipe(Args.withSchema(StoreName));
 const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
@@ -198,13 +199,35 @@ export const storeMaterialize = Command.make(
     })
 ).pipe(Command.withDescription("Materialize configured filter outputs to disk"));
 
+export const storeStats = Command.make(
+  "stats",
+  { name: storeNameArg },
+  ({ name }) =>
+    Effect.gen(function* () {
+      const stats = yield* StoreStats;
+      const storeRef = yield* loadStoreRef(name);
+      const result = yield* stats.stats(storeRef);
+      yield* writeJson(result);
+    })
+).pipe(Command.withDescription("Show summary stats for a store"));
+
+export const storeSummary = Command.make("summary", {}, () =>
+  Effect.gen(function* () {
+    const stats = yield* StoreStats;
+    const result = yield* stats.summary();
+    yield* writeJson(result);
+  })
+).pipe(Command.withDescription("Summarize all stores with counts and status"));
+
 export const storeCommand = Command.make("store", {}).pipe(
   Command.withSubcommands([
     storeCreate,
     storeList,
     storeShow,
     storeDelete,
-    storeMaterialize
+    storeMaterialize,
+    storeStats,
+    storeSummary
   ])
 );
 
