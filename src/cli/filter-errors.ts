@@ -1,0 +1,184 @@
+import { ParseResult } from "effect";
+import { formatAgentError, type AgentErrorPayload } from "./errors.js";
+
+const validFilterTags = [
+  "All",
+  "None",
+  "And",
+  "Or",
+  "Not",
+  "Author",
+  "Hashtag",
+  "Regex",
+  "DateRange",
+  "HasValidLinks",
+  "Trending",
+  "Llm"
+];
+
+const safeParseJson = (raw: string): unknown => {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+};
+
+const getTag = (raw: string): string | undefined => {
+  const parsed = safeParseJson(raw);
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+  if (!("_tag" in parsed)) {
+    return undefined;
+  }
+  const tag = (parsed as { readonly _tag?: unknown })._tag;
+  return typeof tag === "string" ? tag : undefined;
+};
+
+const hasPath = (issue: { readonly path: ReadonlyArray<unknown> }, key: string) =>
+  issue.path.length === 1 && issue.path[0] === key;
+
+const validationError = (
+  payload: Omit<AgentErrorPayload, "error">
+) => formatAgentError({ error: "FilterValidationError", ...payload });
+
+const jsonParseError = (
+  payload: Omit<AgentErrorPayload, "error">
+) => formatAgentError({ error: "FilterJsonParseError", ...payload });
+
+const issueDetails = (
+  issues: ReadonlyArray<{ readonly path: ReadonlyArray<unknown>; readonly message: string }>
+) =>
+  issues.map((issue) => {
+    const path =
+      issue.path.length > 0 ? issue.path.map((entry) => String(entry)).join(".") : "value";
+    return `${path}: ${issue.message}`;
+  });
+
+export const formatFilterParseError = (error: ParseResult.ParseError, raw: string): string => {
+  const issues = ParseResult.ArrayFormatter.formatErrorSync(error);
+  if (issues.length === 0) {
+    return validationError({
+      message: "Filter expression failed validation.",
+      details: [ParseResult.TreeFormatter.formatErrorSync(error)]
+    });
+  }
+
+  const tag = getTag(raw);
+  const received = safeParseJson(raw);
+  const receivedValue = received === undefined ? raw : received;
+
+  const jsonParseIssue = issues.find(
+    (issue) =>
+      issue._tag === "Transformation" &&
+      typeof issue.message === "string" &&
+      issue.message.startsWith("JSON Parse error")
+  );
+  if (jsonParseIssue) {
+    return jsonParseError({
+      message: "Invalid JSON in --filter-json.",
+      received: raw,
+      details: [
+        jsonParseIssue.message,
+        "Tip: wrap JSON in single quotes to avoid shell escaping issues."
+      ]
+    });
+  }
+
+  const tagMissing = issues.some((issue) => issue._tag === "Missing" && hasPath(issue, "_tag"));
+  if (tagMissing) {
+    return validationError({
+      message: "Filter expression requires a _tag field.",
+      received: receivedValue,
+      expected: { _tag: "Hashtag", tag: "#ai" },
+      fix: "Add a valid _tag such as Hashtag, Author, Regex, DateRange, or Llm.",
+      validTags: validFilterTags
+    });
+  }
+
+  const tagInvalid = issues.some((issue) => issue._tag === "Type" && hasPath(issue, "_tag"));
+  if (tagInvalid) {
+    return validationError({
+      message: `Invalid filter type${tag ? ` "${tag}"` : ""}.`,
+      received: receivedValue,
+      expected: { _tag: "Hashtag", tag: "#ai" },
+      fix: "Use a valid filter _tag.",
+      validTags: validFilterTags
+    });
+  }
+
+  if (tag === "Regex" && issues.some((issue) => hasPath(issue, "patterns"))) {
+    const hasPatternField =
+      received && typeof received === "object" && "pattern" in received;
+    return validationError({
+      message: "Regex filter requires a patterns field (array of strings).",
+      received: receivedValue,
+      expected: { _tag: "Regex", patterns: ["[Tt]rump"], flags: "i" },
+      fix: hasPatternField
+        ? "Change 'pattern' to 'patterns' and wrap the value in an array."
+        : "Add a patterns array with at least one regex pattern."
+    });
+  }
+  if (tag === "Hashtag" && issues.some((issue) => hasPath(issue, "tag"))) {
+    return validationError({
+      message: "Hashtag filter requires a tag field.",
+      received: receivedValue,
+      expected: { _tag: "Hashtag", tag: "#ai" },
+      fix: "Add tag with a leading #, e.g. #ai."
+    });
+  }
+  if (tag === "Author" && issues.some((issue) => hasPath(issue, "handle"))) {
+    return validationError({
+      message: "Author filter requires a handle field.",
+      received: receivedValue,
+      expected: { _tag: "Author", handle: "user.bsky.social" },
+      fix: "Add handle with the full Bluesky handle."
+    });
+  }
+  if (tag === "Llm" && issues.some((issue) => hasPath(issue, "minConfidence"))) {
+    return validationError({
+      message: "Llm filter requires minConfidence between 0 and 1.",
+      received: receivedValue,
+      expected: {
+        _tag: "Llm",
+        prompt: "score tech posts",
+        minConfidence: 0.8,
+        onError: { _tag: "Exclude" }
+      },
+      fix: "Set minConfidence to a number between 0 and 1."
+    });
+  }
+  if (tag === "DateRange" && issues.some((issue) => hasPath(issue, "start") || hasPath(issue, "end"))) {
+    return validationError({
+      message: "DateRange filter requires start and end ISO timestamps with timezone.",
+      received: receivedValue,
+      expected: {
+        _tag: "DateRange",
+        start: "2026-01-01T00:00:00Z",
+        end: "2026-01-31T23:59:59Z"
+      },
+      fix: "Provide ISO timestamps for start and end with timezone (e.g. Z)."
+    });
+  }
+  if (
+    (tag === "HasValidLinks" || tag === "Trending" || tag === "Llm") &&
+    issues.some((issue) => hasPath(issue, "onError"))
+  ) {
+    return validationError({
+      message: "Effectful filters require an onError policy.",
+      received: receivedValue,
+      expected: {
+        _tag: tag,
+        onError: { _tag: "Retry", maxRetries: 3, baseDelay: "1 second" }
+      },
+      fix: "Add an onError policy (Include, Exclude, or Retry with maxRetries/baseDelay)."
+    });
+  }
+
+  return validationError({
+    message: "Filter expression failed validation.",
+    received: receivedValue,
+    details: issueDetails(issues)
+  });
+};

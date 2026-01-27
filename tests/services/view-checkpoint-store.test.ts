@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Option, Schema } from "effect";
+import { FileSystem } from "@effect/platform";
+import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { ViewCheckpointStore } from "../../src/services/view-checkpoint-store.js";
 import { DerivationCheckpoint } from "../../src/domain/derivation.js";
@@ -122,5 +124,35 @@ describe("ViewCheckpointStore", () => {
     const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
 
     expect(Option.isNone(result)).toBe(true);
+  });
+
+  test("remove ignores missing checkpoint in filesystem stores", async () => {
+    const tempDir = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return yield* fs.makeTempDirectory();
+      }).pipe(Effect.provide(BunContext.layer))
+    );
+
+    const fsLayer = ViewCheckpointStore.layer.pipe(
+      Layer.provideMerge(KeyValueStore.layerFileSystem(tempDir)),
+      Layer.provideMerge(BunContext.layer)
+    );
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* ViewCheckpointStore;
+          yield* store.remove(sampleViewName, sampleSourceName);
+        }).pipe(Effect.provide(fsLayer))
+      );
+    } finally {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.remove(tempDir, { recursive: true });
+        }).pipe(Effect.provide(BunContext.layer))
+      );
+    }
   });
 });

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Chunk, Effect, Layer, Option, Schema, Stream } from "effect";
+import { FileSystem } from "@effect/platform";
+import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { StoreIndex } from "../../src/services/store-index.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
@@ -173,5 +175,36 @@ describe("StoreIndex", () => {
 
     const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
     expect(Chunk.toReadonlyArray(result)).toEqual([samplePost]);
+  });
+
+  test("clear ignores missing checkpoint files in filesystem stores", async () => {
+    const tempDir = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return yield* fs.makeTempDirectory();
+      }).pipe(Effect.provide(BunContext.layer))
+    );
+
+    const fsLayer = StoreIndex.layer.pipe(
+      Layer.provideMerge(StoreEventLog.layer),
+      Layer.provideMerge(KeyValueStore.layerFileSystem(tempDir)),
+      Layer.provideMerge(BunContext.layer)
+    );
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const storeIndex = yield* StoreIndex;
+          yield* storeIndex.clear(sampleStore);
+        }).pipe(Effect.provide(fsLayer))
+      );
+    } finally {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.remove(tempDir, { recursive: true });
+        }).pipe(Effect.provide(BunContext.layer))
+      );
+    }
   });
 });

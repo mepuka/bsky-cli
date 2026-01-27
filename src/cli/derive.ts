@@ -1,20 +1,31 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Option } from "effect";
-import { FilterExprSchema, all, filterExprSignature, isEffectfulFilter } from "../domain/filter.js";
+import { filterExprSignature, isEffectfulFilter } from "../domain/filter.js";
+import { defaultStoreConfig } from "../domain/defaults.js";
 import { StoreName } from "../domain/primitives.js";
 import { DerivationEngine } from "../services/derivation-engine.js";
+import { StoreManager } from "../services/store-manager.js";
 import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
-import { decodeJson } from "./parse.js";
+import { OutputManager } from "../services/output-manager.js";
+import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
+import { parseFilterExpr } from "./filter-input.js";
 import { writeJson } from "./output.js";
 import { storeOptions } from "./store.js";
 import { CliInputError } from "./errors.js";
+import { logInfo } from "./logging.js";
 import type { FilterEvaluationMode } from "../domain/derivation.js";
 
 const sourceArg = Args.text({ name: "source" }).pipe(Args.withSchema(StoreName));
 const targetArg = Args.text({ name: "target" }).pipe(Args.withSchema(StoreName));
 
+const filterOption = Options.text("filter").pipe(
+  Options.withDescription(filterDslDescription()),
+  Options.optional
+);
 const filterJsonOption = Options.text("filter-json").pipe(
-  Options.withDescription("Filter expression as JSON string"),
+  Options.withDescription(
+    filterJsonDescription("EventTime mode supports pure filters only.")
+  ),
   Options.optional
 );
 
@@ -32,26 +43,30 @@ const yesFlag = Options.boolean("yes").pipe(
   Options.withDescription("Confirm destructive operations")
 );
 
-const parseFilter = (filterJson: Option.Option<string>) =>
-  Option.match(filterJson, {
-    onNone: () => Effect.succeed(all()),
-    onSome: (raw) => decodeJson(FilterExprSchema, raw)
-  });
-
 const mapMode = (mode: "event-time" | "derive-time"): FilterEvaluationMode => {
   return mode === "event-time" ? "EventTime" : "DeriveTime";
 };
 
 export const deriveCommand = Command.make(
   "derive",
-  { source: sourceArg, target: targetArg, filter: filterJsonOption, mode: modeOption, reset: resetFlag, yes: yesFlag },
-  ({ source, target, filter, mode, reset, yes }) =>
+  {
+    source: sourceArg,
+    target: targetArg,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    mode: modeOption,
+    reset: resetFlag,
+    yes: yesFlag
+  },
+  ({ source, target, filter, filterJson, mode, reset, yes }) =>
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const checkpoints = yield* ViewCheckpointStore;
+      const manager = yield* StoreManager;
+      const outputManager = yield* OutputManager;
 
       // Parse filter expression
-      const filterExpr = yield* parseFilter(filter);
+      const filterExpr = yield* parseFilterExpr(filter, filterJson);
 
       // Validation 1: EventTime mode guard for effectful filters
       // Defense-in-depth: CLI validates for UX (user-friendly errors),
@@ -73,7 +88,15 @@ export const deriveCommand = Command.make(
         });
       }
 
-      // Validation 3: Filter or mode change detection (only if not resetting)
+      // Validation 3: Source and target must be different
+      if (source === target) {
+        return yield* CliInputError.make({
+          message: "Source and target stores must be different.",
+          cause: { source, target }
+        });
+      }
+
+      // Validation 4: Filter or mode change detection (only if not resetting)
       if (!reset) {
         const checkpointOption = yield* checkpoints.load(target, source);
         if (Option.isSome(checkpointOption)) {
@@ -108,13 +131,28 @@ export const deriveCommand = Command.make(
 
       // Load store references
       const sourceRef = yield* storeOptions.loadStoreRef(source);
-      const targetRef = yield* storeOptions.loadStoreRef(target);
+      const targetOption = yield* manager.getStore(target);
+      const targetRef = yield* Option.match(targetOption, {
+        onNone: () =>
+          manager.createStore(target, defaultStoreConfig).pipe(
+            Effect.tap(() => logInfo("Auto-created target store", { target }))
+          ),
+        onSome: Effect.succeed
+      });
 
       // Execute derivation
       const result = yield* engine.derive(sourceRef, targetRef, filterExpr, {
         mode: evaluationMode,
         reset
       });
+
+      const materialized = yield* outputManager.materializeStore(targetRef);
+      if (materialized.filters.length > 0) {
+        yield* logInfo("Materialized filter outputs", {
+          store: targetRef.name,
+          filters: materialized.filters.map((spec) => spec.name)
+        });
+      }
 
       // Output result with context
       yield* writeJson({

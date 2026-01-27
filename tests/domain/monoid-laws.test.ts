@@ -7,6 +7,7 @@ import {
   Hashtag,
   Handle,
   Post,
+  PostUri,
   Timestamp
 } from "../../src/domain/index.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
@@ -25,7 +26,28 @@ const runtimeLayer = FilterRuntime.layer.pipe(
 const handleArb = Arbitrary.make(Handle);
 const hashtagArb = Arbitrary.make(Hashtag);
 const timestampArb = Arbitrary.make(Timestamp);
-const postArb = Arbitrary.make(Post);
+const postUriArb = Arbitrary.make(PostUri);
+const postArb = fc
+  .record({
+    uri: postUriArb,
+    author: handleArb,
+    text: fc.string({ minLength: 1, maxLength: 200 }),
+    createdAt: timestampArb,
+    hashtags: fc.array(hashtagArb, { maxLength: 3 }),
+    mentions: fc.array(handleArb, { maxLength: 3 }),
+    links: fc.array(fc.webUrl().map((value) => new URL(value)), { maxLength: 3 })
+  })
+  .map((data) =>
+    Post.make({
+      uri: data.uri,
+      author: data.author,
+      text: data.text,
+      createdAt: data.createdAt,
+      hashtags: data.hashtags,
+      mentions: data.mentions,
+      links: data.links
+    })
+  );
 
 const { expr: pureFilterArb } = fc.letrec((tie) => ({
   expr: fc.oneof(

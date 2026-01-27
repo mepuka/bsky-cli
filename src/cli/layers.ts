@@ -27,6 +27,7 @@ import { DerivationValidator } from "../services/derivation-validator.js";
 import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
 import { LineageStore } from "../services/lineage-store.js";
 import { FilterCompiler } from "../services/filter-compiler.js";
+import { OutputManager } from "../services/output-manager.js";
 
 const appConfigLayer = AppConfigService.layer;
 const credentialLayer = CredentialStore.layer.pipe(Layer.provideMerge(appConfigLayer));
@@ -118,6 +119,13 @@ const derivationValidatorLayer = DerivationValidator.layer.pipe(
   Layer.provideMerge(eventLogLayer),
   Layer.provideMerge(managerLayer)
 );
+const outputManagerLayer = OutputManager.layer.pipe(
+  Layer.provideMerge(appConfigLayer),
+  Layer.provideMerge(managerLayer),
+  Layer.provideMerge(indexLayer),
+  Layer.provideMerge(runtimeLayer),
+  Layer.provideMerge(compilerLayer)
+);
 
 export const CliLive = Layer.mergeAll(
   appConfigLayer,
@@ -130,5 +138,6 @@ export const CliLive = Layer.mergeAll(
   viewCheckpointLayer,
   derivationEngineLayer,
   derivationValidatorLayer,
-  lineageLayer
+  lineageLayer,
+  outputManagerLayer
 );

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Option, Schema } from "effect";
+import { FileSystem } from "@effect/platform";
+import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
 import { StoreWriter } from "../../src/services/store-writer.js";
@@ -108,5 +110,35 @@ describe("StoreEventLog", () => {
 
     expect(Option.isSome(result.lastIdBefore)).toBe(true);
     expect(Option.isNone(result.lastIdAfter)).toBe(true);
+  });
+
+  test("clear ignores missing manifest in filesystem stores", async () => {
+    const tempDir = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return yield* fs.makeTempDirectory();
+      }).pipe(Effect.provide(BunContext.layer))
+    );
+
+    const fsLayer = StoreEventLog.layer.pipe(
+      Layer.provideMerge(KeyValueStore.layerFileSystem(tempDir)),
+      Layer.provideMerge(BunContext.layer)
+    );
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const eventLog = yield* StoreEventLog;
+          yield* eventLog.clear(sampleStore);
+        }).pipe(Effect.provide(fsLayer))
+      );
+    } finally {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.remove(tempDir, { recursive: true });
+        }).pipe(Effect.provide(BunContext.layer))
+      );
+    }
   });
 });

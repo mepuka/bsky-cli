@@ -4,6 +4,11 @@ import * as Semigroup from "@effect/typeclass/Semigroup";
 import { Handle, Hashtag, Timestamp } from "./primitives.js";
 import { FilterErrorPolicy } from "./policies.js";
 
+const required = <A, I, R>(schema: Schema.Schema<A, I, R>, message: string) =>
+  Schema.propertySignature(schema).annotations({
+    missingMessage: () => message
+  });
+
 export interface FilterAll {
   readonly _tag: "All";
 }
@@ -155,23 +160,23 @@ const FilterNoneSchema: Schema.Schema<FilterNone, FilterNoneEncoded, never> = Sc
   {}
 );
 const FilterAndSchema: Schema.Schema<FilterAnd, FilterAndEncoded, never> = Schema.TaggedStruct("And", {
-  left: FilterExprSchema,
-  right: FilterExprSchema
+  left: required(FilterExprSchema, "\"left\" is required"),
+  right: required(FilterExprSchema, "\"right\" is required")
 });
 const FilterOrSchema: Schema.Schema<FilterOr, FilterOrEncoded, never> = Schema.TaggedStruct("Or", {
-  left: FilterExprSchema,
-  right: FilterExprSchema
+  left: required(FilterExprSchema, "\"left\" is required"),
+  right: required(FilterExprSchema, "\"right\" is required")
 });
 const FilterNotSchema: Schema.Schema<FilterNot, FilterNotEncoded, never> = Schema.TaggedStruct("Not", {
-  expr: FilterExprSchema
+  expr: required(FilterExprSchema, "\"expr\" is required")
 });
 const FilterAuthorSchema: Schema.Schema<FilterAuthor, FilterAuthorEncoded, never> = Schema.TaggedStruct(
   "Author",
-  { handle: Handle }
+  { handle: required(Handle, "\"handle\" is required") }
 );
 const FilterHashtagSchema: Schema.Schema<FilterHashtag, FilterHashtagEncoded, never> = Schema.TaggedStruct(
   "Hashtag",
-  { tag: Hashtag }
+  { tag: required(Hashtag, "\"tag\" is required") }
 );
 const RegexPattern = Schema.NonEmptyString;
 const RegexPatternList = Schema.Array(RegexPattern).pipe(Schema.minItems(1));
@@ -192,29 +197,40 @@ const RegexPatternsSchema: Schema.Schema<
 );
 const FilterRegexSchema: Schema.Schema<FilterRegex, FilterRegexEncoded, never> = Schema.TaggedStruct(
   "Regex",
-  { patterns: RegexPatternsSchema, flags: Schema.optionalWith(Schema.String, { exact: true }) }
+  {
+    patterns: required(RegexPatternsSchema, "\"patterns\" is required"),
+    flags: Schema.optionalWith(Schema.String, { exact: true })
+  }
 );
 const FilterDateRangeSchema: Schema.Schema<
   FilterDateRange,
   FilterDateRangeEncoded,
   never
 > = Schema.TaggedStruct("DateRange", {
-  start: Timestamp,
-  end: Timestamp
+  start: required(Timestamp, "\"start\" is required"),
+  end: required(Timestamp, "\"end\" is required")
 });
 const FilterHasValidLinksSchema: Schema.Schema<
   FilterHasValidLinks,
   FilterHasValidLinksEncoded,
   never
-> = Schema.TaggedStruct("HasValidLinks", { onError: FilterErrorPolicy });
+> = Schema.TaggedStruct("HasValidLinks", {
+  onError: required(FilterErrorPolicy, "\"onError\" is required")
+});
 const FilterTrendingSchema: Schema.Schema<FilterTrending, FilterTrendingEncoded, never> = Schema.TaggedStruct(
   "Trending",
-  { tag: Hashtag, onError: FilterErrorPolicy }
+  {
+    tag: required(Hashtag, "\"tag\" is required"),
+    onError: required(FilterErrorPolicy, "\"onError\" is required")
+  }
 );
 const FilterLlmSchema: Schema.Schema<FilterLlm, FilterLlmEncoded, never> = Schema.TaggedStruct("Llm", {
-  prompt: Schema.String,
-  minConfidence: Schema.Number.pipe(Schema.finite(), Schema.between(0, 1)),
-  onError: FilterErrorPolicy
+  prompt: required(Schema.String, "\"prompt\" is required"),
+  minConfidence: required(
+    Schema.Number.pipe(Schema.finite(), Schema.between(0, 1)),
+    "\"minConfidence\" is required"
+  ),
+  onError: required(FilterErrorPolicy, "\"onError\" is required")
 });
 
 const FilterExprInternal: Schema.Schema<FilterExpr, FilterExprEncoded, never> = Schema.Union(
@@ -230,7 +246,7 @@ const FilterExprInternal: Schema.Schema<FilterExpr, FilterExprEncoded, never> = 
   FilterHasValidLinksSchema,
   FilterTrendingSchema,
   FilterLlmSchema
-);
+).annotations({ identifier: "FilterExpr" });
 
 export const all = (): FilterAll => ({ _tag: "All" });
 export const none = (): FilterNone => ({ _tag: "None" });

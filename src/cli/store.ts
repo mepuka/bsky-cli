@@ -9,9 +9,19 @@ import { decodeJson } from "./parse.js";
 import { writeJson } from "./output.js";
 import { StoreCleaner } from "../services/store-cleaner.js";
 import { LineageStore } from "../services/lineage-store.js";
+import { CliInputError } from "./errors.js";
+import { OutputManager } from "../services/output-manager.js";
 
 const storeNameArg = Args.text({ name: "name" }).pipe(Args.withSchema(StoreName));
 const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
+const forceOption = Options.boolean("force").pipe(
+  Options.withAlias("f"),
+  Options.withDescription("Confirm destructive store deletion")
+);
+const filterNameOption = Options.text("filter").pipe(
+  Options.withDescription("Filter spec name to materialize"),
+  Options.optional
+);
 
 const configJsonOption = Options.text("config-json").pipe(
   Options.withDescription("Store config as JSON string"),
@@ -81,17 +91,63 @@ export const storeShow = Command.make(
 
 export const storeDelete = Command.make(
   "delete",
-  { name: storeNameArg },
-  ({ name }) =>
+  { name: storeNameArg, force: forceOption },
+  ({ name, force }) =>
     Effect.gen(function* () {
+      if (!force) {
+        return yield* CliInputError.make({
+          message: "--force is required to delete a store.",
+          cause: { name, force }
+        });
+      }
       const cleaner = yield* StoreCleaner;
       const result = yield* cleaner.deleteStore(name);
       yield* writeJson(result);
     })
 ).pipe(Command.withDescription("Delete a store and its data"));
 
+export const storeMaterialize = Command.make(
+  "materialize",
+  { name: storeNameArg, filter: filterNameOption },
+  ({ name, filter }) =>
+    Effect.gen(function* () {
+      const manager = yield* StoreManager;
+      const outputManager = yield* OutputManager;
+      const storeRef = yield* loadStoreRef(name);
+      const configOption = yield* manager.getConfig(name);
+      const config = Option.getOrElse(configOption, () => defaultStoreConfig);
+
+      const selected = yield* Option.match(filter, {
+        onNone: () => Effect.succeed(config.filters),
+        onSome: (filterName) => {
+          const match = config.filters.find((spec) => spec.name === filterName);
+          if (!match) {
+            return Effect.fail(
+              CliInputError.make({
+                message: `Unknown filter spec: ${filterName}`,
+                cause: { store: name, filter: filterName }
+              })
+            );
+          }
+          return Effect.succeed([match]);
+        }
+      });
+      const results = yield* outputManager.materializeFilters(storeRef, selected);
+      yield* writeJson({
+        store: storeRef.name,
+        filters: results
+      });
+    })
+).pipe(Command.withDescription("Materialize configured filter outputs to disk"));
+
 export const storeCommand = Command.make("store", {}).pipe(
-  Command.withSubcommands([storeCreate, storeList, storeShow, storeDelete])
+  Command.withSubcommands([
+    storeCreate,
+    storeList,
+    storeShow,
+    storeDelete,
+    storeMaterialize
+  ])
 );
 
 export const storeOptions = { storeNameOption, loadStoreRef };

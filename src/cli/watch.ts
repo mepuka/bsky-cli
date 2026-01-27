@@ -1,20 +1,24 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Option, Stream } from "effect";
-import { FilterExprSchema, all } from "../domain/filter.js";
 import { DataSource, WatchConfig } from "../domain/sync.js";
 import { StoreName } from "../domain/primitives.js";
 import { SyncEngine } from "../services/sync-engine.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { parseInterval } from "./interval.js";
-import { decodeJson } from "./parse.js";
+import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
+import { parseFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJsonStream } from "./output.js";
 import { storeOptions } from "./store.js";
 import { logInfo, makeSyncReporter } from "./logging.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 
 const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
+const filterOption = Options.text("filter").pipe(
+  Options.withDescription(filterDslDescription()),
+  Options.optional
+);
 const filterJsonOption = Options.text("filter-json").pipe(
-  Options.withDescription("Filter expression as JSON string"),
+  Options.withDescription(filterJsonDescription()),
   Options.optional
 );
 const intervalOption = Options.text("interval").pipe(
@@ -29,28 +33,28 @@ const quietOption = Options.boolean("quiet").pipe(
   Options.withDescription("Suppress progress output")
 );
 
-const parseFilter = (filterJson: Option.Option<string>) =>
-  Option.match(filterJson, {
-    onNone: () => Effect.succeed(all()),
-    onSome: (raw) => decodeJson(FilterExprSchema, raw)
-  });
+const parseFilter = (
+  filter: Option.Option<string>,
+  filterJson: Option.Option<string>
+) => parseFilterExpr(filter, filterJson);
 
 const timelineCommand = Command.make(
   "timeline",
   {
     store: storeNameOption,
-    filter: filterJsonOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
     interval: intervalOption,
     intervalMs: intervalMsOption,
     quiet: quietOption
   },
-  ({ store, filter, interval, intervalMs, quiet }) =>
+  ({ store, filter, filterJson, interval, intervalMs, quiet }) =>
     Effect.gen(function* () {
       const sync = yield* SyncEngine;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
-      const expr = yield* parseFilter(filter);
+      const expr = yield* parseFilter(filter, filterJson);
       const parsedInterval = yield* parseInterval(interval, intervalMs);
       yield* logInfo("Starting watch", { source: "timeline", store: storeRef.name });
       const stream = sync
@@ -77,18 +81,19 @@ const feedCommand = Command.make(
   {
     uri: feedUriArg,
     store: storeNameOption,
-    filter: filterJsonOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
     interval: intervalOption,
     intervalMs: intervalMsOption,
     quiet: quietOption
   },
-  ({ uri, store, filter, interval, intervalMs, quiet }) =>
+  ({ uri, store, filter, filterJson, interval, intervalMs, quiet }) =>
     Effect.gen(function* () {
       const sync = yield* SyncEngine;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
-      const expr = yield* parseFilter(filter);
+      const expr = yield* parseFilter(filter, filterJson);
       const parsedInterval = yield* parseInterval(interval, intervalMs);
       yield* logInfo("Starting watch", { source: "feed", uri, store: storeRef.name });
       const stream = sync
@@ -112,18 +117,19 @@ const notificationsCommand = Command.make(
   "notifications",
   {
     store: storeNameOption,
-    filter: filterJsonOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
     interval: intervalOption,
     intervalMs: intervalMsOption,
     quiet: quietOption
   },
-  ({ store, filter, interval, intervalMs, quiet }) =>
+  ({ store, filter, filterJson, interval, intervalMs, quiet }) =>
     Effect.gen(function* () {
       const sync = yield* SyncEngine;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
-      const expr = yield* parseFilter(filter);
+      const expr = yield* parseFilter(filter, filterJson);
       const parsedInterval = yield* parseInterval(interval, intervalMs);
       yield* logInfo("Starting watch", { source: "notifications", store: storeRef.name });
       const stream = sync

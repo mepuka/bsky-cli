@@ -1,4 +1,5 @@
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
+import type { PlatformError } from "@effect/platform/Error";
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { StoreIndexError } from "../domain/errors.js";
 import { PostEventRecord } from "../domain/events.js";
@@ -258,6 +259,14 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
       const clear = Effect.fn("StoreIndex.clear")((store: StoreRef) =>
         Effect.gen(function* () {
           const indexes = storeIndexes(store);
+          const removeIfExists = (effect: Effect.Effect<void, PlatformError>) =>
+            effect.pipe(
+              Effect.catchAll((error) =>
+                error._tag === "SystemError" && error.reason === "NotFound"
+                  ? Effect.void
+                  : Effect.fail(error)
+              )
+            );
           const urisOption = yield* indexes.urisIndex
             .get(urisKey)
             .pipe(Effect.mapError(toStoreIndexError("StoreIndex.clear failed")));
@@ -284,14 +293,14 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
                       { discard: true }
                     );
                   }
-                  yield* indexes.uriIndex.remove(uriIndexKey(uri));
-                  yield* indexes.postStore.remove(postsByUriKey(uri));
+                  yield* removeIfExists(indexes.uriIndex.remove(uriIndexKey(uri)));
+                  yield* removeIfExists(indexes.postStore.remove(postsByUriKey(uri)));
                 }),
               { discard: true }
             );
+            yield* removeIfExists(indexes.urisIndex.remove(urisKey));
           }
-          yield* indexes.urisIndex.remove(urisKey);
-          yield* indexes.checkpoints.remove(checkpointKey(indexName));
+          yield* removeIfExists(indexes.checkpoints.remove(checkpointKey(indexName)));
         }).pipe(Effect.mapError(toStoreIndexError("StoreIndex.clear failed")))
       );
 

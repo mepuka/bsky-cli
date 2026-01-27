@@ -1,4 +1,5 @@
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
+import type { PlatformError } from "@effect/platform/Error";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { DerivationCheckpoint } from "../domain/derivation.js";
 import { StoreName, StorePath } from "../domain/primitives.js";
@@ -61,7 +62,14 @@ export class ViewCheckpointStore extends Context.Tag("@skygent/ViewCheckpointSto
         (viewName: StoreName, sourceName: StoreName) =>
           checkpoints
             .remove(checkpointKey(viewName, sourceName))
-            .pipe(Effect.mapError(toStoreIoError(viewName, sourceName)))
+            .pipe(
+              Effect.catchAll((error: PlatformError) =>
+                error._tag === "SystemError" && error.reason === "NotFound"
+                  ? Effect.void
+                  : Effect.fail(error)
+              ),
+              Effect.mapError(toStoreIoError(viewName, sourceName))
+            )
       );
 
       return ViewCheckpointStore.of({ load, save, remove });

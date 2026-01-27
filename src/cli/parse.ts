@@ -17,14 +17,21 @@ const formatParseError = (error: ParseResult.ParseError) => {
     .join("\n");
 };
 
+type DecodeJsonOptions = {
+  readonly formatter?: (error: ParseResult.ParseError, raw: string) => string;
+};
+
 export const decodeJson = <A, I, R>(
   schema: Schema.Schema<A, I, R>,
-  input: string
+  input: string,
+  options?: DecodeJsonOptions
 ) =>
   Schema.decodeUnknown(Schema.parseJson(schema))(input).pipe(
     Effect.mapError((error) => {
       const message = ParseResult.isParseError(error)
-        ? formatParseError(error)
+        ? options?.formatter
+          ? options.formatter(error, input)
+          : formatParseError(error)
         : String(error);
       return CliJsonError.make({ message, cause: error });
     })

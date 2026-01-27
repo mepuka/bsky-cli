@@ -1,4 +1,5 @@
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
+import type { PlatformError } from "@effect/platform/Error";
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { StoreIoError } from "../domain/errors.js";
 import { PostEventRecord } from "../domain/events.js";
@@ -60,18 +61,26 @@ export class StoreEventLog extends Context.Tag("@skygent/StoreEventLog")<
           const storeManifest = KeyValueStore.prefix(manifest, prefix);
           const storeEvents = KeyValueStore.prefix(events, prefix);
           const storeLastEventId = KeyValueStore.prefix(lastEventId, prefix);
+          const removeIfExists = (effect: Effect.Effect<void, PlatformError>) =>
+            effect.pipe(
+              Effect.catchAll((error) =>
+                error._tag === "SystemError" && error.reason === "NotFound"
+                  ? Effect.void
+                  : Effect.fail(error)
+              )
+            );
           const keysOption = yield* storeManifest
             .get(manifestKey)
             .pipe(Effect.mapError(toStoreIoError(store.root)));
           if (Option.isSome(keysOption)) {
             yield* Effect.forEach(
               keysOption.value,
-              (key) => storeEvents.remove(key),
+              (key) => removeIfExists(storeEvents.remove(key)),
               { discard: true }
             );
           }
-          yield* storeManifest.remove(manifestKey);
-          yield* storeLastEventId.remove(lastEventIdKey);
+          yield* removeIfExists(storeManifest.remove(manifestKey));
+          yield* removeIfExists(storeLastEventId.remove(lastEventIdKey));
         }).pipe(Effect.mapError(toStoreIoError(store.root)))
       );
 

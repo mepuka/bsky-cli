@@ -126,6 +126,26 @@ describe("DerivationEngine", () => {
     }).pipe(Effect.provide(TestLayer), Effect.runPromise)
   );
 
+  test("rejects when source and target are the same store", () =>
+    Effect.gen(function* () {
+      const engine = yield* DerivationEngine;
+
+      const result = yield* engine.derive(sourceRef, sourceRef, all(), {
+        mode: "EventTime",
+        reset: false
+      }).pipe(Effect.either);
+
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") {
+        const error = result.left;
+        expect(error._tag).toBe("DerivationError");
+        if (error._tag === "DerivationError") {
+          expect(error.reason).toContain("Source and target stores must be different");
+        }
+      }
+    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+  );
+
   test("EventTime mode accepts pure filters", () =>
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
@@ -343,6 +363,67 @@ describe("DerivationEngine", () => {
       expect(hasPost1).toBe(true);
       expect(hasPost2).toBe(true);
       expect(hasPost3).toBe(true);
+    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+  );
+
+  test("rejects filter changes without reset", () =>
+    Effect.gen(function* () {
+      const engine = yield* DerivationEngine;
+      const writer = yield* StoreWriter;
+      const index = yield* StoreIndex;
+
+      const post = createTestPost("at://test/post1", "Hello #one", ["#one"]);
+      const event = PostUpsert.make({ post, meta: createTestMeta() });
+      const record = yield* writer.append(sourceRef, event);
+      yield* index.apply(sourceRef, record);
+
+      yield* engine.derive(sourceRef, targetRef, all(), {
+        mode: "EventTime",
+        reset: false
+      });
+
+      const result = yield* engine.derive(
+        sourceRef,
+        targetRef,
+        { _tag: "Hashtag", tag: "#two" },
+        { mode: "EventTime", reset: false }
+      ).pipe(Effect.either);
+
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") {
+        const error = result.left;
+        expect(error._tag).toBe("DerivationError");
+        if (error._tag === "DerivationError") {
+          expect(error.reason).toContain("Derivation settings have changed");
+        }
+      }
+    }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+  );
+
+  test("rejects non-empty target without checkpoint", () =>
+    Effect.gen(function* () {
+      const engine = yield* DerivationEngine;
+      const writer = yield* StoreWriter;
+      const index = yield* StoreIndex;
+
+      const targetPost = createTestPost("at://test/target1", "Existing");
+      const targetEvent = PostUpsert.make({ post: targetPost, meta: createTestMeta() });
+      const targetRecord = yield* writer.append(targetRef, targetEvent);
+      yield* index.apply(targetRef, targetRecord);
+
+      const result = yield* engine.derive(sourceRef, targetRef, all(), {
+        mode: "EventTime",
+        reset: false
+      }).pipe(Effect.either);
+
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") {
+        const error = result.left;
+        expect(error._tag).toBe("DerivationError");
+        if (error._tag === "DerivationError") {
+          expect(error.reason).toContain("Target store has existing data");
+        }
+      }
     }).pipe(Effect.provide(TestLayer), Effect.runPromise)
   );
 

@@ -55,6 +55,13 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
       const derive = Effect.fn("DerivationEngine.derive")(
         (sourceRef, targetRef, filterExpr, options) =>
           Effect.gen(function* () {
+            if (sourceRef.name === targetRef.name) {
+              return yield* DerivationError.make({
+                reason: "Source and target stores must be different.",
+                sourceStore: sourceRef.name,
+                targetStore: targetRef.name
+              });
+            }
             // EventTime mode guard: reject effectful filters
             // Defense-in-depth: CLI validates for UX (user-friendly errors),
             // service validates for safety (in case called from other contexts)
@@ -90,6 +97,30 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
               ? Option.none()
               : yield* checkpoints.load(targetRef.name, sourceRef.name);
             const filterHash = filterExprSignature(filterExpr);
+
+            if (!options.reset && Option.isNone(checkpointOption)) {
+              const lastTargetId = yield* eventLog.getLastEventId(targetRef);
+              if (Option.isSome(lastTargetId)) {
+                return yield* DerivationError.make({
+                  reason:
+                    "Target store has existing data but no derivation checkpoint. Use --reset to rebuild or choose a new target store.",
+                  sourceStore: sourceRef.name,
+                  targetStore: targetRef.name
+                });
+              }
+            }
+
+            if (!options.reset && Option.isSome(checkpointOption)) {
+              const checkpoint = checkpointOption.value;
+              if (checkpoint.filterHash !== filterHash || checkpoint.evaluationMode !== options.mode) {
+                return yield* DerivationError.make({
+                  reason:
+                    "Derivation settings have changed since last run. Use --reset to rebuild or choose a new target store.",
+                  sourceStore: sourceRef.name,
+                  targetStore: targetRef.name
+                });
+              }
+            }
 
             // Check if checkpoint is valid (matching filter and mode)
             // Schema.optional makes lastSourceEventId EventId | undefined
