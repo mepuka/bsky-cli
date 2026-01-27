@@ -41,6 +41,13 @@ const durationOption = Options.text("duration").pipe(
   Options.withDescription("Stop after a duration (e.g. \"2 minutes\")"),
   Options.optional
 );
+const strictOption = Options.boolean("strict").pipe(
+  Options.withDescription("Stop on first error and do not advance the checkpoint")
+);
+const maxErrorsOption = Options.integer("max-errors").pipe(
+  Options.withDescription("Stop after exceeding N errors (default: unlimited)"),
+  Options.optional
+);
 
 const parseFilter = (
   filter: Option.Option<string>,
@@ -84,6 +91,20 @@ const parseDuration = (value: Option.Option<string>) =>
             : Effect.succeed(Option.some(duration))
         )
       )
+  });
+
+const parseMaxErrors = (maxErrors: Option.Option<number>) =>
+  Option.match(maxErrors, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (value) =>
+      value < 0
+        ? Effect.fail(
+            CliInputError.make({
+              message: "max-errors must be a non-negative integer.",
+              cause: value
+            })
+          )
+        : Effect.succeed(Option.some(value))
   });
 
 const timelineCommand = Command.make(
@@ -220,7 +241,9 @@ const jetstreamCommand = Command.make(
     compress: jetstreamOptions.compress,
     maxMessageSize: jetstreamOptions.maxMessageSize,
     limit: limitOption,
-    duration: durationOption
+    duration: durationOption,
+    strict: strictOption,
+    maxErrors: maxErrorsOption
   },
   ({
     store,
@@ -234,7 +257,9 @@ const jetstreamCommand = Command.make(
     compress,
     maxMessageSize,
     limit,
-    duration
+    duration,
+    strict,
+    maxErrors
   }) =>
     Effect.gen(function* () {
       const monitor = yield* ResourceMonitor;
@@ -257,6 +282,7 @@ const jetstreamCommand = Command.make(
       );
       const parsedLimit = yield* parseLimit(limit);
       const parsedDuration = yield* parseDuration(duration);
+      const parsedMaxErrors = yield* parseMaxErrors(maxErrors);
       if (Option.isNone(parsedLimit) && Option.isNone(parsedDuration)) {
         return yield* CliInputError.make({
           message:
@@ -275,6 +301,7 @@ const jetstreamCommand = Command.make(
         const engine = yield* JetstreamSyncEngine;
         const limitValue = Option.getOrUndefined(parsedLimit);
         const durationValue = Option.getOrUndefined(parsedDuration);
+        const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
         return yield* engine.sync({
           source: selection.source,
           store: storeRef,
@@ -282,7 +309,9 @@ const jetstreamCommand = Command.make(
           command: "sync jetstream",
           ...(limitValue !== undefined ? { limit: limitValue } : {}),
           ...(durationValue !== undefined ? { duration: durationValue } : {}),
-          ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {})
+          ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {}),
+          ...(strict ? { strict } : {}),
+          ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
         });
       }).pipe(
         Effect.provide(engineLayer),

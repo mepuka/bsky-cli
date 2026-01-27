@@ -16,6 +16,7 @@ import { logInfo, makeSyncReporter } from "./logging.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
+import { CliInputError } from "./errors.js";
 
 const storeNameOption = Options.text("store").pipe(
   Options.withSchema(StoreName),
@@ -40,11 +41,32 @@ const intervalMsOption = Options.integer("interval-ms").pipe(
 const quietOption = Options.boolean("quiet").pipe(
   Options.withDescription("Suppress progress output")
 );
+const strictOption = Options.boolean("strict").pipe(
+  Options.withDescription("Stop on first error and do not advance the checkpoint")
+);
+const maxErrorsOption = Options.integer("max-errors").pipe(
+  Options.withDescription("Stop after exceeding N errors (default: unlimited)"),
+  Options.optional
+);
 
 const parseFilter = (
   filter: Option.Option<string>,
   filterJson: Option.Option<string>
 ) => parseFilterExpr(filter, filterJson);
+
+const parseMaxErrors = (maxErrors: Option.Option<number>) =>
+  Option.match(maxErrors, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (value) =>
+      value < 0
+        ? Effect.fail(
+            CliInputError.make({
+              message: "max-errors must be a non-negative integer.",
+              cause: value
+            })
+          )
+        : Effect.succeed(Option.some(value))
+  });
 
 const timelineCommand = Command.make(
   "timeline",
@@ -200,7 +222,9 @@ const jetstreamCommand = Command.make(
     dids: jetstreamOptions.dids,
     cursor: jetstreamOptions.cursor,
     compress: jetstreamOptions.compress,
-    maxMessageSize: jetstreamOptions.maxMessageSize
+    maxMessageSize: jetstreamOptions.maxMessageSize,
+    strict: strictOption,
+    maxErrors: maxErrorsOption
   },
   ({
     store,
@@ -212,7 +236,9 @@ const jetstreamCommand = Command.make(
     dids,
     cursor,
     compress,
-    maxMessageSize
+    maxMessageSize,
+    strict,
+    maxErrors
   }) =>
     Effect.gen(function* () {
       const monitor = yield* ResourceMonitor;
@@ -232,18 +258,22 @@ const jetstreamCommand = Command.make(
         storeRef,
         filterHash
       );
+      const parsedMaxErrors = yield* parseMaxErrors(maxErrors);
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
       yield* logInfo("Starting watch", { source: "jetstream", store: storeRef.name });
       const stream = yield* Effect.gen(function* () {
         const engine = yield* JetstreamSyncEngine;
+        const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
         return engine.watch({
           source: selection.source,
           store: storeRef,
           filter: expr,
           command: "watch jetstream",
-          ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {})
+          ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {}),
+          ...(strict ? { strict } : {}),
+          ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
         });
       }).pipe(Effect.provide(engineLayer));
       const outputStream = stream.pipe(

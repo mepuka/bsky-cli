@@ -15,7 +15,7 @@ export const jetstreamOptions = {
   ),
   collections: Options.text("collections").pipe(
     Options.withDescription(
-      "Comma-separated collections to subscribe (default: app.bsky.feed.post)"
+      "Comma-separated collections to subscribe (only app.bsky.feed.post supported)"
     ),
     Options.optional
   ),
@@ -91,6 +91,17 @@ export const buildJetstreamSelection = (
       onSome: parseCsv
     });
     const maxMessageSize = Option.getOrUndefined(options.maxMessageSize);
+
+    const unsupportedCollections = collections.filter(
+      (collection) => collection !== DEFAULT_COLLECTIONS[0]
+    );
+    if (unsupportedCollections.length > 0) {
+      return yield* CliInputError.make({
+        message:
+          "Only app.bsky.feed.post is supported for Jetstream collections.",
+        cause: unsupportedCollections
+      });
+    }
 
     if (typeof maxMessageSize === "number" && maxMessageSize <= 0) {
       return yield* CliInputError.make({

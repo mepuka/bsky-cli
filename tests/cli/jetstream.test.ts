@@ -109,4 +109,73 @@ describe("buildJetstreamSelection", () => {
     expect(selection.cursor).toBe("333");
     expect(selection.config.cursor).toBe(333);
   });
+
+  test("fails when collections include unsupported values", async () => {
+    const program = buildJetstreamSelection(
+      {
+        endpoint: Option.some("wss://example"),
+        collections: Option.some("app.bsky.feed.post,app.bsky.feed.like"),
+        dids: Option.none(),
+        cursor: Option.none(),
+        compress: false,
+        maxMessageSize: Option.none()
+      },
+      sampleStore,
+      filterHash
+    );
+
+    const result = await Effect.runPromise(
+      program.pipe(Effect.either, Effect.provide(layer))
+    );
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left._tag).toBe("CliInputError");
+    }
+  });
+
+  test("rejects invalid cursor values", async () => {
+    const program = buildJetstreamSelection(
+      {
+        endpoint: Option.some("wss://example"),
+        collections: Option.some("app.bsky.feed.post"),
+        dids: Option.none(),
+        cursor: Option.some("-1"),
+        compress: false,
+        maxMessageSize: Option.none()
+      },
+      sampleStore,
+      filterHash
+    );
+
+    const result = await Effect.runPromise(
+      program.pipe(Effect.either, Effect.provide(layer))
+    );
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left._tag).toBe("CliInputError");
+    }
+  });
+
+  test("rejects invalid max-message-size", async () => {
+    const program = buildJetstreamSelection(
+      {
+        endpoint: Option.some("wss://example"),
+        collections: Option.some("app.bsky.feed.post"),
+        dids: Option.none(),
+        cursor: Option.none(),
+        compress: false,
+        maxMessageSize: Option.some(0)
+      },
+      sampleStore,
+      filterHash
+    );
+
+    const result = await Effect.runPromise(
+      program.pipe(Effect.either, Effect.provide(layer))
+    );
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left._tag).toBe("CliInputError");
+    }
+  });
 });

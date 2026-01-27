@@ -38,11 +38,24 @@ export type JetstreamSyncConfig = {
   readonly limit?: number;
   readonly duration?: Duration.Duration;
   readonly cursor?: string;
+  readonly strict?: boolean;
+  readonly maxErrors?: number;
 };
 
 type SyncOutcome =
   | { readonly _tag: "Stored"; readonly eventId: EventId }
   | { readonly _tag: "Skipped" }
+  | { readonly _tag: "Error"; readonly error: SyncError };
+
+type PreparedOutcome =
+  | {
+      readonly _tag: "Upsert";
+      readonly post: Post;
+      readonly llm: ReadonlyArray<LlmDecisionMeta>;
+      readonly checkExists: boolean;
+    }
+  | { readonly _tag: "Delete"; readonly uri: PostUri; readonly cid: PostCid | undefined }
+  | { readonly _tag: "Skip" }
   | { readonly _tag: "Error"; readonly error: SyncError };
 
 type SyncProgressState = {
@@ -155,21 +168,12 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
         target: StoreRef,
         command: string,
         filterHash: string,
-        uri: string,
-        cid: string | undefined
+        uri: PostUri,
+        cid: PostCid | undefined
       ) =>
         Effect.gen(function* () {
-          const parsedUri = yield* Schema.decodeUnknown(PostUri)(uri).pipe(
-            Effect.mapError(toSyncError("parse", "Invalid post uri"))
-          );
-          const parsedCid =
-            typeof cid === "string"
-              ? yield* Schema.decodeUnknown(PostCid)(cid).pipe(
-                  Effect.mapError(toSyncError("parse", "Invalid post cid"))
-                )
-              : undefined;
           const meta = yield* makeMeta(command, filterHash, []);
-          const event = PostDelete.make({ uri: parsedUri, cid: parsedCid, meta });
+          const event = PostDelete.make({ uri, cid, meta });
           const record = yield* writer
             .append(target, event)
             .pipe(Effect.mapError(toSyncError("store", "Failed to append event")));
@@ -178,107 +182,6 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
             .pipe(Effect.mapError(toSyncError("store", "Failed to update index")));
           return record.id;
         });
-
-      const processPost = (
-        target: StoreRef,
-        command: string,
-        filterHash: string,
-        predicate: (post: Post) => Effect.Effect<
-          { readonly ok: boolean; readonly llm: ReadonlyArray<LlmDecisionMeta> },
-          unknown
-        >,
-        post: Post,
-        checkExists: boolean
-      ): Effect.Effect<SyncOutcome, SyncError> =>
-        (checkExists
-          ? index.hasUri(target, post.uri).pipe(
-              Effect.mapError(toSyncError("store", "Failed to check store index"))
-            )
-          : Effect.succeed(false)
-        ).pipe(
-          Effect.flatMap((exists) =>
-            exists
-              ? Effect.succeed(skippedOutcome)
-              : predicate(post).pipe(
-                  Effect.mapError(toSyncError("filter", "Filter evaluation failed")),
-                  Effect.flatMap(({ ok, llm }) =>
-                    ok
-                      ? storePost(target, command, filterHash, post, llm).pipe(
-                          Effect.map(
-                            (eventId): SyncOutcome => ({ _tag: "Stored", eventId })
-                          )
-                        )
-                      : Effect.succeed(skippedOutcome)
-                  )
-                )
-          ),
-          Effect.catchAll((error) =>
-            error.stage === "store"
-              ? Effect.fail(error)
-              : Effect.succeed({ _tag: "Error", error } as const)
-          )
-        );
-
-      const processCommit = (
-        target: StoreRef,
-        command: string,
-        filterHash: string,
-        predicate: (post: Post) => Effect.Effect<
-          { readonly ok: boolean; readonly llm: ReadonlyArray<LlmDecisionMeta> },
-          unknown
-        >,
-        message: CommitMessage
-      ): Effect.Effect<SyncOutcome, SyncError> =>
-        Effect.gen(function* () {
-          const uri = postUriFor(message);
-          switch (message._tag) {
-            case "CommitCreate":
-            case "CommitUpdate": {
-              const handle = yield* profiles
-                .handleForDid(message.did)
-                .pipe(
-                  Effect.mapError(
-                    toSyncError("source", "Failed to resolve author profile")
-                  )
-                );
-              const raw = {
-                uri,
-                cid: message.commit.cid,
-                author: handle,
-                authorDid: message.did,
-                record: message.commit.record,
-                indexedAt: indexedAtFor(message)
-              };
-              const post = yield* parser
-                .parsePost(raw)
-                .pipe(Effect.mapError(toSyncError("parse", "Failed to parse post")));
-              return yield* processPost(
-                target,
-                command,
-                filterHash,
-                predicate,
-                post,
-                message._tag === "CommitCreate"
-              );
-            }
-            case "CommitDelete": {
-              const eventId = yield* storeDelete(
-                target,
-                command,
-                filterHash,
-                uri,
-                undefined
-              );
-              return { _tag: "Stored", eventId } as const;
-            }
-          }
-        }).pipe(
-          Effect.catchAll((error) =>
-            error.stage === "store"
-              ? Effect.fail(error)
-              : Effect.succeed({ _tag: "Error", error } as const)
-          )
-        );
 
       const processStream = Effect.fn("JetstreamSyncEngine.processStream")(
         (
@@ -292,6 +195,8 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
           Effect.gen(function* () {
             const filterHash = filterExprSignature(config.filter);
             const startTime = Date.now();
+            const strict = config.strict === true;
+            const maxErrors = config.maxErrors;
             const initialLastEventId = Option.flatMap(activeCheckpoint, (value) =>
               Option.fromNullable(value.lastEventId)
             );
@@ -325,6 +230,127 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
               ? limited.pipe(Stream.interruptAfter(config.duration))
               : limited;
 
+            const prepareCommit = (
+              message: CommitMessage
+            ): Effect.Effect<PreparedOutcome, SyncError> =>
+              Effect.gen(function* () {
+                const uri = postUriFor(message);
+                switch (message._tag) {
+                  case "CommitCreate":
+                  case "CommitUpdate": {
+                    const handle = yield* profiles
+                      .handleForDid(message.did)
+                      .pipe(
+                        Effect.mapError(
+                          toSyncError("source", "Failed to resolve author profile")
+                        )
+                      );
+                    const raw = {
+                      uri,
+                      cid: message.commit.cid,
+                      author: handle,
+                      authorDid: message.did,
+                      record: message.commit.record,
+                      indexedAt: indexedAtFor(message)
+                    };
+                    const post = yield* parser
+                      .parsePost(raw)
+                      .pipe(
+                        Effect.mapError(
+                          toSyncError("parse", "Failed to parse post")
+                        )
+                      );
+                    const evaluated = yield* predicate(post).pipe(
+                      Effect.mapError(
+                        toSyncError("filter", "Filter evaluation failed")
+                      )
+                    );
+                    return evaluated.ok
+                      ? ({
+                          _tag: "Upsert",
+                          post,
+                          llm: evaluated.llm,
+                          checkExists: message._tag === "CommitCreate"
+                        } as const)
+                      : ({ _tag: "Skip" } as const);
+                  }
+                  case "CommitDelete": {
+                    const parsedUri = yield* Schema.decodeUnknown(PostUri)(uri).pipe(
+                      Effect.mapError(toSyncError("parse", "Invalid post uri"))
+                    );
+                    const parsedCid =
+                      "cid" in message.commit &&
+                      typeof message.commit.cid === "string"
+                        ? yield* Schema.decodeUnknown(PostCid)(message.commit.cid).pipe(
+                            Effect.mapError(
+                              toSyncError("parse", "Invalid post cid")
+                            )
+                          )
+                        : undefined;
+                    return {
+                      _tag: "Delete",
+                      uri: parsedUri,
+                      cid: parsedCid
+                    } as const;
+                  }
+                }
+              }).pipe(
+                Effect.catchAll((error) =>
+                  Effect.succeed({ _tag: "Error", error } as const)
+                )
+              );
+
+            const applyPrepared = (prepared: PreparedOutcome) => {
+              switch (prepared._tag) {
+                case "Skip":
+                  return Effect.succeed(skippedOutcome);
+                case "Error":
+                  return strict
+                    ? Effect.fail(prepared.error)
+                    : Effect.succeed({ _tag: "Error", error: prepared.error } as const);
+                case "Delete":
+                  return storeDelete(
+                    config.store,
+                    config.command,
+                    filterHash,
+                    prepared.uri,
+                    prepared.cid
+                  ).pipe(
+                    Effect.map(
+                      (eventId): SyncOutcome => ({ _tag: "Stored", eventId })
+                    )
+                  );
+                case "Upsert":
+                  return (prepared.checkExists
+                    ? index.hasUri(config.store, prepared.post.uri).pipe(
+                        Effect.mapError(
+                          toSyncError("store", "Failed to check store index")
+                        )
+                      )
+                    : Effect.succeed(false)
+                  ).pipe(
+                    Effect.flatMap((exists) =>
+                      exists
+                        ? Effect.succeed(skippedOutcome)
+                        : storePost(
+                            config.store,
+                            config.command,
+                            filterHash,
+                            prepared.post,
+                            prepared.llm
+                          ).pipe(
+                            Effect.map(
+                              (eventId): SyncOutcome => ({
+                                _tag: "Stored",
+                                eventId
+                              })
+                            )
+                          )
+                    )
+                  );
+              }
+            };
+
             const processBatch = (batch: Chunk.Chunk<CommitMessage>) =>
               Effect.gen(function* () {
                 const messages = Chunk.toReadonlyArray(batch);
@@ -332,18 +358,12 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                   return SyncResultMonoid.empty;
                 }
 
-                const outcomes = yield* Effect.forEach(
-                  messages,
-                  (message) =>
-                    processCommit(
-                      config.store,
-                      config.command,
-                      filterHash,
-                      predicate,
-                      message
-                    ),
-                  { concurrency: "unbounded", batching: true }
-                ).pipe(Effect.withRequestBatching(true));
+                const prepared = yield* Effect.forEach(messages, prepareCommit, {
+                  concurrency: "unbounded",
+                  batching: true
+                }).pipe(Effect.withRequestBatching(true));
+
+                const outcomes = yield* Effect.forEach(prepared, applyPrepared);
 
                 let added = 0;
                 let skipped = 0;
@@ -402,6 +422,16 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
 
                 const state = update.nextState;
                 const shouldReport = update.shouldReport;
+                const exceedsMaxErrors =
+                  typeof maxErrors === "number" && state.errors > maxErrors;
+                if (exceedsMaxErrors) {
+                  const lastError = errors[errors.length - 1];
+                  return yield* SyncError.make({
+                    stage: lastError?.stage ?? "source",
+                    message: `Stopped after exceeding max errors (${maxErrors}).`,
+                    cause: lastError ?? { maxErrors }
+                  });
+                }
                 if (shouldReport) {
                   const elapsedMs = now - startTime;
                   const rate =

@@ -14,7 +14,7 @@ import { SyncReporter } from "../../src/services/sync-reporter.js";
 import { TrendingTopics } from "../../src/services/trending-topics.js";
 import { JetstreamSyncEngine } from "../../src/services/jetstream-sync.js";
 import { ProfileResolver } from "../../src/services/profile-resolver.js";
-import { all, filterExprSignature } from "../../src/domain/filter.js";
+import { all, filterExprSignature, none } from "../../src/domain/filter.js";
 import { Handle, Timestamp } from "../../src/domain/primitives.js";
 import { StoreRef } from "../../src/domain/store.js";
 import { DataSource } from "../../src/domain/sync.js";
@@ -75,14 +75,50 @@ const commitDelete = Schema.decodeUnknownSync(JetstreamMessage.CommitDelete)({
   }
 });
 
-const jetstreamService = {
-  [Jetstream.TypeId]: Jetstream.TypeId,
-  stream: Stream.fromIterable([commitCreate, commitUpdate, commitDelete]),
-  send: () => Effect.void,
-  updateOptions: () => Effect.void
-};
+const commitCreateDuplicate = Schema.decodeUnknownSync(JetstreamMessage.CommitCreate)({
+  _tag: "CommitCreate",
+  did: "did:plc:alice",
+  time_us: 2_000_000,
+  kind: "commit",
+  commit: {
+    rev: "2",
+    operation: "create",
+    collection: "app.bsky.feed.post",
+    rkey: "1",
+    record: {
+      $type: "app.bsky.feed.post",
+      text: "Hello #jetstream again",
+      createdAt: "2026-01-01T00:00:00.000Z"
+    }
+  }
+});
 
-const jetstreamLayer = Layer.succeed(Jetstream.Jetstream, jetstreamService);
+const commitInvalid = Schema.decodeUnknownSync(JetstreamMessage.CommitCreate)({
+  _tag: "CommitCreate",
+  did: "did:plc:alice",
+  time_us: 4_000_000,
+  kind: "commit",
+  commit: {
+    rev: "4",
+    operation: "create",
+    collection: "app.bsky.feed.post",
+    rkey: "2",
+    record: {
+      $type: "app.bsky.feed.post",
+      text: 123,
+      createdAt: "not-a-date"
+    }
+  }
+});
+
+const makeJetstreamLayer = (stream: Stream.Stream<JetstreamMessage.JetstreamMessage>) =>
+  Layer.succeed(Jetstream.Jetstream, {
+    [Jetstream.TypeId]: Jetstream.TypeId,
+    stream,
+    send: () => Effect.void,
+    updateOptions: () => Effect.void
+  });
+
 const profileLayer = Layer.succeed(
   ProfileResolver,
   ProfileResolver.of({
@@ -96,18 +132,19 @@ const filterRuntimeLayer = FilterRuntime.layer.pipe(
   Layer.provideMerge(TrendingTopics.testLayer)
 );
 
-const testLayer = JetstreamSyncEngine.layer.pipe(
-  Layer.provideMerge(jetstreamLayer),
-  Layer.provideMerge(profileLayer),
-  Layer.provideMerge(PostParser.layer),
-  Layer.provideMerge(filterRuntimeLayer),
-  Layer.provideMerge(StoreWriter.layer),
-  Layer.provideMerge(StoreIndex.layer),
-  Layer.provideMerge(StoreEventLog.layer),
-  Layer.provideMerge(SyncCheckpointStore.layer),
-  Layer.provideMerge(SyncReporter.layer),
-  Layer.provideMerge(KeyValueStore.layerMemory)
-);
+const makeTestLayer = (stream: Stream.Stream<JetstreamMessage.JetstreamMessage>) =>
+  JetstreamSyncEngine.layer.pipe(
+    Layer.provideMerge(makeJetstreamLayer(stream)),
+    Layer.provideMerge(profileLayer),
+    Layer.provideMerge(PostParser.layer),
+    Layer.provideMerge(filterRuntimeLayer),
+    Layer.provideMerge(StoreWriter.layer),
+    Layer.provideMerge(StoreIndex.layer),
+    Layer.provideMerge(StoreEventLog.layer),
+    Layer.provideMerge(SyncCheckpointStore.layer),
+    Layer.provideMerge(SyncReporter.layer),
+    Layer.provideMerge(KeyValueStore.layerMemory)
+  );
 
 describe("JetstreamSyncEngine", () => {
   test("sync processes commit create/update/delete and saves checkpoint", async () => {
@@ -134,7 +171,13 @@ describe("JetstreamSyncEngine", () => {
       return { result, count, checkpoint };
     });
 
-    const outcome = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+    const outcome = await Effect.runPromise(
+      program.pipe(
+        Effect.provide(
+          makeTestLayer(Stream.fromIterable([commitCreate, commitUpdate, commitDelete]))
+        )
+      )
+    );
 
     expect(outcome.result.postsAdded).toBe(3);
     expect(outcome.result.postsSkipped).toBe(0);
@@ -148,5 +191,121 @@ describe("JetstreamSyncEngine", () => {
       expect(value.cursor).toBe("3000000");
       expect(value.filterHash).toBe(filterHash);
     }
+  });
+
+  test("skips posts when filter excludes all", async () => {
+    const filter = none();
+    const source = DataSource.jetstream() as Extract<DataSource, { _tag: "Jetstream" }>;
+
+    const program = Effect.gen(function* () {
+      const engine = yield* JetstreamSyncEngine;
+      const index = yield* StoreIndex;
+      const result = yield* engine.sync({
+        source,
+        store: sampleStore,
+        filter,
+        command: "sync jetstream",
+        limit: 1
+      });
+      const count = yield* index.count(sampleStore);
+      return { result, count };
+    });
+
+    const outcome = await Effect.runPromise(
+      program.pipe(Effect.provide(makeTestLayer(Stream.fromIterable([commitCreate]))))
+    );
+
+    expect(outcome.result.postsAdded).toBe(0);
+    expect(outcome.result.postsSkipped).toBe(1);
+    expect(outcome.result.errors).toEqual([]);
+    expect(outcome.count).toBe(0);
+  });
+
+  test("deduplicates repeated commit create events", async () => {
+    const filter = all();
+    const source = DataSource.jetstream() as Extract<DataSource, { _tag: "Jetstream" }>;
+
+    const program = Effect.gen(function* () {
+      const engine = yield* JetstreamSyncEngine;
+      const index = yield* StoreIndex;
+      const result = yield* engine.sync({
+        source,
+        store: sampleStore,
+        filter,
+        command: "sync jetstream",
+        limit: 2
+      });
+      const count = yield* index.count(sampleStore);
+      return { result, count };
+    });
+
+    const outcome = await Effect.runPromise(
+      program.pipe(
+        Effect.provide(
+          makeTestLayer(Stream.fromIterable([commitCreate, commitCreateDuplicate]))
+        )
+      )
+    );
+
+    expect(outcome.result.postsAdded).toBe(1);
+    expect(outcome.result.postsSkipped).toBe(1);
+    expect(outcome.result.errors).toEqual([]);
+    expect(outcome.count).toBe(1);
+  });
+
+  test("strict mode stops on first error and does not save checkpoint", async () => {
+    const filter = all();
+    const source = DataSource.jetstream() as Extract<DataSource, { _tag: "Jetstream" }>;
+
+    const program = Effect.gen(function* () {
+      const engine = yield* JetstreamSyncEngine;
+      const checkpoints = yield* SyncCheckpointStore;
+      const outcome = yield* engine
+        .sync({
+          source,
+          store: sampleStore,
+          filter,
+          command: "sync jetstream",
+          limit: 1,
+          strict: true
+        })
+        .pipe(Effect.either);
+      const checkpoint = yield* checkpoints.load(sampleStore, source);
+      return { outcome, checkpoint };
+    });
+
+    const result = await Effect.runPromise(
+      program.pipe(Effect.provide(makeTestLayer(Stream.fromIterable([commitInvalid]))))
+    );
+
+    expect(result.outcome._tag).toBe("Left");
+    expect(Option.isNone(result.checkpoint)).toBe(true);
+  });
+
+  test("max-errors stops after threshold is exceeded", async () => {
+    const filter = all();
+    const source = DataSource.jetstream() as Extract<DataSource, { _tag: "Jetstream" }>;
+
+    const program = Effect.gen(function* () {
+      const engine = yield* JetstreamSyncEngine;
+      return yield* engine
+        .sync({
+          source,
+          store: sampleStore,
+          filter,
+          command: "sync jetstream",
+          limit: 2,
+          maxErrors: 0
+        })
+        .pipe(Effect.either);
+    });
+
+    const result = await Effect.runPromise(
+      program.pipe(
+        Effect.provide(makeTestLayer(Stream.fromIterable([commitInvalid, commitInvalid])))
+      )
+    );
+
+    expect(result._tag).toBe("Left");
   });
 });
