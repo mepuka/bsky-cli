@@ -11,6 +11,7 @@ import { StoreCleaner } from "../services/store-cleaner.js";
 import { LineageStore } from "../services/lineage-store.js";
 import { CliInputError } from "./errors.js";
 import { OutputManager } from "../services/output-manager.js";
+import { formatStoreConfigParseError } from "./store-errors.js";
 
 const storeNameArg = Args.text({ name: "name" }).pipe(Args.withSchema(StoreName));
 const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
@@ -24,14 +25,19 @@ const filterNameOption = Options.text("filter").pipe(
 );
 
 const configJsonOption = Options.text("config-json").pipe(
-  Options.withDescription("Store config as JSON string"),
+  Options.withDescription(
+    "Store config as JSON string (materialized view filters, not sync filters)"
+  ),
   Options.optional
 );
 
 const parseConfig = (configJson: Option.Option<string>) =>
   Option.match(configJson, {
     onNone: () => Effect.succeed(defaultStoreConfig),
-    onSome: (raw) => decodeJson(StoreConfig, raw)
+    onSome: (raw) =>
+      decodeJson(StoreConfig, raw, {
+        formatter: formatStoreConfigParseError
+      })
   });
 
 const loadStoreRef = (name: StoreName) =>

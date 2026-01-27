@@ -106,6 +106,7 @@ const lineageLayer = LineageStore.layer.pipe(
   Layer.provideMerge(storageLayer)
 );
 const compilerLayer = FilterCompiler.layer;
+const postParserLayer = PostParser.layer;
 const derivationEngineLayer = DerivationEngine.layer.pipe(
   Layer.provideMerge(eventLogLayer),
   Layer.provideMerge(writerLayer),
@@ -137,6 +138,7 @@ export const CliLive = Layer.mergeAll(
   CliOutput.layer,
   resourceMonitorLayer,
   managerLayer,
+  indexLayer,
   cleanerLayer,
   syncLayer,
   viewCheckpointLayer,
@@ -144,5 +146,7 @@ export const CliLive = Layer.mergeAll(
   derivationValidatorLayer,
   lineageLayer,
   outputManagerLayer,
+  compilerLayer,
+  postParserLayer,
   filterLibraryLayer
 );

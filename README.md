@@ -18,6 +18,17 @@ To run:
 bun run index.ts
 ```
 
+## Documentation
+
+- docs/README.md
+- docs/getting-started.md
+- docs/cli.md
+- docs/filters.md
+- docs/configuration.md
+- docs/credentials.md
+- docs/stores.md
+- docs/outputs.md
+
 ## Security notes
 
 - Credentials are loaded via Effect `Redacted` config and are not logged.

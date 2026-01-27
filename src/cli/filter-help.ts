@@ -22,6 +22,7 @@ const filterJsonExamples = [
 export const filterJsonDescription = (extra?: string) =>
   [
     "Filter expression as JSON string.",
+    "Sync/query filters run at ingestion or query time; store config filters are materialized views.",
     ...(extra ? [extra] : []),
     "",
     filterJsonExamples
@@ -51,6 +52,7 @@ const filterDslExamples = [
 export const filterDslDescription = () =>
   [
     "Filter expression using the DSL.",
+    "Sync/query filters run at ingestion or query time; store config filters are materialized views.",
     "Options are comma-separated (no spaces); quote values with spaces.",
     "Lists use commas (e.g. authorin:alice,bob). Named filters use @name.",
     "Defaults: llm minConfidence=0.7; onError defaults to include for llm/trending and exclude for links.",

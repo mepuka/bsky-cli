@@ -37,7 +37,8 @@ const bskyLayer = Layer.succeed(
   BskyClient.of({
     getTimeline: () => Stream.fromIterable([sampleRaw]),
     getNotifications: () => Stream.empty,
-    getFeed: () => Stream.empty
+    getFeed: () => Stream.empty,
+    getPost: () => Effect.succeed(sampleRaw)
   })
 );
 

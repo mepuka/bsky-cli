@@ -200,6 +200,29 @@ describe("FilterRuntime", () => {
     expect(result).toBe(true);
   });
 
+  test("explain returns tree with short-circuit skip", async () => {
+    const expr = decodeExpr({
+      _tag: "And",
+      left: { _tag: "None" },
+      right: {
+        _tag: "Llm",
+        prompt: "Should be skipped",
+        minConfidence: 0.7,
+        onError: { _tag: "Include" }
+      }
+    });
+
+    const program = Effect.gen(function* () {
+      const runtime = yield* FilterRuntime;
+      const explainer = yield* runtime.explain(expr);
+      return yield* explainer(samplePost);
+    });
+
+    const result = await Effect.runPromise(program.pipe(Effect.provide(runtimeLayer)));
+    expect(result.ok).toBe(false);
+    expect(result.children?.[1]?.skipped).toBe(true);
+  });
+
   test("evaluates regex filter against post text", async () => {
     const expr = decodeExpr({
       _tag: "Regex",

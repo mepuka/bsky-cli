@@ -2,6 +2,7 @@ import { AtpAgent } from "@atproto/api";
 import type {
   AppBskyFeedDefs,
   AppBskyFeedGetFeed,
+  AppBskyFeedGetPosts,
   AppBskyFeedGetTimeline,
   AppBskyFeedPost,
   AppBskyNotificationListNotifications
@@ -580,6 +581,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
     readonly getTimeline: (opts?: TimelineOptions) => Stream.Stream<RawPost, BskyError>;
     readonly getNotifications: () => Stream.Stream<RawPost, BskyError>;
     readonly getFeed: (uri: string) => Stream.Stream<RawPost, BskyError>;
+    readonly getPost: (uri: string) => Effect.Effect<RawPost, BskyError>;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -725,6 +727,26 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           })
         );
 
+      const getPost = (uri: string) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyFeedGetPosts.Response>(() =>
+                agent.app.bsky.feed.getPosts({ uris: [uri] })
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch post")));
+          const postView = response.data.posts[0];
+          if (!postView) {
+            return yield* BskyError.make({
+              message: "Post not found",
+              cause: uri
+            });
+          }
+          return yield* toRawPost(postView);
+        });
+
       const getNotifications = () =>
         paginate(undefined, (cursor) =>
           Effect.gen(function* () {
@@ -779,7 +801,8 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       return BskyClient.of({
         getTimeline,
         getNotifications,
-        getFeed
+        getFeed,
+        getPost
       });
     })
   );

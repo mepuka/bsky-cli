@@ -29,6 +29,8 @@ const validFilterTags = [
   "Llm"
 ];
 
+const filterDocs = "docs/filters/README.md";
+
 const safeParseJson = (raw: string): unknown => {
   try {
     return JSON.parse(raw);
@@ -105,7 +107,9 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
       message: "Filter expression requires a _tag field.",
       received: receivedValue,
       expected: { _tag: "Hashtag", tag: "#ai" },
-      fix: "Add a valid _tag such as Hashtag, Author, Regex, DateRange, or Llm.",
+      fix:
+        "Add a valid _tag such as Hashtag, Author, Regex, DateRange, or Llm.",
+      details: [`See ${filterDocs} for filter examples.`],
       validTags: validFilterTags
     });
   }
@@ -117,6 +121,7 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
       received: receivedValue,
       expected: { _tag: "Hashtag", tag: "#ai" },
       fix: "Use a valid filter _tag.",
+      details: [`See ${filterDocs} for the full list of filters.`],
       validTags: validFilterTags
     });
   }
@@ -195,7 +200,8 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
         start: "2026-01-01T00:00:00Z",
         end: "2026-01-31T23:59:59Z"
       },
-      fix: "Provide ISO timestamps for start and end with timezone (e.g. Z)."
+      fix: "Provide ISO timestamps for start and end with timezone (e.g. Z).",
+      details: [`See ${filterDocs} for range examples.`]
     });
   }
   if (tag === "Language" && issues.some((issue) => hasPath(issue, "langs"))) {

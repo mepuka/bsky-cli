@@ -139,6 +139,7 @@ export class FilterCompiler extends Context.Tag("@skygent/FilterCompiler")<
   FilterCompiler,
   {
     readonly compile: (spec: FilterSpec) => Effect.Effect<FilterExpr, FilterCompileError>;
+    readonly validate: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError>;
   }
 >() {
   static readonly layer = Layer.succeed(
@@ -146,7 +147,8 @@ export class FilterCompiler extends Context.Tag("@skygent/FilterCompiler")<
     FilterCompiler.of({
       compile: Effect.fn("FilterCompiler.compile")((spec: FilterSpec) =>
         validateExpr(spec.expr).pipe(Effect.as(spec.expr))
-      )
+      ),
+      validate: Effect.fn("FilterCompiler.validate")(validateExpr)
     })
   );
 }

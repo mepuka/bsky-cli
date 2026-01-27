@@ -1,11 +1,21 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Effect, Option } from "effect";
+import { Chunk, Clock, Effect, Option, ParseResult, Stream } from "effect";
+import { StoreQuery } from "../domain/events.js";
+import { RawPost } from "../domain/raw.js";
+import type { Post } from "../domain/post.js";
 import { StoreName } from "../domain/primitives.js";
+import { BskyClient } from "../services/bsky-client.js";
+import { FilterCompiler } from "../services/filter-compiler.js";
 import { FilterLibrary } from "../services/filter-library.js";
+import { FilterRuntime } from "../services/filter-runtime.js";
+import { PostParser } from "../services/post-parser.js";
+import { StoreIndex } from "../services/store-index.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
+import { decodeJson } from "./parse.js";
 import { writeJson } from "./output.js";
-import { CliInputError } from "./errors.js";
+import { CliInputError, CliJsonError } from "./errors.js";
+import { storeOptions } from "./store.js";
 
 const filterNameArg = Args.text({ name: "name" }).pipe(Args.withSchema(StoreName));
 
@@ -15,6 +25,22 @@ const filterOption = Options.text("filter").pipe(
 );
 const filterJsonOption = Options.text("filter-json").pipe(
   Options.withDescription(filterJsonDescription()),
+  Options.optional
+);
+const postJsonOption = Options.text("post-json").pipe(
+  Options.withDescription("Raw post JSON (app.bsky.feed.getPosts result)."),
+  Options.optional
+);
+const postUriOption = Options.text("post-uri").pipe(
+  Options.withDescription("Bluesky post URI (at://...)."),
+  Options.optional
+);
+const storeOption = Options.text("store").pipe(
+  Options.withSchema(StoreName),
+  Options.withDescription("Store name to sample for benchmarking")
+);
+const sampleSizeOption = Options.integer("sample-size").pipe(
+  Options.withDescription("Number of posts to evaluate (default: 1000)"),
   Options.optional
 );
 
@@ -35,6 +61,77 @@ const requireFilterExpr = (
         onSome: () => Effect.void
       }),
     onSome: () => Effect.void
+  });
+
+const formatSchemaError = (error: unknown) => {
+  if (ParseResult.isParseError(error)) {
+    return ParseResult.TreeFormatter.formatErrorSync(error);
+  }
+  return String(error);
+};
+
+const requireSinglePostInput = (
+  postJson: Option.Option<string>,
+  postUri: Option.Option<string>
+) => {
+  if (Option.isSome(postJson) && Option.isSome(postUri)) {
+    return Effect.fail(
+      CliInputError.make({
+        message: "Use only one of --post-json or --post-uri.",
+        cause: { postJson: true, postUri: true }
+      })
+    );
+  }
+  if (Option.isNone(postJson) && Option.isNone(postUri)) {
+    return Effect.fail(
+      CliInputError.make({
+        message: "Provide --post-json or --post-uri.",
+        cause: { postJson: null, postUri: null }
+      })
+    );
+  }
+  return Effect.void;
+};
+
+const parseRawPost = (raw: RawPost) =>
+  Effect.gen(function* () {
+    const parser = yield* PostParser;
+    return yield* parser.parsePost(raw).pipe(
+      Effect.mapError((error) =>
+        CliInputError.make({
+          message: `Invalid post payload: ${formatSchemaError(error)}`,
+          cause: error
+        })
+      )
+    );
+  });
+
+const loadPost = (
+  postJson: Option.Option<string>,
+  postUri: Option.Option<string>
+): Effect.Effect<Post, CliInputError | CliJsonError, BskyClient | PostParser> =>
+  Effect.gen(function* () {
+    yield* requireSinglePostInput(postJson, postUri);
+    if (Option.isSome(postJson)) {
+      const raw = yield* decodeJson(RawPost, postJson.value);
+      return yield* parseRawPost(raw);
+    }
+    if (Option.isSome(postUri)) {
+      const client = yield* BskyClient;
+      const raw = yield* client.getPost(postUri.value).pipe(
+        Effect.mapError((error) =>
+          CliInputError.make({
+            message: `Failed to fetch post: ${error.message}`,
+            cause: error
+          })
+        )
+      );
+      return yield* parseRawPost(raw);
+    }
+    return yield* CliInputError.make({
+      message: "Provide --post-json or --post-uri.",
+      cause: { postJson: null, postUri: null }
+    });
   });
 
 export const filterList = Command.make("list", {}, () =>
@@ -92,12 +189,127 @@ export const filterValidateAll = Command.make("validate-all", {}, () =>
   })
 ).pipe(Command.withDescription("Validate all saved filters"));
 
+export const filterValidate = Command.make(
+  "validate",
+  { filter: filterOption, filterJson: filterJsonOption },
+  ({ filter, filterJson }) =>
+    Effect.gen(function* () {
+      yield* requireFilterExpr(filter, filterJson);
+      const expr = yield* parseFilterExpr(filter, filterJson);
+      const compiler = yield* FilterCompiler;
+      yield* compiler.validate(expr);
+      yield* writeJson({ ok: true });
+    })
+).pipe(Command.withDescription("Validate a filter expression"));
+
+export const filterTest = Command.make(
+  "test",
+  {
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    postJson: postJsonOption,
+    postUri: postUriOption
+  },
+  ({ filter, filterJson, postJson, postUri }) =>
+    Effect.gen(function* () {
+      yield* requireFilterExpr(filter, filterJson);
+      const expr = yield* parseFilterExpr(filter, filterJson);
+      const runtime = yield* FilterRuntime;
+      const predicate = yield* runtime.evaluate(expr);
+      const post = yield* loadPost(postJson, postUri);
+      const ok = yield* predicate(post);
+      yield* writeJson({
+        ok,
+        post: { uri: post.uri, author: post.author },
+        filter: expr
+      });
+    })
+).pipe(Command.withDescription("Test a filter against a single post"));
+
+export const filterExplain = Command.make(
+  "explain",
+  {
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    postJson: postJsonOption,
+    postUri: postUriOption
+  },
+  ({ filter, filterJson, postJson, postUri }) =>
+    Effect.gen(function* () {
+      yield* requireFilterExpr(filter, filterJson);
+      const expr = yield* parseFilterExpr(filter, filterJson);
+      const runtime = yield* FilterRuntime;
+      const explainer = yield* runtime.explain(expr);
+      const post = yield* loadPost(postJson, postUri);
+      const explanation = yield* explainer(post);
+      yield* writeJson({
+        ok: explanation.ok,
+        post: { uri: post.uri, author: post.author },
+        explanation
+      });
+    })
+).pipe(Command.withDescription("Explain why a post matches a filter"));
+
+export const filterBenchmark = Command.make(
+  "benchmark",
+  {
+    store: storeOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    sampleSize: sampleSizeOption
+  },
+  ({ store, filter, filterJson, sampleSize }) =>
+    Effect.gen(function* () {
+      yield* requireFilterExpr(filter, filterJson);
+      const expr = yield* parseFilterExpr(filter, filterJson);
+      const runtime = yield* FilterRuntime;
+      const index = yield* StoreIndex;
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const limit = Option.getOrElse(sampleSize, () => 1000);
+      const evaluateBatch = yield* runtime.evaluateBatch(expr);
+      const query = StoreQuery.make({ limit });
+      const stream = index.query(storeRef, query);
+      const start = yield* Clock.currentTimeMillis;
+      const result = yield* stream.pipe(
+        Stream.grouped(50),
+        Stream.runFoldEffect(
+          { processed: 0, matched: 0 },
+          (state, batch) =>
+            evaluateBatch(batch).pipe(
+              Effect.map((results) => {
+                const processed = state.processed + Chunk.size(batch);
+                const matched =
+                  state.matched +
+                  Chunk.toReadonlyArray(results).filter(Boolean).length;
+                return { processed, matched };
+              })
+            )
+        )
+      );
+      const end = yield* Clock.currentTimeMillis;
+      const durationMs = end - start;
+      const avgMs = result.processed > 0 ? durationMs / result.processed : 0;
+      yield* writeJson({
+        store: storeRef.name,
+        processed: result.processed,
+        matched: result.matched,
+        durationMs,
+        avgMsPerPost: avgMs,
+        sampleSize: limit
+      });
+    })
+).pipe(Command.withDescription("Benchmark filter performance over stored posts"));
+
 export const filterCommand = Command.make("filter", {}).pipe(
   Command.withSubcommands([
     filterList,
     filterShow,
     filterCreate,
     filterDelete,
-    filterValidateAll
+    filterValidateAll,
+    filterValidate,
+    filterTest,
+    filterExplain,
+    filterBenchmark
   ])
 );
