@@ -73,13 +73,14 @@ Repeated polling + streaming NDJSON results to stdout.
 
 Query stored posts.
 
-- `query <store> [--range <start>..<end>] [--filter <dsl>] [--filter-json <json>] [--limit <n>] [--format <json|ndjson|markdown|table>]`
+- `query <store> [--range <start>..<end>] [--filter <dsl>] [--filter-json <json>] [--limit <n>] [--format <json|ndjson|markdown|table>] [--fields <fields>]`
 
 Examples:
 
 ```bash
 bun run index.ts query my-store --limit 10 --format table
 bun run index.ts query my-store --range 2024-01-01T00:00:00Z..2024-01-31T00:00:00Z
+bun run index.ts query my-store --fields uri,author,text --limit 5
 ```
 
 ### derive

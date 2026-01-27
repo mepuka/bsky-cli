@@ -14,6 +14,8 @@ import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { parseRange } from "./range.js";
 import { storeOptions } from "./store.js";
 import { CliPreferences } from "./preferences.js";
+import { projectFields, resolveFieldSelectors } from "./query-fields.js";
+import { CliInputError } from "./errors.js";
 
 const storeNameArg = Args.text({ name: "store" }).pipe(Args.withSchema(StoreName));
 const rangeOption = Options.text("range").pipe(
@@ -38,6 +40,12 @@ const formatOption = Options.choice("format", [
   "markdown",
   "table"
 ]).pipe(Options.optional, Options.withDescription("Output format"));
+const fieldsOption = Options.text("fields").pipe(
+  Options.withDescription(
+    "Comma-separated fields to include (supports dot notation and presets: @minimal, @social, @full)"
+  ),
+  Options.optional
+);
 
 const parseFilter = (
   filter: Option.Option<string>,
@@ -50,12 +58,6 @@ const parseRangeOption = (range: Option.Option<string>) =>
     onSome: (raw) => parseRange(raw).pipe(Effect.map(Option.some))
   });
 
-const compactPost = (post: Post) => ({
-  uri: post.uri,
-  author: post.author,
-  text: post.text,
-  createdAt: post.createdAt.toISOString()
-});
 
 export const queryCommand = Command.make(
   "query",
@@ -65,9 +67,10 @@ export const queryCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     limit: limitOption,
-    format: formatOption
+    format: formatOption,
+    fields: fieldsOption
   },
-  ({ store, range, filter, filterJson, limit, format }) =>
+  ({ store, range, filter, filterJson, limit, format, fields }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
@@ -79,6 +82,18 @@ export const queryCommand = Command.make(
       const expr = Option.getOrElse(parsedFilter, () => all());
       const outputFormat = Option.getOrElse(format, () => appConfig.outputFormat);
       const compact = preferences.compact;
+      const selectorsOption = yield* resolveFieldSelectors(fields, compact);
+      const project = (post: Post) =>
+        Option.match(selectorsOption, {
+          onNone: () => post,
+          onSome: (selectors) => projectFields(post, selectors)
+        });
+      if (Option.isSome(selectorsOption) && outputFormat !== "json" && outputFormat !== "ndjson") {
+        return yield* CliInputError.make({
+          message: "--fields is only supported with json or ndjson output.",
+          cause: { format: outputFormat }
+        });
+      }
 
       const query = StoreQuery.make({
         range: Option.getOrUndefined(parsedRange),
@@ -92,21 +107,17 @@ export const queryCommand = Command.make(
         .pipe(Stream.filterEffect((post) => predicate(post)));
 
       if (outputFormat === "ndjson") {
-        if (compact) {
-          yield* writeJsonStream(stream.pipe(Stream.map(compactPost)));
-          return;
-        }
-        yield* writeJsonStream(stream);
+        yield* writeJsonStream(stream.pipe(Stream.map(project)));
         return;
       }
 
       const collected = yield* Stream.runCollect(stream);
       const posts = Chunk.toReadonlyArray(collected);
-      const compactPosts = compact ? posts.map(compactPost) : posts;
+      const projectedPosts = Option.isSome(selectorsOption) ? posts.map(project) : posts;
 
       switch (outputFormat) {
         case "json":
-          yield* writeJson(compactPosts);
+          yield* writeJson(projectedPosts);
           return;
         case "markdown":
           yield* writeText(renderPostsMarkdown(posts));
@@ -115,7 +126,7 @@ export const queryCommand = Command.make(
           yield* writeText(renderPostsTable(posts));
           return;
         default:
-          yield* writeJson(compactPosts);
+          yield* writeJson(projectedPosts);
       }
     })
 ).pipe(Command.withDescription("Query a store with optional range and filter"));

@@ -20,6 +20,7 @@ Notes:
 - `sync`, `store`, `derive`, `filter`, and `view` emit a single JSON object.
 - `query` uses `--format` or the configured `outputFormat` (default: `ndjson`).
 - Use `--compact` to reduce JSON payload size for agent workflows (store list/show, query, derive).
+- Use `--fields` on `query` to select specific fields (supports dot notation and presets like `@minimal`).
 
 ## Logs and progress
 
