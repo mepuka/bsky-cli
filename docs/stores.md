@@ -59,3 +59,9 @@ Use `store materialize <name>` to regenerate outputs.
 
 Use `store stats <name>` for per-store counts (posts, authors, top hashtags/authors, date range, size).
 Use `store summary` for a compact overview across all stores, including derived staleness status.
+
+## Tree view
+
+Use `store tree` to visualize lineage relationships as ASCII output. `--format table` prints
+separate `Stores` and `Derivations` sections with labeled columns. Use `--format json` for
+structured output.

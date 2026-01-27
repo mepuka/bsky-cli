@@ -28,6 +28,7 @@ Manage stores.
 - `store show <name>`
 - `store stats <name>`
 - `store summary`
+- `store tree [--format <tree|table|json>]`
 - `store delete <name> --force`
 - `store materialize <name> [--filter <filter-name>]`
 
@@ -38,8 +39,11 @@ bun run index.ts store create my-store
 bun run index.ts store show my-store
 bun run index.ts store stats my-store
 bun run index.ts store summary
+bun run index.ts store tree --format table
 bun run index.ts store delete my-store --force
 ```
+
+`store tree --format table` prints two labeled sections (`Stores` and `Derivations`) with column headers.
 
 Provide store config as JSON (single quotes recommended):
 

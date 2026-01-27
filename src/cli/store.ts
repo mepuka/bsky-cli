@@ -7,7 +7,7 @@ import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
 import type { StoreLineage } from "../domain/derivation.js";
 import { defaultStoreConfig } from "../domain/defaults.js";
 import { decodeJson } from "./parse.js";
-import { writeJson } from "./output.js";
+import { writeJson, writeText } from "./output.js";
 import { StoreCleaner } from "../services/store-cleaner.js";
 import { LineageStore } from "../services/lineage-store.js";
 import { CliInputError } from "./errors.js";
@@ -16,6 +16,12 @@ import { formatStoreConfigParseError } from "./store-errors.js";
 import { formatFilterExpr } from "../domain/filter-describe.js";
 import { CliPreferences } from "./preferences.js";
 import { StoreStats } from "../services/store-stats.js";
+import {
+  buildStoreTreeData,
+  renderStoreTree,
+  renderStoreTreeJson,
+  renderStoreTreeTable
+} from "./store-tree.js";
 
 const storeNameArg = Args.text({ name: "name" }).pipe(Args.withSchema(StoreName));
 const storeNameOption = Options.text("store").pipe(Options.withSchema(StoreName));
@@ -25,6 +31,10 @@ const forceOption = Options.boolean("force").pipe(
 );
 const filterNameOption = Options.text("filter").pipe(
   Options.withDescription("Filter spec name to materialize"),
+  Options.optional
+);
+const treeFormatOption = Options.choice("format", ["tree", "table", "json"]).pipe(
+  Options.withDescription("Output format for store tree"),
   Options.optional
 );
 
@@ -219,6 +229,26 @@ export const storeSummary = Command.make("summary", {}, () =>
   })
 ).pipe(Command.withDescription("Summarize all stores with counts and status"));
 
+export const storeTree = Command.make(
+  "tree",
+  { format: treeFormatOption },
+  ({ format }) =>
+    Effect.gen(function* () {
+      const data = yield* buildStoreTreeData;
+      const outputFormat = Option.getOrElse(format, () => "tree" as const);
+      switch (outputFormat) {
+        case "json":
+          yield* writeJson(renderStoreTreeJson(data));
+          return;
+        case "table":
+          yield* writeText(renderStoreTreeTable(data));
+          return;
+        default:
+          yield* writeText(renderStoreTree(data));
+      }
+    })
+).pipe(Command.withDescription("Visualize store lineage as an ASCII tree"));
+
 export const storeCommand = Command.make("store", {}).pipe(
   Command.withSubcommands([
     storeCreate,
@@ -227,7 +257,8 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeDelete,
     storeMaterialize,
     storeStats,
-    storeSummary
+    storeSummary,
+    storeTree
   ])
 );
 
