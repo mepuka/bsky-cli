@@ -6,6 +6,8 @@ import {
   ConfigError,
   FilterCompileError,
   FilterEvalError,
+  FilterLibraryError,
+  FilterNotFound,
   StoreIoError,
   StoreIndexError,
   StoreNotFound
@@ -19,6 +21,8 @@ export const exitCodeFor = (error: unknown): number => {
   if (error instanceof CliInputError) return 2;
   if (error instanceof ConfigError) return 2;
   if (error instanceof StoreNotFound) return 3;
+  if (error instanceof FilterNotFound) return 2;
+  if (error instanceof FilterLibraryError) return 2;
   if (error instanceof StoreIoError || error instanceof StoreIndexError) return 7;
   if (error instanceof FilterCompileError || error instanceof FilterEvalError) return 8;
   if (error instanceof DerivationError) return 2;

@@ -3,6 +3,7 @@ import { Chunk, Effect, Either, Layer, Request, RequestResolver, Schema } from "
 import { FilterExprSchema } from "../../src/domain/filter.js";
 import { LlmDecisionMeta } from "../../src/domain/llm.js";
 import { Post } from "../../src/domain/post.js";
+import { EmbedExternal, EmbedRecord, EmbedRecordUnknown } from "../../src/domain/bsky.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
 import { LlmDecision, LlmDecisionRequest } from "../../src/services/llm.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
@@ -18,6 +19,65 @@ const samplePost = Schema.decodeUnknownSync(Post)({
   hashtags: ["#effect"],
   mentions: [],
   links: []
+});
+
+const replyPost = Schema.decodeUnknownSync(Post)({
+  uri: "at://did:plc:example/app.bsky.feed.post/9",
+  author: "alice.bsky",
+  text: "Replying here",
+  createdAt: "2026-01-02T00:00:00.000Z",
+  hashtags: [],
+  mentions: [],
+  links: [],
+  reply: {
+    root: { uri: "at://did:plc:example/app.bsky.feed.post/root", cid: "cid-root" },
+    parent: { uri: "at://did:plc:example/app.bsky.feed.post/parent", cid: "cid-parent" }
+  }
+});
+
+const quotePost = Schema.decodeUnknownSync(Post)({
+  uri: "at://did:plc:example/app.bsky.feed.post/10",
+  author: "alice.bsky",
+  text: "Quoting a post",
+  createdAt: "2026-01-03T00:00:00.000Z",
+  hashtags: [],
+  mentions: [],
+  links: [],
+  embed: EmbedRecord.make({
+    recordType: "app.bsky.feed.post",
+    record: EmbedRecordUnknown.make({ rawType: "unknown", data: {} })
+  })
+});
+
+const mediaPost = Schema.decodeUnknownSync(Post)({
+  uri: "at://did:plc:example/app.bsky.feed.post/11",
+  author: "alice.bsky",
+  text: "Post with link preview",
+  createdAt: "2026-01-04T00:00:00.000Z",
+  hashtags: [],
+  mentions: [],
+  links: [],
+  embed: EmbedExternal.make({
+    uri: "https://example.com",
+    title: "Example",
+    description: "Example link"
+  })
+});
+
+const engagementPost = Schema.decodeUnknownSync(Post)({
+  uri: "at://did:plc:example/app.bsky.feed.post/12",
+  author: "alice.bsky",
+  text: "Popular post",
+  createdAt: "2026-01-05T00:00:00.000Z",
+  hashtags: ["#effect"],
+  mentions: [],
+  links: [],
+  metrics: {
+    likeCount: 120,
+    repostCount: 12,
+    replyCount: 5
+  },
+  langs: ["en"]
 });
 
 const linkValidatorLayer = Layer.succeed(
@@ -155,6 +215,73 @@ describe("FilterRuntime", () => {
 
     const result = await Effect.runPromise(program.pipe(Effect.provide(runtimeLayer)));
     expect(result).toBe(true);
+  });
+
+  test("evaluates contains filter", async () => {
+    const expr = decodeExpr({ _tag: "Contains", text: "hello", caseSensitive: false });
+    const program = Effect.gen(function* () {
+      const runtime = yield* FilterRuntime;
+      const predicate = yield* runtime.evaluate(expr);
+      return yield* predicate(samplePost);
+    });
+
+    const result = await Effect.runPromise(program.pipe(Effect.provide(runtimeLayer)));
+    expect(result).toBe(true);
+  });
+
+  test("evaluates author/hashtag in filters", async () => {
+    const authorExpr = decodeExpr({
+      _tag: "AuthorIn",
+      handles: ["alice.bsky", "bob.bsky"]
+    });
+    const hashtagExpr = decodeExpr({
+      _tag: "HashtagIn",
+      tags: ["#effect", "#ai"]
+    });
+
+    const program = Effect.gen(function* () {
+      const runtime = yield* FilterRuntime;
+      const authorPredicate = yield* runtime.evaluate(authorExpr);
+      const hashtagPredicate = yield* runtime.evaluate(hashtagExpr);
+      const authorOk = yield* authorPredicate(samplePost);
+      const hashtagOk = yield* hashtagPredicate(samplePost);
+      return { authorOk, hashtagOk };
+    });
+
+    const result = await Effect.runPromise(program.pipe(Effect.provide(runtimeLayer)));
+    expect(result.authorOk).toBe(true);
+    expect(result.hashtagOk).toBe(true);
+  });
+
+  test("evaluates reply, quote, media, language, and engagement filters", async () => {
+    const replyExpr = decodeExpr({ _tag: "IsReply" });
+    const quoteExpr = decodeExpr({ _tag: "IsQuote" });
+    const mediaExpr = decodeExpr({ _tag: "HasMedia" });
+    const languageExpr = decodeExpr({ _tag: "Language", langs: ["en", "es"] });
+    const engagementExpr = decodeExpr({ _tag: "Engagement", minLikes: 100 });
+
+    const program = Effect.gen(function* () {
+      const runtime = yield* FilterRuntime;
+      const replyPredicate = yield* runtime.evaluate(replyExpr);
+      const quotePredicate = yield* runtime.evaluate(quoteExpr);
+      const mediaPredicate = yield* runtime.evaluate(mediaExpr);
+      const languagePredicate = yield* runtime.evaluate(languageExpr);
+      const engagementPredicate = yield* runtime.evaluate(engagementExpr);
+      return {
+        replyOk: yield* replyPredicate(replyPost),
+        quoteOk: yield* quotePredicate(quotePost),
+        mediaOk: yield* mediaPredicate(mediaPost),
+        languageOk: yield* languagePredicate(engagementPost),
+        engagementOk: yield* engagementPredicate(engagementPost)
+      };
+    });
+
+    const result = await Effect.runPromise(program.pipe(Effect.provide(runtimeLayer)));
+    expect(result.replyOk).toBe(true);
+    expect(result.quoteOk).toBe(true);
+    expect(result.mediaOk).toBe(true);
+    expect(result.languageOk).toBe(true);
+    expect(result.engagementOk).toBe(true);
   });
 
   test("retry policy propagates failure", async () => {

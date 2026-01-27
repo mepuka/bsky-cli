@@ -1,9 +1,11 @@
-import { Duration, Effect, ParseResult, Schema } from "effect";
-import type { FilterExpr } from "../domain/filter.js";
+import { Context, Duration, Effect, ParseResult, Schema } from "effect";
+import type { FilterEngagement, FilterExpr } from "../domain/filter.js";
 import { all, and, none, not, or } from "../domain/filter.js";
 import type { FilterErrorPolicy } from "../domain/policies.js";
 import { ExcludeOnError, IncludeOnError, RetryOnError } from "../domain/policies.js";
-import { Handle, Hashtag } from "../domain/primitives.js";
+import { Handle, Hashtag, StoreName } from "../domain/primitives.js";
+import { FilterLibrary } from "../services/filter-library.js";
+import { FilterLibraryError, FilterNotFound } from "../domain/errors.js";
 import { CliInputError } from "./errors.js";
 import { parseRange } from "./range.js";
 
@@ -21,6 +23,8 @@ const formatSchemaError = (error: unknown) => {
   }
   return String(error);
 };
+
+type FilterLibraryService = Context.Tag.Service<typeof FilterLibrary>;
 
 const formatDslError = (input: string, position: number | undefined, message: string) => {
   if (position === undefined) {
@@ -379,6 +383,56 @@ const parseDurationOption = (option: OptionValue, input: string, label: string) 
     })
   );
 
+const parseBooleanOption = (
+  option: OptionValue,
+  input: string,
+  label: string
+) => {
+  const raw = stripQuotes(option.value).toLowerCase();
+  if (raw === "true") {
+    return Effect.succeed(true);
+  }
+  if (raw === "false") {
+    return Effect.succeed(false);
+  }
+  return Effect.fail(
+    failAt(input, option.position, `${label} must be true or false.`)
+  );
+};
+
+const parseListValue = (
+  raw: string,
+  input: string,
+  position: number,
+  label: string
+) =>
+  Effect.gen(function* () {
+    const trimmed = stripQuotes(raw).trim();
+    if (trimmed.length === 0) {
+      return yield* failAt(
+        input,
+        position,
+        `Missing value for "${label}".`
+      );
+    }
+    const content =
+      trimmed.startsWith("[") && trimmed.endsWith("]")
+        ? trimmed.slice(1, -1)
+        : trimmed;
+    const items = content
+      .split(/[;,]/)
+      .map((item) => stripQuotes(item.trim()))
+      .filter((item) => item.length > 0);
+    if (items.length === 0) {
+      return yield* failAt(
+        input,
+        position,
+        `No values provided for "${label}".`
+      );
+    }
+    return items;
+  });
+
 const parsePolicy = (
   options: Map<string, OptionValue>,
   fallback: FilterErrorPolicy,
@@ -498,7 +552,8 @@ class Parser {
 
   constructor(
     private readonly input: string,
-    private readonly tokens: ReadonlyArray<Token>
+    private readonly tokens: ReadonlyArray<Token>,
+    private readonly library: FilterLibraryService
   ) {}
 
   parse = (): Effect.Effect<FilterExpr, CliInputError> => {
@@ -515,6 +570,52 @@ class Parser {
       return expr;
     });
   };
+
+  private resolveNamedFilter(
+    raw: string,
+    position: number
+  ): Effect.Effect<FilterExpr, CliInputError> {
+    const self = this;
+    return Effect.gen(function* () {
+      const nameRaw = raw.slice(1);
+      if (nameRaw.length === 0) {
+        return yield* self.fail("Named filter reference cannot be empty.", position);
+      }
+      const name = yield* Schema.decodeUnknown(StoreName)(nameRaw).pipe(
+        Effect.mapError((error) =>
+          failAt(
+            self.input,
+            position,
+            `Invalid filter name "${nameRaw}": ${formatSchemaError(error)}`
+          )
+        )
+      );
+      const expr = yield* self.library.get(name).pipe(
+        Effect.mapError((error) => {
+          if (error instanceof FilterNotFound) {
+            return failAt(
+              self.input,
+              position,
+              `Unknown named filter "@${nameRaw}". Use "skygent filter list" to see available filters.`
+            );
+          }
+          if (error instanceof FilterLibraryError) {
+            return failAt(
+              self.input,
+              position,
+              `Failed to load "@${nameRaw}": ${error.message}`
+            );
+          }
+          return failAt(
+            self.input,
+            position,
+            `Failed to load "@${nameRaw}": ${String(error)}`
+          );
+        })
+      );
+      return expr;
+    });
+  }
 
   private parseOr(): Effect.Effect<FilterExpr, CliInputError> {
     const self = this;
@@ -583,11 +684,38 @@ class Parser {
     return Effect.gen(function* () {
       const value = token.value;
       const lower = value.toLowerCase();
+      if (value.startsWith("@")) {
+        return yield* self.resolveNamedFilter(value, token.position);
+      }
       if (lower === "all") {
         return all();
       }
       if (lower === "none") {
         return none();
+      }
+      if (lower === "reply" || lower === "isreply") {
+        return { _tag: "IsReply" };
+      }
+      if (lower === "quote" || lower === "isquote") {
+        return { _tag: "IsQuote" };
+      }
+      if (lower === "repost" || lower === "isrepost") {
+        return { _tag: "IsRepost" };
+      }
+      if (lower === "original" || lower === "isoriginal") {
+        return { _tag: "IsOriginal" };
+      }
+      if (lower === "hasimages" || lower === "images" || lower === "image") {
+        return { _tag: "HasImages" };
+      }
+      if (lower === "hasvideo" || lower === "video" || lower === "videos") {
+        return { _tag: "HasVideo" };
+      }
+      if (lower === "hasmedia" || lower === "media") {
+        return { _tag: "HasMedia" };
+      }
+      if (lower === "haslinks") {
+        return { _tag: "HasLinks" };
       }
       if (lower === "links" || lower === "validlinks" || lower === "hasvalidlinks") {
         return { _tag: "HasValidLinks", onError: defaultLinksPolicy() };
@@ -613,6 +741,44 @@ class Parser {
         }
       }
 
+      if (key === "authorin" || key === "authors") {
+        const items = yield* parseListValue(
+          rawValue,
+          self.input,
+          valuePosition,
+          key
+        );
+        const handles = yield* Effect.forEach(
+          items,
+          (item) => decodeHandle(item, self.input, valuePosition),
+          { discard: false }
+        );
+        return { _tag: "AuthorIn", handles };
+      }
+      if (key === "hashtagin" || key === "tags" || key === "hashtags") {
+        const items = yield* parseListValue(
+          rawValue,
+          self.input,
+          valuePosition,
+          key
+        );
+        const tags = yield* Effect.forEach(
+          items,
+          (item) => decodeHashtag(item, self.input, valuePosition),
+          { discard: false }
+        );
+        return { _tag: "HashtagIn", tags };
+      }
+      if (key === "language" || key === "lang") {
+        const items = yield* parseListValue(
+          rawValue,
+          self.input,
+          valuePosition,
+          key
+        );
+        return { _tag: "Language", langs: items };
+      }
+
       const { value: baseValueRaw, valuePosition: basePosition, options } =
         yield* parseValueOptions(self.input, rawValue, valuePosition);
       const baseValue = stripQuotes(baseValueRaw);
@@ -634,6 +800,115 @@ class Parser {
           const tag = yield* decodeHashtag(baseValue, self.input, basePosition);
           yield* ensureNoUnknownOptions(options, self.input);
           return { _tag: "Hashtag", tag };
+        }
+        case "contains":
+        case "text": {
+          if (baseValue.length === 0) {
+            return yield* self.fail("Contains filter requires text.", token.position);
+          }
+          const caseSensitiveOption = yield* takeOption(
+            options,
+            ["caseSensitive", "case", "cs"],
+            "caseSensitive",
+            self.input
+          );
+          const caseSensitive = caseSensitiveOption
+            ? yield* parseBooleanOption(
+                caseSensitiveOption,
+                self.input,
+                "caseSensitive"
+              )
+            : undefined;
+          yield* ensureNoUnknownOptions(options, self.input);
+          return caseSensitive !== undefined
+            ? { _tag: "Contains", text: baseValue, caseSensitive }
+            : { _tag: "Contains", text: baseValue };
+        }
+        case "is":
+        case "type": {
+          if (baseValue.length === 0) {
+            return yield* self.fail(`Missing value for "${key}".`, token.position);
+          }
+          yield* ensureNoUnknownOptions(options, self.input);
+          switch (baseValue.toLowerCase()) {
+            case "reply":
+              return { _tag: "IsReply" };
+            case "quote":
+              return { _tag: "IsQuote" };
+            case "repost":
+              return { _tag: "IsRepost" };
+            case "original":
+              return { _tag: "IsOriginal" };
+            default:
+              return yield* self.fail(
+                `Unknown post type "${baseValue}".`,
+                token.position
+              );
+          }
+        }
+        case "engagement": {
+          let resolvedValue = baseValue;
+          let resolvedOptions = options;
+          if (rawValue.length > 0 && looksLikeOptionSegment(rawValue)) {
+            const reparsed = yield* parseValueOptions(
+              self.input,
+              `,${rawValue}`,
+              Math.max(0, valuePosition - 1)
+            );
+            resolvedValue = stripQuotes(reparsed.value);
+            resolvedOptions = reparsed.options;
+          }
+          if (resolvedValue.length > 0) {
+            return yield* self.fail(
+              "Engagement does not take a positional value.",
+              token.position
+            );
+          }
+          const minLikesOption = yield* takeOption(
+            resolvedOptions,
+            ["minLikes", "likes", "minlikes"],
+            "minLikes",
+            self.input
+          );
+          const minRepostsOption = yield* takeOption(
+            resolvedOptions,
+            ["minReposts", "reposts", "minreposts"],
+            "minReposts",
+            self.input
+          );
+          const minRepliesOption = yield* takeOption(
+            resolvedOptions,
+            ["minReplies", "replies", "minreplies"],
+            "minReplies",
+            self.input
+          );
+          const minLikes = minLikesOption
+            ? yield* parseIntOption(minLikesOption, self.input, "minLikes")
+            : undefined;
+          const minReposts = minRepostsOption
+            ? yield* parseIntOption(minRepostsOption, self.input, "minReposts")
+            : undefined;
+          const minReplies = minRepliesOption
+            ? yield* parseIntOption(minRepliesOption, self.input, "minReplies")
+            : undefined;
+          if (
+            minLikes === undefined &&
+            minReposts === undefined &&
+            minReplies === undefined
+          ) {
+            return yield* self.fail(
+              "Engagement requires at least one threshold.",
+              token.position
+            );
+          }
+          yield* ensureNoUnknownOptions(resolvedOptions, self.input);
+          const engagement: FilterEngagement = {
+            _tag: "Engagement",
+            ...(minLikes !== undefined ? { minLikes } : {}),
+            ...(minReposts !== undefined ? { minReposts } : {}),
+            ...(minReplies !== undefined ? { minReplies } : {})
+          };
+          return engagement;
         }
         case "regex": {
           const flagsOption = yield* takeOption(options, ["flags"], "flags", self.input);
@@ -796,7 +1071,9 @@ class Parser {
 }
 
 export const parseFilterDsl = Effect.fn("FilterDsl.parse")((input: string) =>
-  tokenize(input).pipe(
-    Effect.flatMap((tokens) => new Parser(input, tokens).parse())
-  )
+  Effect.gen(function* () {
+    const library = yield* FilterLibrary;
+    const tokens = yield* tokenize(input);
+    return yield* new Parser(input, tokens, library).parse();
+  })
 );

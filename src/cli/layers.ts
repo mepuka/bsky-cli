@@ -28,6 +28,7 @@ import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
 import { LineageStore } from "../services/lineage-store.js";
 import { FilterCompiler } from "../services/filter-compiler.js";
 import { OutputManager } from "../services/output-manager.js";
+import { FilterLibrary } from "../services/filter-library.js";
 
 const appConfigLayer = AppConfigService.layer;
 const credentialLayer = CredentialStore.layer.pipe(Layer.provideMerge(appConfigLayer));
@@ -126,6 +127,9 @@ const outputManagerLayer = OutputManager.layer.pipe(
   Layer.provideMerge(runtimeLayer),
   Layer.provideMerge(compilerLayer)
 );
+const filterLibraryLayer = FilterLibrary.layer.pipe(
+  Layer.provideMerge(appConfigLayer)
+);
 
 export const CliLive = Layer.mergeAll(
   appConfigLayer,
@@ -139,5 +143,6 @@ export const CliLive = Layer.mergeAll(
   derivationEngineLayer,
   derivationValidatorLayer,
   lineageLayer,
-  outputManagerLayer
+  outputManagerLayer,
+  filterLibraryLayer
 );

@@ -9,6 +9,19 @@ const validFilterTags = [
   "Not",
   "Author",
   "Hashtag",
+  "AuthorIn",
+  "HashtagIn",
+  "Contains",
+  "IsReply",
+  "IsQuote",
+  "IsRepost",
+  "IsOriginal",
+  "Engagement",
+  "HasImages",
+  "HasVideo",
+  "HasLinks",
+  "HasMedia",
+  "Language",
   "Regex",
   "DateRange",
   "HasValidLinks",
@@ -120,6 +133,30 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
         : "Add a patterns array with at least one regex pattern."
     });
   }
+  if (tag === "AuthorIn" && issues.some((issue) => hasPath(issue, "handles"))) {
+    return validationError({
+      message: "AuthorIn filter requires a handles array.",
+      received: receivedValue,
+      expected: { _tag: "AuthorIn", handles: ["alice.bsky.social", "bob.bsky.social"] },
+      fix: "Provide at least one handle in handles."
+    });
+  }
+  if (tag === "HashtagIn" && issues.some((issue) => hasPath(issue, "tags"))) {
+    return validationError({
+      message: "HashtagIn filter requires a tags array.",
+      received: receivedValue,
+      expected: { _tag: "HashtagIn", tags: ["#tech", "#coding"] },
+      fix: "Provide at least one hashtag in tags."
+    });
+  }
+  if (tag === "Contains" && issues.some((issue) => hasPath(issue, "text"))) {
+    return validationError({
+      message: "Contains filter requires a text string.",
+      received: receivedValue,
+      expected: { _tag: "Contains", text: "typescript", caseSensitive: false },
+      fix: "Provide a non-empty text value to search for."
+    });
+  }
   if (tag === "Hashtag" && issues.some((issue) => hasPath(issue, "tag"))) {
     return validationError({
       message: "Hashtag filter requires a tag field.",
@@ -159,6 +196,14 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
         end: "2026-01-31T23:59:59Z"
       },
       fix: "Provide ISO timestamps for start and end with timezone (e.g. Z)."
+    });
+  }
+  if (tag === "Language" && issues.some((issue) => hasPath(issue, "langs"))) {
+    return validationError({
+      message: "Language filter requires a langs array.",
+      received: receivedValue,
+      expected: { _tag: "Language", langs: ["en", "es"] },
+      fix: "Provide one or more language codes in langs."
     });
   }
   if (

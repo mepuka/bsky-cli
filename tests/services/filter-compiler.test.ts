@@ -116,4 +116,26 @@ describe("FilterCompiler", () => {
       expect(result.left.message).toContain("Invalid regex");
     }
   });
+
+  test("rejects engagement filter without thresholds", async () => {
+    const spec = decodeSpec({
+      name: "engagement",
+      expr: { _tag: "Engagement" },
+      output: { path: "views/filters/engagement", json: true, markdown: false }
+    });
+
+    const program = Effect.gen(function* () {
+      const compiler = yield* FilterCompiler;
+      return yield* compiler.compile(spec);
+    });
+
+    const result = await Effect.runPromise(
+      Effect.either(program.pipe(Effect.provide(FilterCompiler.layer)))
+    );
+
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left.message).toContain("Engagement");
+    }
+  });
 });

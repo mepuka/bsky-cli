@@ -9,10 +9,19 @@ import { queryCommand } from "./query.js";
 import { watchCommand } from "./watch.js";
 import { deriveCommand } from "./derive.js";
 import { viewCommand } from "./view.js";
+import { filterCommand } from "./filter.js";
 import { configOptions, toConfigOverrides, toCredentialsOverrides } from "./config.js";
 
 export const app = Command.make("skygent", configOptions).pipe(
-  Command.withSubcommands([storeCommand, syncCommand, queryCommand, watchCommand, deriveCommand, viewCommand]),
+  Command.withSubcommands([
+    storeCommand,
+    syncCommand,
+    queryCommand,
+    watchCommand,
+    deriveCommand,
+    viewCommand,
+    filterCommand
+  ]),
   Command.provide((config) =>
     CliLive.pipe(
       Layer.provide(

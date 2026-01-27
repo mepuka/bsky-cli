@@ -64,6 +64,46 @@ const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError
       case "Author":
       case "Hashtag":
         return;
+      case "AuthorIn":
+        if (expr.handles.length === 0) {
+          return yield* invalid("AuthorIn handles must contain at least one entry");
+        }
+        return;
+      case "HashtagIn":
+        if (expr.tags.length === 0) {
+          return yield* invalid("HashtagIn tags must contain at least one entry");
+        }
+        return;
+      case "Contains":
+        if (expr.text.trim().length === 0) {
+          return yield* invalid("Contains text must be non-empty");
+        }
+        return;
+      case "IsReply":
+      case "IsQuote":
+      case "IsRepost":
+      case "IsOriginal":
+      case "HasImages":
+      case "HasVideo":
+      case "HasLinks":
+      case "HasMedia":
+        return;
+      case "Language":
+        if (expr.langs.length === 0) {
+          return yield* invalid("Language langs must contain at least one entry");
+        }
+        return;
+      case "Engagement":
+        if (
+          expr.minLikes === undefined &&
+          expr.minReposts === undefined &&
+          expr.minReplies === undefined
+        ) {
+          return yield* invalid(
+            "Engagement requires at least one threshold (minLikes, minReposts, minReplies)"
+          );
+        }
+        return;
       case "Regex":
         return yield* validateRegex(expr.patterns, expr.flags);
       case "DateRange":

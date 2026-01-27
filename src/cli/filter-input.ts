@@ -1,6 +1,7 @@
 import { Effect, Option } from "effect";
 import { FilterExprSchema, all } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
+import type { FilterLibrary } from "../services/filter-library.js";
 import { CliInputError, CliJsonError } from "./errors.js";
 import { decodeJson } from "./parse.js";
 import { formatFilterParseError } from "./filter-errors.js";
@@ -15,7 +16,7 @@ const conflictError = (filter: boolean, filterJson: boolean) =>
 export const parseFilterExpr = (
   filter: Option.Option<string>,
   filterJson: Option.Option<string>
-): Effect.Effect<FilterExpr, CliInputError | CliJsonError> =>
+): Effect.Effect<FilterExpr, CliInputError | CliJsonError, FilterLibrary> =>
   Option.match(filter, {
     onNone: () =>
       Option.match(filterJson, {
@@ -35,7 +36,7 @@ export const parseFilterExpr = (
 export const parseOptionalFilterExpr = (
   filter: Option.Option<string>,
   filterJson: Option.Option<string>
-): Effect.Effect<Option.Option<FilterExpr>, CliInputError | CliJsonError> =>
+): Effect.Effect<Option.Option<FilterExpr>, CliInputError | CliJsonError, FilterLibrary> =>
   Option.match(filter, {
     onNone: () =>
       Option.match(filterJson, {

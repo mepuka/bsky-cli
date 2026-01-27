@@ -9,6 +9,7 @@ import { FilterRuntime } from "./filter-runtime.js";
 import { StoreIndex } from "./store-index.js";
 import { StoreManager } from "./store-manager.js";
 import { AppConfigService } from "./app-config.js";
+import { traverseFilterEffect } from "../typeclass/chunk.js";
 import { renderPostsMarkdown } from "../domain/format.js";
 import {
   FilterCompileError,
@@ -105,24 +106,14 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
 
       const expr = yield* compiler.compile(spec);
       const stream = index.query(store, StoreQuery.make({}));
-      const evaluateBatch = yield* runtime.evaluateBatch(expr);
+      const predicate = yield* runtime.evaluate(expr);
       const filtered = stream.pipe(
         Stream.grouped(50),
         Stream.mapEffect((batch) =>
-          evaluateBatch(batch).pipe(
-            Effect.map((results) => {
-              const posts = Chunk.toReadonlyArray(batch);
-              const flags = Chunk.toReadonlyArray(results);
-              const kept: Array<Post> = [];
-              for (let index = 0; index < posts.length; index += 1) {
-                const post = posts[index];
-                if (post && flags[index]) {
-                  kept.push(post);
-                }
-              }
-              return Chunk.fromIterable(kept);
-            })
-          )
+          traverseFilterEffect(batch, predicate, {
+            concurrency: "unbounded",
+            batching: true
+          }).pipe(Effect.withRequestBatching(true))
         ),
         Stream.mapConcat((chunk) => Chunk.toReadonlyArray(chunk))
       );

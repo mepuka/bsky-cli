@@ -11,6 +11,8 @@ import { OutputManager } from "../../src/services/output-manager.js";
 import { DerivationEngine } from "../../src/services/derivation-engine.js";
 import { StoreManager } from "../../src/services/store-manager.js";
 import { ViewCheckpointStore } from "../../src/services/view-checkpoint-store.js";
+import { FilterLibrary } from "../../src/services/filter-library.js";
+import { FilterNotFound } from "../../src/domain/errors.js";
 
 const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
 
@@ -104,12 +106,23 @@ describe("CLI derive command", () => {
         materializeFilters: () => Effect.succeed([])
       })
     );
+    const filterLibraryLayer = Layer.succeed(
+      FilterLibrary,
+      FilterLibrary.of({
+        list: () => Effect.succeed([]),
+        get: (name) => Effect.fail(FilterNotFound.make({ name })),
+        save: () => Effect.void,
+        remove: () => Effect.void,
+        validateAll: () => Effect.succeed([])
+      })
+    );
     const appLayer = Layer.mergeAll(
       outputLayer,
       storeLayer,
       engineLayer,
       checkpointsLayer,
-      outputManagerLayer
+      outputManagerLayer,
+      filterLibraryLayer
     );
 
     const result = await Effect.runPromise(

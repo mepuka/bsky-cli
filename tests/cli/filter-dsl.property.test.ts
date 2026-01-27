@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import * as fc from "effect/FastCheck";
 import * as Arbitrary from "effect/Arbitrary";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { parseFilterDsl } from "../../src/cli/filter-dsl.js";
 import { Handle, Hashtag } from "../../src/domain/primitives.js";
+import { FilterLibrary } from "../../src/services/filter-library.js";
+import { FilterNotFound } from "../../src/domain/errors.js";
 
 const handleArb = Arbitrary.make(Handle);
 const hashtagArb = Arbitrary.make(Hashtag);
@@ -12,6 +14,17 @@ const timestampArb = fc.date({
   max: new Date("2026-12-31T23:59:59.000Z")
 });
 
+const emptyLibraryLayer = Layer.succeed(
+  FilterLibrary,
+  FilterLibrary.of({
+    list: () => Effect.succeed([]),
+    get: (name) => Effect.fail(FilterNotFound.make({ name })),
+    save: () => Effect.void,
+    remove: () => Effect.void,
+    validateAll: () => Effect.succeed([])
+  })
+);
+
 const toDate = (value: Date | string) =>
   typeof value === "string" ? new Date(value) : value;
 
@@ -19,7 +32,9 @@ describe("filter DSL property tests", () => {
   test("author DSL preserves handles", async () => {
     await fc.assert(
       fc.asyncProperty(handleArb, async (handle) => {
-        const expr = await Effect.runPromise(parseFilterDsl(`author:${handle}`));
+        const expr = await Effect.runPromise(
+          parseFilterDsl(`author:${handle}`).pipe(Effect.provide(emptyLibraryLayer))
+        );
         expect(expr).toMatchObject({ _tag: "Author", handle });
       }),
       { numRuns: 50 }
@@ -29,7 +44,9 @@ describe("filter DSL property tests", () => {
   test("hashtag DSL preserves tags", async () => {
     await fc.assert(
       fc.asyncProperty(hashtagArb, async (tag) => {
-        const expr = await Effect.runPromise(parseFilterDsl(`hashtag:${tag}`));
+        const expr = await Effect.runPromise(
+          parseFilterDsl(`hashtag:${tag}`).pipe(Effect.provide(emptyLibraryLayer))
+        );
         expect(expr).toMatchObject({ _tag: "Hashtag", tag });
       }),
       { numRuns: 50 }
@@ -45,7 +62,9 @@ describe("filter DSL property tests", () => {
           start.getTime() <= end.getTime() ? [start, end] : [end, start];
 
         const input = `date:${rangeStart.toISOString()}..${rangeEnd.toISOString()}`;
-        const expr = await Effect.runPromise(parseFilterDsl(input));
+        const expr = await Effect.runPromise(
+          parseFilterDsl(input).pipe(Effect.provide(emptyLibraryLayer))
+        );
 
         expect(expr._tag).toBe("DateRange");
         if (expr._tag === "DateRange") {
