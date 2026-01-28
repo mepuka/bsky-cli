@@ -2,6 +2,7 @@ import { Command, HelpDoc, ValidationError } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { app } from "./src/cli/app.js";
+import pkg from "./package.json";
 import {
   type AgentErrorPayload,
   CliInputError,
@@ -15,7 +16,7 @@ import { StoreLockError, StoreNotFound } from "./src/domain/errors.js";
 
 const cli = Command.run(app, {
   name: "skygent",
-  version: "0.0.0"
+  version: pkg.version
 });
 
 const stripAnsi = (value: string) =>
