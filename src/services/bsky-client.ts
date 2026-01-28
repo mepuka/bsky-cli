@@ -7,7 +7,8 @@ import type {
   AppBskyFeedGetPosts,
   AppBskyFeedGetTimeline,
   AppBskyFeedPost,
-  AppBskyNotificationListNotifications
+  AppBskyNotificationListNotifications,
+  AppBskyUnspeccedGetTrendingTopics
 } from "@atproto/api";
 import {
   Chunk,
@@ -608,6 +609,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
     readonly getProfiles: (
       actors: ReadonlyArray<string>
     ) => Effect.Effect<ReadonlyArray<ProfileBasic>, BskyError>;
+    readonly getTrendingTopics: () => Effect.Effect<ReadonlyArray<string>, BskyError>;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -857,12 +859,36 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           })
         );
 
+      const getTrendingTopics = Effect.gen(function* () {
+        yield* ensureAuth(false);
+        const response = yield* withRetry(
+          withRateLimit(
+            Effect.tryPromise<AppBskyUnspeccedGetTrendingTopics.Response>(() =>
+              agent.app.bsky.unspecced.getTrendingTopics({
+                limit: 25,
+                ...(agent.did ? { viewer: agent.did } : {})
+              })
+            )
+          )
+        ).pipe(Effect.mapError(toBskyError("Failed to fetch trending topics")));
+
+        const topics = [
+          ...response.data.topics,
+          ...response.data.suggested
+        ]
+          .map((topic) => topic.topic.trim().toLowerCase().replace(/^#/, ""))
+          .filter((topic) => topic.length > 0);
+
+        return Array.from(new Set(topics));
+      });
+
       return BskyClient.of({
         getTimeline,
         getNotifications,
         getFeed,
         getPost,
-        getProfiles
+        getProfiles,
+        getTrendingTopics: () => getTrendingTopics
       });
     })
   );

@@ -75,8 +75,7 @@ const linkValidatorLayer = LinkValidator.layer.pipe(
 );
 const trendingTopicsLayer = TrendingTopics.layer.pipe(
   Layer.provideMerge(storageLayer),
-  Layer.provideMerge(appConfigLayer),
-  Layer.provideMerge(credentialLayer)
+  Layer.provideMerge(bskyLayer)
 );
 const resourceMonitorLayer = ResourceMonitor.layer.pipe(
   Layer.provideMerge(appConfigLayer)
