@@ -2,7 +2,7 @@ import { Command, HelpDoc, ValidationError } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { app } from "./src/cli/app.js";
-import pkg from "./package.json";
+import pkg from "./package.json" with { type: "json" };
 import {
   type AgentErrorPayload,
   CliInputError,

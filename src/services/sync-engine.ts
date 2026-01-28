@@ -30,7 +30,6 @@ type PreparedOutcome =
   | { readonly _tag: "Skip"; readonly pageCursor?: string }
   | { readonly _tag: "Error"; readonly error: SyncError; readonly pageCursor?: string };
 
-const skippedPrepared: PreparedOutcome = { _tag: "Skip" };
 
 type SyncOutcome =
   | { readonly _tag: "Stored"; readonly eventId: EventId }
@@ -158,13 +157,13 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                     ),
                     Effect.map(({ ok }) =>
                       ok
-                        ? ({ _tag: "Store", post, pageCursor: raw._pageCursor } as const)
-                        : ({ _tag: "Skip", pageCursor: raw._pageCursor } as const)
+                        ? ({ _tag: "Store", post, ...(raw._pageCursor !== undefined ? { pageCursor: raw._pageCursor } : {}) } as const)
+                        : ({ _tag: "Skip", ...(raw._pageCursor !== undefined ? { pageCursor: raw._pageCursor } : {}) } as const)
                     )
                   )
                 ),
                 Effect.catchAll((error) =>
-                  Effect.succeed({ _tag: "Error", error, pageCursor: raw._pageCursor } as const)
+                  Effect.succeed({ _tag: "Error", error, ...(raw._pageCursor !== undefined ? { pageCursor: raw._pageCursor } : {}) } as const)
                 )
               );
 

@@ -25,35 +25,33 @@ export const extractLinks = (text: string): ReadonlyArray<string> => {
   return Array.from(new Set(matches));
 };
 
-import type { RichTextFacet } from "./bsky.js";
-
-export const extractFromFacets = (facets?: ReadonlyArray<RichTextFacet>) => {
+export const extractFromFacets = (facets?: ReadonlyArray<unknown>) => {
   const hashtags = new Set<string>();
   const links = new Set<string>();
   const mentionDids = new Set<string>();
 
   for (const facet of facets ?? []) {
-    for (const feature of facet.features) {
-      switch (feature.$type) {
-        case "app.bsky.richtext.facet#mention":
-          if (feature.did.length > 0) {
-            mentionDids.add(feature.did);
-          }
-          break;
-        case "app.bsky.richtext.facet#link":
-          if (feature.uri.length > 0) {
-            links.add(feature.uri);
-          }
-          break;
-        case "app.bsky.richtext.facet#tag":
-          if (feature.tag.length > 0) {
-            const tag = feature.tag.startsWith("#")
-              ? feature.tag
-              : `#${feature.tag}`;
-            hashtags.add(tag);
-          }
-          break;
-        // Unknown feature types are intentionally ignored
+    if (!facet || typeof facet !== "object") continue;
+    const features = (facet as { readonly features?: ReadonlyArray<unknown> })
+      .features ?? [];
+    for (const feature of features) {
+      if (!feature || typeof feature !== "object") continue;
+      const candidate = feature as {
+        readonly did?: unknown;
+        readonly uri?: unknown;
+        readonly tag?: unknown;
+      };
+      if (typeof candidate.did === "string" && candidate.did.length > 0) {
+        mentionDids.add(candidate.did);
+      }
+      if (typeof candidate.uri === "string" && candidate.uri.length > 0) {
+        links.add(candidate.uri);
+      }
+      if (typeof candidate.tag === "string" && candidate.tag.length > 0) {
+        const tag = candidate.tag.startsWith("#")
+          ? candidate.tag
+          : `#${candidate.tag}`;
+        hashtags.add(tag);
       }
     }
   }
