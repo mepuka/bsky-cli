@@ -78,4 +78,30 @@ describe("FilterErrorPolicy", () => {
     });
     expect(decoded._tag).toBe("Retry");
   });
+
+  test("decodes Engagement with one threshold", () => {
+    const decoded = Schema.decodeUnknownSync(FilterExprSchema)({
+      _tag: "Engagement",
+      minLikes: 5
+    });
+    expect(decoded._tag).toBe("Engagement");
+  });
+
+  test("decodes Engagement with all thresholds", () => {
+    const decoded = Schema.decodeUnknownSync(FilterExprSchema)({
+      _tag: "Engagement",
+      minLikes: 5,
+      minReposts: 2,
+      minReplies: 1
+    });
+    expect(decoded._tag).toBe("Engagement");
+  });
+
+  test("rejects Engagement with no thresholds", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(FilterExprSchema)({
+        _tag: "Engagement"
+      })
+    ).toThrow(/at least one threshold/);
+  });
 });

@@ -319,7 +319,13 @@ const FilterEngagementSchema: Schema.Schema<FilterEngagement, FilterEngagementEn
     minLikes: Schema.optionalWith(EngagementThreshold, { exact: true }),
     minReposts: Schema.optionalWith(EngagementThreshold, { exact: true }),
     minReplies: Schema.optionalWith(EngagementThreshold, { exact: true })
-  });
+  }).pipe(
+    Schema.filter((e) =>
+      e.minLikes !== undefined || e.minReposts !== undefined || e.minReplies !== undefined
+        ? undefined
+        : "Engagement filter requires at least one threshold (minLikes, minReposts, or minReplies)"
+    )
+  ) as any;
 const FilterHasImagesSchema: Schema.Schema<FilterHasImages, FilterHasImagesEncoded, never> =
   Schema.TaggedStruct("HasImages", {});
 const FilterHasVideoSchema: Schema.Schema<FilterHasVideo, FilterHasVideoEncoded, never> = Schema.TaggedStruct(
