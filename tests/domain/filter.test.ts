@@ -12,16 +12,6 @@ describe("FilterExpr", () => {
     expect(decoded._tag).toBe("Hashtag");
   });
 
-  test("decodes LLM filter with policy", () => {
-    const decoded = Schema.decodeUnknownSync(FilterExprSchema)({
-      _tag: "Llm",
-      prompt: "Is this relevant?",
-      minConfidence: 0.7,
-      onError: { _tag: "Include" }
-    });
-    expect(decoded._tag).toBe("Llm");
-  });
-
   test("decodes regex filter with single pattern", () => {
     const decoded = Schema.decodeUnknownSync(FilterExprSchema)({
       _tag: "Regex",
@@ -43,6 +33,37 @@ describe("FilterExpr", () => {
     if (decoded._tag === "Regex") {
       expect(decoded.patterns).toEqual(["hello", "#effect"]);
     }
+  });
+});
+
+describe("FilterDateRange validation", () => {
+  test("accepts start before end", () => {
+    const decoded = Schema.decodeUnknownSync(FilterExprSchema)({
+      _tag: "DateRange",
+      start: "2024-01-01T00:00:00Z",
+      end: "2024-12-31T00:00:00Z"
+    });
+    expect(decoded._tag).toBe("DateRange");
+  });
+
+  test("rejects start after end", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(FilterExprSchema)({
+        _tag: "DateRange",
+        start: "2024-12-31T00:00:00Z",
+        end: "2024-01-01T00:00:00Z"
+      })
+    ).toThrow(/start.*before.*end/i);
+  });
+
+  test("rejects start equal to end", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(FilterExprSchema)({
+        _tag: "DateRange",
+        start: "2024-06-15T00:00:00Z",
+        end: "2024-06-15T00:00:00Z"
+      })
+    ).toThrow(/start.*before.*end/i);
   });
 });
 

@@ -11,14 +11,12 @@ import {
   Timestamp
 } from "../../src/domain/index.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
-import { LlmDecision } from "../../src/services/llm.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
 import { TrendingTopics } from "../../src/services/trending-topics.js";
 import { SyncError, SyncResult, SyncResultMonoid } from "../../src/domain/sync.js";
 import type { FilterExpr } from "../../src/domain/filter.js";
 
 const runtimeLayer = FilterRuntime.layer.pipe(
-  Layer.provideMerge(LlmDecision.testLayer),
   Layer.provideMerge(LinkValidator.testLayer),
   Layer.provideMerge(TrendingTopics.testLayer)
 );
@@ -55,11 +53,12 @@ const { expr: pureFilterArb } = fc.letrec((tie) => ({
     fc.constant({ _tag: "None" } as const),
     handleArb.map((handle) => ({ _tag: "Author", handle } as const)),
     hashtagArb.map((tag) => ({ _tag: "Hashtag", tag } as const)),
-    fc.tuple(timestampArb, timestampArb).map(([start, end]) => ({
-      _tag: "DateRange",
-      start,
-      end
-    })),
+    fc.tuple(timestampArb, timestampArb)
+      .filter(([a, b]) => a.getTime() !== b.getTime())
+      .map(([a, b]) => {
+        const [start, end] = a.getTime() < b.getTime() ? [a, b] : [b, a];
+        return { _tag: "DateRange", start, end } as const;
+      }),
     fc
       .tuple(tie("expr"), tie("expr"))
       .map(([left, right]) => ({ _tag: "And", left, right } as const)),

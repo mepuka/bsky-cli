@@ -63,8 +63,9 @@ describe("filter DSL property tests", () => {
       fc.asyncProperty(timestampArb, timestampArb, async (first, second) => {
         const start = toDate(first);
         const end = toDate(second);
+        fc.pre(start.getTime() !== end.getTime());
         const [rangeStart, rangeEnd] =
-          start.getTime() <= end.getTime() ? [start, end] : [end, start];
+          start.getTime() < end.getTime() ? [start, end] : [end, start];
 
         const input = `date:${rangeStart.toISOString()}..${rangeEnd.toISOString()}`;
         const expr = await Effect.runPromise(

@@ -100,32 +100,16 @@ const filterExprArb: fc.Arbitrary<FilterExpr> = fc.letrec((tie) => ({
           ? ({ _tag: "Regex", patterns, flags } as const)
           : ({ _tag: "Regex", patterns } as const)
       ),
-    fc.tuple(timestampArb, timestampArb).map(([start, end]) => ({
-      _tag: "DateRange",
-      start,
-      end
-    })),
+    fc.tuple(timestampArb, timestampArb)
+      .filter(([a, b]) => a.getTime() !== b.getTime())
+      .map(([a, b]) => {
+        const [start, end] = a.getTime() < b.getTime() ? [a, b] : [b, a];
+        return { _tag: "DateRange", start, end } as const;
+      }),
     policyArb.map((onError) => ({ _tag: "HasValidLinks", onError } as const)),
     fc
       .tuple(hashtagArb, policyArb)
       .map(([tag, onError]) => ({ _tag: "Trending", tag, onError } as const)),
-    fc
-      .record({
-        prompt: fc.string({ minLength: 1, maxLength: 100 }),
-        minConfidence: fc.float({
-          min: 0,
-          max: 1,
-          noNaN: true,
-          noDefaultInfinity: true
-        }),
-        onError: policyArb
-      })
-      .map(({ prompt, minConfidence, onError }) => ({
-        _tag: "Llm",
-        prompt,
-        minConfidence,
-        onError
-      } as const)),
     fc
       .tuple(tie("expr"), tie("expr"))
       .map(([left, right]) => ({ _tag: "And", left, right } as const)),

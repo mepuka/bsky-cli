@@ -107,8 +107,8 @@ const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError
       case "Regex":
         return yield* validateRegex(expr.patterns, expr.flags);
       case "DateRange":
-        if (expr.start.getTime() > expr.end.getTime()) {
-          return yield* invalid("DateRange start must be before or equal to end");
+        if (expr.start.getTime() >= expr.end.getTime()) {
+          return yield* invalid("DateRange start must be before end");
         }
         return;
       case "And":
@@ -122,11 +122,6 @@ const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError
       case "HasValidLinks":
         return yield* validatePolicy(expr.onError);
       case "Trending":
-        return yield* validatePolicy(expr.onError);
-      case "Llm":
-        if (expr.minConfidence < 0 || expr.minConfidence > 1) {
-          return yield* invalid("Llm minConfidence must be between 0 and 1");
-        }
         return yield* validatePolicy(expr.onError);
       default:
         return yield* invalid(

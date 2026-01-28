@@ -103,13 +103,6 @@ export interface FilterTrending {
   readonly tag: Hashtag;
   readonly onError: FilterErrorPolicy;
 }
-export interface FilterLlm {
-  readonly _tag: "Llm";
-  readonly prompt: string;
-  readonly minConfidence: number;
-  readonly onError: FilterErrorPolicy;
-}
-
 export type FilterExpr =
   | FilterAll
   | FilterNone
@@ -134,8 +127,7 @@ export type FilterExpr =
   | FilterRegex
   | FilterDateRange
   | FilterHasValidLinks
-  | FilterTrending
-  | FilterLlm;
+  | FilterTrending;
 
 interface FilterAllEncoded {
   readonly _tag: "All";
@@ -233,13 +225,6 @@ interface FilterTrendingEncoded {
   readonly tag: string;
   readonly onError: FilterErrorPolicyEncoded;
 }
-interface FilterLlmEncoded {
-  readonly _tag: "Llm";
-  readonly prompt: string;
-  readonly minConfidence: number;
-  readonly onError: FilterErrorPolicyEncoded;
-}
-
 type FilterExprEncoded =
   | FilterAllEncoded
   | FilterNoneEncoded
@@ -264,8 +249,7 @@ type FilterExprEncoded =
   | FilterRegexEncoded
   | FilterDateRangeEncoded
   | FilterHasValidLinksEncoded
-  | FilterTrendingEncoded
-  | FilterLlmEncoded;
+  | FilterTrendingEncoded;
 
 export const FilterExprSchema: Schema.Schema<FilterExpr, FilterExprEncoded, never> = Schema.suspend(
   () => FilterExprInternal
@@ -386,7 +370,13 @@ const FilterDateRangeSchema: Schema.Schema<
 > = Schema.TaggedStruct("DateRange", {
   start: required(Timestamp, "\"start\" is required"),
   end: required(Timestamp, "\"end\" is required")
-});
+}).pipe(
+  Schema.filter((dr) =>
+    dr.start.getTime() < dr.end.getTime()
+      ? undefined
+      : "\"start\" must be before \"end\""
+  )
+) as any;
 const FilterHasValidLinksSchema: Schema.Schema<
   FilterHasValidLinks,
   FilterHasValidLinksEncoded,
@@ -401,15 +391,6 @@ const FilterTrendingSchema: Schema.Schema<FilterTrending, FilterTrendingEncoded,
     onError: required(FilterErrorPolicy, "\"onError\" is required")
   }
 );
-const FilterLlmSchema: Schema.Schema<FilterLlm, FilterLlmEncoded, never> = Schema.TaggedStruct("Llm", {
-  prompt: required(Schema.String, "\"prompt\" is required"),
-  minConfidence: required(
-    Schema.Number.pipe(Schema.finite(), Schema.between(0, 1)),
-    "\"minConfidence\" is required"
-  ),
-  onError: required(FilterErrorPolicy, "\"onError\" is required")
-});
-
 const FilterExprInternal: Schema.Schema<FilterExpr, FilterExprEncoded, never> = Schema.Union(
   FilterAllSchema,
   FilterNoneSchema,
@@ -434,8 +415,7 @@ const FilterExprInternal: Schema.Schema<FilterExpr, FilterExprEncoded, never> = 
   FilterRegexSchema,
   FilterDateRangeSchema,
   FilterHasValidLinksSchema,
-  FilterTrendingSchema,
-  FilterLlmSchema
+  FilterTrendingSchema
 ).annotations({ identifier: "FilterExpr" });
 
 export const all = (): FilterAll => ({ _tag: "All" });
@@ -471,7 +451,6 @@ export const isEffectfulFilter = (expr: FilterExpr): boolean => {
   switch (expr._tag) {
     case "HasValidLinks":
     case "Trending":
-    case "Llm":
       return true;
     case "And":
     case "Or":
