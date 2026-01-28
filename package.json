@@ -31,11 +31,7 @@
   },
   "dependencies": {
     "@atproto/api": "^0.18.17",
-    "@effect/ai": "^0.33.2",
-    "@effect/ai-anthropic": "^0.23.0",
-    "@effect/ai-google": "^0.12.1",
-    "@effect/ai-openai": "^0.37.2",
-    "@effect/cli": "^0.73.1",
+"@effect/cli": "^0.73.1",
     "@effect/platform": "^0.94.2",
     "@effect/platform-bun": "^0.87.1",
     "@effect/printer": "^0.47.0",

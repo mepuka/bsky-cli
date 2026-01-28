@@ -121,11 +121,11 @@ $ bun run index.ts derive --help
 
 ### 4. Mode Validation Error Is Good ✅
 
-**Example**: EventTime mode rejecting Llm filter worked well:
+**Example**: EventTime mode rejecting effectful filters worked well:
 
 ```json
 {
-  "message": "EventTime mode does not allow Llm/Trending/HasValidLinks filters. Use --mode derive-time for effectful filters.",
+  "message": "EventTime mode does not allow Trending/HasValidLinks filters. Use --mode derive-time for effectful filters.",
   "cause": {"filterExpr": {...}, "mode": "EventTime"}
 }
 ```

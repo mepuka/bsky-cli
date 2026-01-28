@@ -1,8 +1,10 @@
 # Skygent-Bsky: Effect-Native Bluesky CLI Architecture
 
+> **Note:** LLM features described in this plan have been deprecated and removed from the codebase. References to LLM integration below are historical only.
+
 **Date:** 2026-01-25
 **Status:** Design
-**Purpose:** Agent-driven Bluesky feed monitoring with composable filters, flexible storage, and LLM integration
+**Purpose:** Agent-driven Bluesky feed monitoring with composable filters and flexible storage
 
 ---
 

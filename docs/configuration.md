@@ -61,4 +61,3 @@ Resource monitoring:
 - `SKYGENT_RESOURCE_STORE_WARN_BYTES`
 - `SKYGENT_RESOURCE_RSS_WARN_BYTES`
 
-LLM settings (providers, cache, models, etc) are also supported. See `.env.example` for the full list.

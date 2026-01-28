@@ -60,7 +60,7 @@ export const Handle = Schema.String.pipe(
 export const FilterExpr = Schema.Union(
   FilterAll, FilterNone, FilterAnd, FilterOr, FilterNot,
   FilterAuthor, FilterHashtag, FilterDateRange,
-  FilterHasValidLinks, FilterTrending, FilterLlm
+  FilterHasValidLinks, FilterTrending
 )
 ```
 
@@ -79,23 +79,11 @@ export const FilterErrorPolicy = Schema.Union(
 
 #### ✅ Service Layer (src/services/)
 
-**LLM Request Batching**
-```typescript
-const decideBatch = (requests: Chunk.Chunk<LlmDecisionRequest>) =>
-  Effect.gen(function* () {
-    const grouped = groupByPrompt(requests)
-    // ...batched API call
-  })
-```
-
-**Assessment:** Automatic request batching for LLM calls demonstrates understanding of cost optimization and rate limit management.[^4] This pattern is essential for production LLM applications.
-
 **Layer-Based Dependency Injection**
 ```typescript
 export const FilterRuntimeLive = Layer.effect(
   FilterRuntime,
   Effect.gen(function* () {
-    const llm = yield* LlmDecision
     const http = yield* HttpClient
     // ...
   })
@@ -130,7 +118,6 @@ test("Event application is idempotent", () => {
 | Sync Pipeline (end-to-end) | ❌ Not started | High | 5 |
 | CLI Commands (@effect/cli) | ❌ Not started | High | 6 |
 | Jetstream Integration | ❌ Not started | Medium | 7 |
-| LLM Caching Implementation | ⚠️ Config only | Medium | 8 |
 | HasValidLinks Filter | ⚠️ Stub | Low | 8 |
 | Trending Filter | ⚠️ Stub | Low | 8 |
 | Advanced Testing | ⚠️ Basic coverage | Medium | 9 |
@@ -196,7 +183,7 @@ class PostEvent {
     source: "timeline" | "notifications" | "jetstream"
     command: string         // CLI command that created event
     filterHash: string      // Hash of filter expression
-    model?: string          // LLM model if used
+    model?: string          // Model if used
     promptHash?: string     // Hash of prompt if used
   }
 }
@@ -428,7 +415,7 @@ const incrementalRebuild = (store: StoreRef) =>
 | Same post updated 5x | YES | Keep latest version | Reduces log size |
 | Post deleted | YES | Tombstone | Mark deletion event |
 | Different posts | NO | Keep all events | Each is unique |
-| LLM annotations | NO | Keep history | Provenance tracking |
+| Annotations | NO | Keep history | Provenance tracking |
 | Jetstream events | NO | Never compact | Raw firehose data |
 
 **Compaction Policy:**
@@ -446,7 +433,7 @@ const storageStrategy = {
   rawTimeline: "never-compact",      // Source of truth
   dateIndexes: "compact-daily",       // Rebuild from raw if needed
   hashtagViews: "compact-weekly",     // Performance optimization
-  llmAnnotations: "keep-all"          // Preserve model provenance
+  annotations: "keep-all"             // Preserve provenance
 }
 ```
 
@@ -539,49 +526,7 @@ const pipelineWithBuffer = stream.pipe(
 // But bounded capacity prevents unbounded memory growth
 ```
 
-#### 3.2 Microbatching for LLM Calls
-
-**Pattern from Apache Spark Streaming:**[^23]
-
-> "Break stream into small blocks (~1 second batches). Treat each block as mini batch process."
-
-**For Skygent LLM Filters:**
-
-```typescript
-// Batch size tuning based on model context window
-const BATCH_SIZES = {
-  "claude-3-5-sonnet": 50,    // 200k context
-  "gpt-4-turbo": 30,           // 128k context
-  "gpt-3.5-turbo": 10          // 16k context
-}
-
-const batchedLlmFilter = (filter: FilterLlm, model: string) =>
-  posts.pipe(
-    Stream.grouped(BATCH_SIZES[model]),          // Microbatch
-    Stream.mapEffect(batch =>
-      evaluateLlmBatch(filter, batch)           // Single API call
-    ),
-    Stream.flattenChunks,                        // Flatten back to stream
-    Stream.buffer({ capacity: 100 })             // Decouple stages
-  )
-```
-
-**Trade-offs:**
-- **Smaller batches** (5-10): Lower latency, higher cost (more API calls)
-- **Larger batches** (50-100): Higher latency, lower cost (fewer calls)
-- **Sweet spot** (10-30): Balance latency and cost
-
-**Your Current Implementation:**
-```typescript
-// Already excellent in filter-runtime.ts
-const evaluateBatch = (posts: Chunk.Chunk<Post>) =>
-  Effect.gen(function* () {
-    const llm = yield* LlmDecision
-    return yield* llm.decideBatch(requests)  // ✅ Batching implemented
-  })
-```
-
-#### 3.3 Lazy Evaluation for Efficiency
+#### 3.2 Lazy Evaluation for Efficiency
 
 **Key Insight from "Purely Functional Data Structures":**[^24]
 
@@ -788,13 +733,7 @@ Effect's stream implementation automatically fuses adjacent map/filter operation
 - [ ] Atomic checkpoint writes (temp+rename)
 - [ ] Test crash recovery (kill process mid-sync)
 
-**Week 3: LLM Batching**
-- [ ] Tune batch sizes per model (10-50 posts)
-- [ ] Add cache warming (pre-populate from previous syncs)
-- [ ] Implement batch timeout (fail if > 60s)
-- [ ] Monitor batch efficiency (cache hit rate)
-
-**Week 4: Polish**
+**Week 3: Polish**
 - [ ] Bounded buffers for producer/consumer decoupling
 - [ ] Progress reporting (every 100 posts)
 - [ ] Rate limit handling (exponential backoff)
@@ -802,7 +741,6 @@ Effect's stream implementation automatically fuses adjacent map/filter operation
 
 **Performance Targets:**
 - **Timeline sync** (1000 posts): < 30 seconds
-- **LLM filter** (100 posts, cached): < 5 seconds
 - **Memory usage**: < 100MB (bounded buffers)
 - **Checkpoint overhead**: < 50ms per checkpoint
 
@@ -903,27 +841,6 @@ class FilterEvalError extends Schema.TaggedError<FilterEvalError>()(
 Complete the error taxonomy for all subsystems:
 
 ```typescript
-// LLM Errors (4 types)
-class LlmTimeoutError extends Schema.TaggedError<LlmTimeoutError>()(
-  "LlmTimeoutError",
-  { provider: Schema.String, duration: Schema.Duration }
-) {}
-
-class LlmRateLimitError extends Schema.TaggedError<LlmRateLimitError>()(
-  "LlmRateLimitError",
-  { provider: Schema.String, retryAfter: Schema.optional(Schema.Duration) }
-) {}
-
-class LlmProviderError extends Schema.TaggedError<LlmProviderError>()(
-  "LlmProviderError",
-  { provider: Schema.String, statusCode: Schema.Number, message: Schema.String }
-) {}
-
-class LlmSchemaError extends Schema.TaggedError<LlmSchemaError>()(
-  "LlmSchemaError",
-  { provider: Schema.String, expected: Schema.String, received: Schema.Unknown }
-) {}
-
 // Bluesky Errors (3 types)
 class BskyAuthError extends Schema.TaggedError<BskyAuthError>()(
   "BskyAuthError",
@@ -962,7 +879,6 @@ class StoreSchemaError extends Schema.TaggedError<StoreSchemaError>()(
 ) {}
 
 // Aggregate types for matching
-export type LlmError = LlmTimeoutError | LlmRateLimitError | LlmProviderError | LlmSchemaError
 export type BskyError = BskyAuthError | BskyRateLimitError | BskyNetworkError
 export type StoreError = StoreNotFound | StoreIoError | StoreIndexError | StoreSchemaError
 ```
@@ -996,97 +912,7 @@ const withRetry = Effect.retry(operation, retryPolicy)
 | Client error (400) | Fail fast | Bad request, retrying won't help |
 | Schema validation | Fail fast | Data format issue |
 
-**Your Current LLM Service:**
-
-```typescript
-// Already implements retry in llm-runtime.ts
-const provider = ExecutionPlan.make({
-  primary: OpenAIProvider.pipe(
-    Effect.retry(Schedule.exponential("500 millis").pipe(
-      Schedule.compose(Schedule.recurs(2))
-    ))
-  ),
-  fallback: AnthropicProvider  // Multi-provider fallback
-})
-```
-
-✅ **Assessment:** Retry strategy is already production-ready.
-
-#### 4.4 Multi-Provider Fallback
-
-**Pattern from Research:**[^37][^38][^39]
-
-LLM applications require multi-provider fallback due to inevitable API failures.
-
-**Common Scenarios:**
-- Rate limits exceeded
-- Model capacity issues (OpenAI frequently at capacity)
-- Network timeouts
-- Service outages
-- Regional availability
-
-**Implementation:**
-
-```typescript
-const llmDecision = (prompt: string, schema: Schema.Schema<any>) =>
-  Effect.firstSuccessOf([
-    // Primary: OpenAI GPT-4
-    callOpenAI(prompt, schema).pipe(
-      Effect.retry(exponentialBackoff),
-      Effect.timeout("30 seconds")
-    ),
-
-    // Secondary: Anthropic Claude
-    callAnthropic(prompt, schema).pipe(
-      Effect.retry(exponentialBackoff),
-      Effect.timeout("30 seconds")
-    ),
-
-    // Tertiary: Google Gemini
-    callGoogle(prompt, schema).pipe(
-      Effect.retry(exponentialBackoff),
-      Effect.timeout("30 seconds")
-    )
-  ])
-```
-
-**Key Insight:**
-
-Fallbacks are attempted **after retries are exhausted** at each provider level:
-1. Try OpenAI with 3 retries (total 4 attempts)
-2. If all fail, try Anthropic with 2 retries (total 3 attempts)
-3. If all fail, try Google with 1 retry (total 2 attempts)
-4. If all fail, propagate error
-
-**Cost Implications:**
-- Sequential attempts (not parallel) to minimize cost
-- Each provider gets timeout boundary (don't hang forever)
-- Cache aggressively to avoid fallback overhead
-
-**Your Current Implementation:**
-
-```typescript
-// llm-runtime.ts already has ExecutionPlan with primary/fallback
-export const LlmPlanLive = Layer.effect(
-  ExecutionPlan.Tag,
-  Effect.gen(function* () {
-    const config = yield* Config.all({
-      primary: Config.string("SKYGENT_LLM_PRIMARY").pipe(
-        Config.withDefault("openai")
-      ),
-      fallback: Config.string("SKYGENT_LLM_FALLBACK").pipe(
-        Config.withDefault("anthropic")
-      )
-    })
-
-    return ExecutionPlan.make({ primary, fallback })
-  })
-)
-```
-
-✅ **Assessment:** Multi-provider architecture is in place.
-
-#### 4.5 Fail-Open vs Fail-Closed Policies
+#### 4.4 Fail-Open vs Fail-Closed Policies
 
 **Security Research Finding:**[^40][^41]
 
@@ -1100,8 +926,6 @@ export const LlmPlanLive = Layer.effect(
 | `FilterAuthor` | N/A | Pure function, can't fail |
 | `FilterHasValidLinks` | ExcludeOnError | Fail-closed: broken links excluded for safety |
 | `FilterTrending` | IncludeOnError | Fail-open: optional enhancement |
-| `FilterLlm` (content safety) | ExcludeOnError | Fail-closed: safety-critical |
-| `FilterLlm` (relevance) | IncludeOnError | Fail-open: optional enhancement |
 
 **Your Current Implementation:**
 
@@ -1124,10 +948,6 @@ Document default policies per filter type in architecture guide:
 const FILTER_DEFAULTS = {
   HasValidLinks: new ExcludeOnError({}),  // Safety: exclude suspicious links
   Trending: new IncludeOnError({}),        // Enhancement: include if check fails
-  Llm: (purpose: "safety" | "relevance") =>
-    purpose === "safety"
-      ? new ExcludeOnError({})   // Safety-critical
-      : new IncludeOnError({})   // Enhancement
 }
 ```
 
@@ -1143,7 +963,7 @@ const timedTask = task.pipe(Effect.timeout("5 seconds"))
 const timedWithError = task.pipe(
   Effect.timeoutFail({
     duration: "5 seconds",
-    onTimeout: () => new CustomTimeoutError({ context: "LLM call" })
+    onTimeout: () => new CustomTimeoutError({ context: "timed out" })
   })
 )
 
@@ -1170,8 +990,6 @@ const disconnected = task.pipe(
 |-----------|---------|-----------|
 | Bluesky API call | 10s | Network + server processing |
 | Link validation (HEAD) | 5s | HTTP round-trip |
-| LLM single inference | 30s | Model latency varies |
-| LLM batch (10 posts) | 60s | Proportional to batch size |
 | Store write | 2s | Local filesystem |
 | Stream chunk | 100ms | Keep pipeline flowing |
 
@@ -1222,7 +1040,7 @@ class CircuitBreaker {
 **When to Add:**
 
 ⚠️ **Not needed initially.** Circuit breakers add complexity. Only add when:
-- Persistent LLM provider failures detected in production
+- Persistent downstream service failures detected in production
 - Retry storms causing cascading failures
 - Need to protect upstream systems
 
@@ -1235,23 +1053,22 @@ Limit concurrent operations to prevent resource exhaustion.
 **Implementation with Semaphore:**
 
 ```typescript
-// Limit concurrent LLM calls to 5
-const llmSemaphore = yield* Effect.makeSemaphore(5)
+// Limit concurrent API calls to 10
+const apiSemaphore = yield* Effect.makeSemaphore(10)
 
-const rateLimitedLlmCall = (prompt: string) =>
-  llmSemaphore.withPermits(1)(
-    callLlm(prompt)
+const rateLimitedApiCall = (url: string) =>
+  apiSemaphore.withPermits(1)(
+    callApi(url)
   )
 
-// Now at most 5 LLM calls in flight at once
-// 6th call waits for first to complete
+// Now at most 10 API calls in flight at once
+// 11th call waits for first to complete
 ```
 
 **Recommended Limits:**
 
 | Resource | Limit | Rationale |
 |----------|-------|-----------|
-| Concurrent LLM calls | 5 | Rate limit protection |
 | Concurrent HTTP requests | 10 | Network bandwidth |
 | Open file handles | 100 | OS limits |
 | In-flight filter evaluations | 50 | Memory bounds |
@@ -1265,9 +1082,7 @@ const rateLimitedLlmCall = (prompt: string) =>
 
 **Phase 5 Integration (Sync):**
 - [ ] Implement retry with exponential backoff for network calls
-- [ ] Add multi-provider fallback for LLM filters
 - [ ] Set timeout boundaries on all async operations
-- [ ] Add bulkheads (semaphores) for concurrent LLM calls
 
 **Phase 6 CLI (Error Reporting):**
 - [ ] Structured error JSON to stderr
@@ -1277,7 +1092,6 @@ const rateLimitedLlmCall = (prompt: string) =>
 **Phase 9 Testing:**
 - [ ] Test all error paths (use `Effect.either`)
 - [ ] Test retry exhaustion scenarios
-- [ ] Test fallback provider switching
 - [ ] Test timeout enforcement
 
 **What NOT to Build:**
@@ -1505,7 +1319,7 @@ class FilteredPost extends Schema.Class<FilteredPost>("FilteredPost")({
 
   // Metadata
   matchedAt: Timestamp,
-  confidence: Schema.optional(Schema.Number)  // If LLM-based
+  confidence: Schema.optional(Schema.Number)
 }) {}
 ```
 
@@ -1633,7 +1447,7 @@ Domain Layer (Pure)
 
 Service Layer (Effectful)
   ├─ bsky-client.ts (HTTP I/O)
-  ├─ filter-runtime.ts (LLM I/O)
+  ├─ filter-runtime.ts (I/O)
   └─ post-parser.ts (Schema validation)
 ```
 
@@ -2334,41 +2148,20 @@ const result = await Effect.runPromise(
 - Type-safe service contracts
 - Compile-time dependency graph verification
 
-#### 7.3 Spy Pattern for Batching Verification
-
-**Your Current LlmTestLayer (Excellent):**
-
-```typescript
-// filter-runtime.test.ts
-const { layer: testLayer, calls } = makeSpyLayer()
-
-const result = await evaluateBatch([post1, post2]).pipe(
-  Effect.provide(testLayer)
-)
-
-// Verify batching behavior
-expect(calls.length).toBe(1)  // Single batch call
-expect(calls[0]?.length).toBe(2)  // Two requests batched
-```
-
-✅ **Assessment:** This is production-quality testing pattern for async batching.
-
-#### 7.4 Error Path Testing
+#### 7.3 Error Path Testing
 
 **Test ALL Error Paths:**
 
 ```typescript
 describe("Filter error policies", () => {
   it("Include policy returns true on error", async () => {
-    const filter = new FilterLlm({
-      prompt: "...",
-      confidence: 0.7,
+    const filter = new FilterHasValidLinks({
       onError: new IncludeOnError({})
     })
 
-    // Force error by providing failing LLM layer
-    const failingLayer = Layer.succeed(LlmDecision, {
-      decide: () => Effect.fail(new LlmTimeoutError({ ... }))
+    // Force error by providing failing HTTP layer
+    const failingLayer = Layer.succeed(HttpClient, {
+      head: () => Effect.fail(new HttpError({ ... }))
     })
 
     const result = await Effect.runPromise(
@@ -2383,17 +2176,15 @@ describe("Filter error policies", () => {
   })
 
   it("Retry policy exhausts retries", async () => {
-    const filter = new FilterLlm({
-      prompt: "...",
-      confidence: 0.7,
+    const filter = new FilterHasValidLinks({
       onError: new RetryOnError({ maxRetries: 3, baseDelay: "100 millis" })
     })
 
     let attempts = 0
-    const failingLayer = Layer.succeed(LlmDecision, {
-      decide: () => {
+    const failingLayer = Layer.succeed(HttpClient, {
+      head: () => {
         attempts++
-        return Effect.fail(new LlmTimeoutError({ ... }))
+        return Effect.fail(new HttpError({ ... }))
       }
     })
 
@@ -2410,7 +2201,7 @@ describe("Filter error policies", () => {
 })
 ```
 
-#### 7.5 Storage Rebuild Tests
+#### 7.4 Storage Rebuild Tests
 
 **Critical Property: Rebuild = Original**
 
@@ -2517,7 +2308,6 @@ tests/
   integration/          # Multi-service flows
     sync-pipeline.test.ts      # End-to-end sync
     storage-rebuild.test.ts    # Event log → index
-    llm-batching.test.ts       # Batch optimization
   cli/                  # CLI commands
     store-commands.test.ts
     sync-commands.test.ts
@@ -2675,7 +2465,6 @@ All six research domains converged on these themes:
 - ✅ Error policies (Include, Exclude, Retry)
 - ✅ Tagged error types
 - ✅ Service structure (BskyClient, PostParser, FilterCompiler, FilterRuntime)
-- ✅ LLM integration (batching, caching config)
 - ✅ Unit tests (domain + services)
 
 **Remaining (Phases 4-9):**
@@ -2705,7 +2494,6 @@ All six research domains converged on these themes:
 **Deliverables:**
 - [ ] End-to-end pipeline: BskyClient → Parser → Filter → Store
 - [ ] Checkpoint-based resumability
-- [ ] LLM batching with tuned batch sizes
 - [ ] Progress reporting to stderr
 - [ ] Error handling with retry
 
@@ -2717,7 +2505,6 @@ All six research domains converged on these themes:
 **Success Criteria:**
 - Sync 1000 posts in < 30 seconds
 - Resume from checkpoint after crash
-- LLM cache hit rate > 50% on re-sync
 - Memory usage < 100MB
 
 ### Phase 6: CLI Interface (Week 7)
@@ -2761,18 +2548,10 @@ All six research domains converged on these themes:
 ### Phase 8: Advanced Features (Week 9)
 
 **Deliverables:**
-- [ ] LLM caching implementation (config exists)
-- [ ] LLM provenance tracking
 - [ ] HasValidLinks filter (stub exists)
 - [ ] Trending filter (stub exists)
 
-**Critical Decisions:**
-- **Cache backend:** In-memory with LRU eviction
-- **Cache key:** Hash of (model, prompt, content)
-- **TTL:** 24 hours default, configurable
-
 **Success Criteria:**
-- Cache hit rate > 80% on re-sync
 - HasValidLinks validates via HTTP HEAD
 - Trending checks external API
 
@@ -2830,10 +2609,6 @@ All six research domains converged on these themes:
 - **Why:** Processes more data than needed
 - **Instead:** Lazy streams with take/filter
 
-**❌ Synchronous LLM Calls**
-- **Why:** 10x slower, rate limit exhaustion
-- **Instead:** Batching with 10-50 requests
-
 **❌ No Checkpointing**
 - **Why:** Restart from beginning on crash
 - **Instead:** Save cursor every 50 posts
@@ -2858,9 +2633,9 @@ Effect.catchAll(operation, error => {
 class Error extends Error {}
 
 // GOOD
-class LlmTimeoutError extends Schema.TaggedError<LlmTimeoutError>()(
-  "LlmTimeoutError",
-  { provider: Schema.String, duration: Schema.Duration }
+class BskyNetworkError extends Schema.TaggedError<BskyNetworkError>()(
+  "BskyNetworkError",
+  { cause: Schema.Unknown }
 ) {}
 ```
 
@@ -2976,7 +2751,7 @@ const authors = await getAuthors(posts.map(p => p.author))  // 1 batch query
 - **Instead:** Profile first, optimize hotspots
 
 **❌ No Caching for Expensive Ops**
-- **Why:** Repeat LLM calls, 10x slower
+- **Why:** Repeat expensive API calls
 - **Instead:** Hash-based cache with TTL
 
 **❌ Synchronous I/O in Loops**
@@ -2994,8 +2769,6 @@ const authors = await getAuthors(posts.map(p => p.author))  // 1 batch query
 [^2]: Granin, Alexander. *Functional Design and Architecture*. Manning, 2023. (Interpreter pattern for filters)
 
 [^3]: OWASP Foundation. *OWASP Top 10 2025: A10—Mishandling of Exceptional Conditions*. (Fail-open vs fail-closed)
-
-[^4]: LiteLLM Documentation. *Routing, Loadbalancing & Fallbacks*. (Multi-provider LLM patterns)
 
 [^5]: Effect-TS. *Managing Layers*. Effect Documentation. (Layer-based dependency injection)
 
@@ -3061,12 +2834,6 @@ const authors = await getAuthors(posts.map(p => p.author))  // 1 batch query
 
 [^36]: DZone. *Understanding Retry Pattern With Exponential Back-Off and Circuit Breaker Pattern*.
 
-[^37]: DEV Community. *Your Primary LLM Provider Failed? Enable Automatic Fallback*.
-
-[^38]: Vellum AI. *LLM Router: Best strategies to route failed LLM requests*.
-
-[^39]: Portkey.ai. *How to design a reliable fallback system for LLM apps*.
-
 [^40]: AuthZed. *Understanding "Failed Open" and "Fail Closed" in Software Engineering*.
 
 [^41]: OWASP. *OWASP Top 10 2025: A10—Mishandling of Exceptional Conditions*.
@@ -3129,7 +2896,6 @@ const authors = await getAuthors(posts.map(p => p.author))  // 1 batch query
 - Effect-TS Documentation (effect.website)
 - @effect/vitest package documentation
 - @effect/cli documentation
-- @effect/ai documentation
 
 **Functional Programming:**
 - *Purely Functional Data Structures* - Chris Okasaki
@@ -3144,11 +2910,6 @@ const authors = await getAuthors(posts.map(p => p.author))  // 1 batch query
 **Domain-Driven Design:**
 - *Domain Modeling Made Functional* - Scott Wlaschin
 - *Implementing Domain-Driven Design* - Vaughn Vernon
-
-**LLM Application Patterns:**
-- Vellum AI blog (LLM routing strategies)
-- Portkey.ai blog (LLM reliability)
-- LiteLLM documentation (multi-provider patterns)
 
 **Security & Error Handling:**
 - OWASP Top 10 2025
@@ -3177,7 +2938,7 @@ The remaining 60% of implementation work involves applying these validated patte
 
 **Next Immediate Steps:**
 1. Implement Phase 4 (Storage) with file-backed KeyValueStore and ULID-based event log
-2. Build Phase 5 (Sync Pipeline) with checkpointing and LLM batching
+2. Build Phase 5 (Sync Pipeline) with checkpointing
 3. Create Phase 6 (CLI) with NDJSON output and idempotent commands
 4. Complete Phase 9 (Testing) with property tests for filter laws
 

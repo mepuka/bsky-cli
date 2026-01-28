@@ -29,8 +29,6 @@ There is no mechanism preventing two concurrent operations from reading the same
 ## Impact
 
 *   **Data Corruption:** If multiple posts are processed concurrently, index updates will be lost. Posts will be missing from time-based or hashtag-based queries.
-*   **Blocker for Optimization:** This issue blocks the resolution of the LLM Batching issue, as enabling concurrency to improve performance will immediately cause data corruption.
-
 ## Recommendation
 
 *   **Short Term:** Wrap index updates in a `Semaphore` (limit 1) or `Resource` to ensure mutual exclusion during the read-modify-write cycle.

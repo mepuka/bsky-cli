@@ -118,7 +118,7 @@ Create a derived store by applying a filter to a source store.
 
 Notes:
 
-- `--mode event-time` (default) disallows effectful filters (Llm, Trending, HasValidLinks).
+- `--mode event-time` (default) disallows effectful filters (Trending, HasValidLinks).
 - `--reset` is destructive and requires `--yes`.
 
 ### view

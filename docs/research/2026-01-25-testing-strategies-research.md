@@ -1,5 +1,7 @@
 # Testing Strategies Research: Functional Architecture with Effect.ts
 
+> **Note:** LLM-related testing strategies described in this document are no longer applicable as LLM features have been removed from the codebase.
+
 **Date:** 2026-01-25
 **Status:** Research Complete
 **Goal:** Synthesize testing strategies for Skygent-Bsky's Effect-based architecture

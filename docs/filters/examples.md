@@ -34,9 +34,4 @@ authorin:alice.bsky.social,bob.bsky.social
 language:en AND haslinks
 ```
 
-## LLM gate with retry policy
-
-```
-llm:"is this relevant?",minConfidence=0.7,onError=retry,maxRetries=3,baseDelay="1 second"
-```
 

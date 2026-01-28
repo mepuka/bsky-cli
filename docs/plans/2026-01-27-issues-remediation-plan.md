@@ -7,8 +7,8 @@
 ## Executive Summary
 
 - **Resolved:** Issue 001 (storage scalability) and Issue 004 (store index concurrency) are addressed by the SQLite StoreIndex backend now in `src/services/store-index.ts` + migrations in `src/db/migrations/store-index/`.
-- **Open:** Issue 002 (incremental checkpointing), Issue 003 (LLM batching), Issue 005 (CLI UX improvements).
-- **Next:** Implement incremental checkpoints + batching in `SyncEngine`, then CLI UX improvements.
+- **Open:** Issue 002 (incremental checkpointing), Issue 005 (CLI UX improvements).
+- **Next:** Implement incremental checkpoints in `SyncEngine`, then CLI UX improvements.
 
 ## Research Notes (Effect References)
 
@@ -103,7 +103,6 @@ These are the APIs we will use in the remediation steps below.
 | --- | --- | --- |
 | 001 Storage scalability | **Resolved** | StoreIndex now backed by SQLite with indexes and migrations; no JSON list rewrites. |
 | 002 Sync checkpointing | **Implemented** | Incremental checkpointing in `SyncEngine` with count + interval triggers. |
-| 003 LLM batching | **Implemented** | Concurrent prepare phase via `Stream.mapEffect` + `Effect.withRequestBatching`. |
 | 004 Store concurrency | **Resolved** | SQLite transactions replace non-atomic KV updates. |
 | 005 CLI UX | **Implemented** | TTY-aware logs, interactive delete prompt, and `skygent config check`. |
 
@@ -160,37 +159,6 @@ Persist checkpoints periodically so long syncs can resume without full replay.
 
 ---
 
-### Issue 003: LLM Batching in SyncEngine
-
-**Goal**
-Enable `RequestResolver` batching by running filter/LLM evaluation concurrently.
-
-**Requirements**
-- Preserve processing order for storage writes.
-- Avoid store corruption (already mitigated by SQLite).
-- Keep concurrency bounded and configurable.
-
-**Design**
-1. **Prepare vs apply**
-   - **Prepare** phase: parse + filter + LLM decision, executed in parallel.
-   - **Apply** phase: store event + index update, executed sequentially.
-2. **Concurrency controls**
-   - Use `Stream.mapEffect(processRaw, { concurrency, unordered: false })`.
-   - Wrap LLM evaluation in `Effect.withRequestBatching(true)`.
-   - If LLM uses a batched resolver, apply `RequestResolver.batchN` to cap batch size.
-3. **Safety**
-   - Keep apply phase sequential to maintain event ordering and simplify checkpointing.
-
-**Proposed API/config**
-- `SKYGENT_SYNC_CONCURRENCY` (default: 5 or 10)
-- CLI option: `--sync-concurrency`
-
-**Acceptance criteria**
-- With batch strategy enabled, batch size > 1 is observed in tests.
-- Throughput improves under concurrency without data loss.
-
----
-
 ### Issue 005: CLI Usability Improvements
 
 **Goal**
@@ -213,7 +181,6 @@ Improve human UX without breaking agent-friendly JSON defaults.
    - Add `skygent config check`:
      - Validate credentials key format.
      - Validate Bluesky auth.
-     - Validate LLM API key.
      - Validate store root is writable.
 
 **Acceptance criteria**
@@ -226,10 +193,6 @@ Improve human UX without breaking agent-friendly JSON defaults.
 **Checkpointing**
 - Unit: checkpoint saved every N items and at time intervals.
 - Integration: simulate mid-stream interruption, resume near last checkpoint.
-
-**LLM batching**
-- Use a test RequestResolver to capture batch size.
-- Ensure at least one batch size > 1 when concurrency > 1.
 
 **CLI UX**
 - Mock `Terminal.isTTY` true/false.
@@ -248,7 +211,6 @@ Improve human UX without breaking agent-friendly JSON defaults.
 ## Risks and Mitigations
 
 - **Checkpoint overhead:** mitigate with count/time thresholds.
-- **LLM rate limits:** cap concurrency; add retry/backoff.
 - **CLI behavior change:** only apply interactive flow when TTY.
 
 ## Deliverables

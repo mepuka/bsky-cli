@@ -60,8 +60,6 @@ Effectful filters require an `onError` policy in JSON or `onError=` in the DSL:
   - `{"_tag":"HasValidLinks","onError":{"_tag":"Exclude"}}`
 - Trending: `trending:#ai,onError=include`
   - `{"_tag":"Trending","tag":"#ai","onError":{"_tag":"Include"}}`
-- LLM: `llm:"score tech",minConfidence=0.7,onError=include`
-  - `{"_tag":"Llm","prompt":"score tech","minConfidence":0.7,"onError":{"_tag":"Include"}}`
 
 Error policies:
 
@@ -71,9 +69,8 @@ Error policies:
 
 Defaults:
 
-- `llm` / `trending`: include on error
+- `trending`: include on error
 - `links` / `validlinks`: exclude on error
-- `llm` minConfidence defaults to 0.7
 
 ## Composition
 

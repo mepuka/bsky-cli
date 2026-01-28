@@ -6,11 +6,11 @@
 
 ## Executive Summary
 
-We will address 15 issues in four phases. The biggest structural fixes are around event log storage (manifest bloat, sequential IO, orphaning) and concurrency/race safety (TOCTOU in sync, store manifest races). These are now largely addressed by moving event log + catalog metadata into **custom SQLite tables** (leveraging the existing SQL stack used by StoreIndex). Remaining high-severity risks are TOCTOU/atomicity in sync, signal-safe checkpointing, and LLM timeouts.
+We will address 15 issues in four phases. The biggest structural fixes are around event log storage (manifest bloat, sequential IO, orphaning) and concurrency/race safety (TOCTOU in sync, store manifest races). These are now largely addressed by moving event log + catalog metadata into **custom SQLite tables** (leveraging the existing SQL stack used by StoreIndex). Remaining high-severity risks are TOCTOU/atomicity in sync and signal-safe checkpointing.
 
 **Phase focus:**
 1. **Data integrity (critical):** TOCTOU in sync and event log/index atomicity.
-2. **Reliability (critical):** Signal handling with interruption-safe checkpointing, LLM timeouts, derivation checkpointing.
+2. **Reliability (critical):** Signal handling with interruption-safe checkpointing, derivation checkpointing.
 3. **Performance:** Event log IO batching, stream backpressure, stats aggregation via SQL.
 4. **UX / safety:** Regex ReDoS guardrails, secret redaction, env validation, default help text, deprecated option warnings.
 
@@ -26,7 +26,6 @@ High‑severity items now addressed:
 - **TOCTOU in sync** is removed by atomic insert‑if‑missing at the DB layer.
 - **Event log ↔ index atomicity** is enforced via a shared transaction.
 - **Signal/interrupt checkpointing** is handled with finalizers on sync streams.
-- **LLM timeout** is enforced at the LLM execution boundary.
 
 ## Research Notes (Effect Sources Consulted)
 
@@ -128,7 +127,6 @@ Implemented migrations:
 | 2 | Manifest memory bloat | High | Full manifest array in KVS | 1 | Custom SQL event log | **Done** |
 | 3 | Sequential event log I/O | High | Per-key KV reads | 3 | SQL pagination | **Done** |
 | 4 | Signal handling | High | No checkpoint on interrupt | 2 | Stream finalizers / onInterrupt | **Done** |
-| 5 | LLM timeout missing | High | LLM calls unbounded | 2 | Effect.timeout + retry policy | **Done** |
 | 6 | Store manager manifest races | Medium | Non-atomic manifest modify | 1 | SQLite catalog | **Done** |
 | 7 | Derivation no checkpointing | Medium | Save only at end | 2 | Stream mapAccum + finalizer | **Open** |
 | 8 | Event log orphaning | Medium | Event write + manifest update not atomic | 1 | Transactional SQL event log | **Done** |
@@ -195,22 +193,6 @@ Implemented migrations:
 **Effect APIs:** `Effect.onInterrupt`, `Stream.ensuringWith`, `Stream.interruptWhenDeferred`.
 
 **Acceptance:** Ctrl+C preserves last checkpoint without partial corruption.
-
----
-
-### 5) LLM Timeout Missing
-**Root cause:** LLM calls in `src/services/llm.ts` are unbounded.
-
-**Current state:** `LanguageModel.generateObject` calls are wrapped with a configurable timeout.
-
-**Implementation:**
-- Added `SKYGENT_LLM_TIMEOUT` config (default 30s).
-- Applied `Effect.timeoutFail` around LLM requests (single + batch).
-- Retry policy remains in place and is still bounded.
-
-**Effect APIs:** `Effect.timeoutFail`, `Effect.retry`, `Schedule.exponential`, `Schedule.jittered`.
-
-**Acceptance:** LLM calls do not hang indefinitely; timeouts are typed and logged.
 
 ---
 
@@ -297,7 +279,7 @@ Implemented migrations:
 **Plan:**
 - Add a `ConfigCheck` layer that validates required envs for enabled features at startup or via `skygent config check`.
 - Provide warnings when defaults are used for critical settings.
-- Validate config early in CLI entrypoint for commands that depend on external services (LLM, Bluesky).
+- Validate config early in CLI entrypoint for commands that depend on external services (Bluesky).
 
 **Effect APIs:** `Config`, `Config.all`, `Config.validate` patterns.
 
@@ -352,9 +334,8 @@ Implemented migrations:
 - **Done:** `catalog.sqlite` for store metadata and migrated `StoreManager`.
 - **Done:** event insert + index update are atomic; TOCTOU removed via insert‑if‑missing.
 
-**Phase 2 (Reliability):** Issues 4, 5, 7
+**Phase 2 (Reliability):** Issues 4, 7
 - **Done:** interrupt‑safe checkpointing in sync + jetstream.
-- **Done:** LLM timeouts + retry policy.
 - Add shutdown hooks around long-running streams (if needed beyond interrupt finalizers).
 
 **Phase 3 (Performance):** Issues 3, 9, 13
@@ -373,7 +354,6 @@ Implemented migrations:
 - **Race safety:** Concurrency tests for sync and store manager manifest updates.
 - **Event log:** Verify no orphaned events under simulated crashes.
 - **Checkpointing:** Use `TestClock` to simulate time-based checkpoint intervals.
-- **LLM timeouts:** Simulate hung LLM with `Effect.never` and assert timeout.
 - **Backpressure:** Stress tests with `Queue.bounded` capacity to ensure no memory spike.
 - **Regex safety:** Include test cases for common ReDoS patterns.
 - **Secrets:** Golden tests to ensure redacted strings in logs.

@@ -87,7 +87,7 @@
 - [x] `FilterSpec` schema (JSON-first).
 - [x] `FilterCompiler` with validation + errors.
 - [x] Short-circuit `FilterRuntime` with policy handling.
-- [x] Optional batched runtime for LLM nodes.
+- [x] Optional batched runtime for filter nodes.
 - [x] Regex filter with single or array patterns.
 - [x] Effectful filters: `HasValidLinks` + `Trending` (cached HTTP + topics).
 
@@ -200,26 +200,7 @@
 
 ---
 
-### Phase 9 — LLM Integration & Caching
-**Deliverables**
-- LLM filter runtime + caching + provenance.
-
-**Checklist**
-- [x] Provider selection & fallback via `ExecutionPlan` (env-driven).
-- [x] Request batching via `RequestResolver` + `batchN`.
-- [x] In-memory request cache (`Request.makeCache`) with TTL.
-- [x] Fail-open/closed policy enforcement in filter runtime.
-- [x] Persistent LLM cache keyed by model/prompt/content hash.
-- [x] LLM annotations stored in event metadata (provenance + confidence).
-- [x] Configuration schema for provider-specific model defaults (Anthropic: claude-haiku-4-5, OpenAI: gpt-5-mini, Google: gemini-3.0-flash; temperature: 0.2).
-- [ ] Provider health/fallback telemetry (stderr summary + counters).
-
-**Acceptance**
-- LLM usage is deterministic and traceable.
-
----
-
-### Phase 10 — Testing + Hardening
+### Phase 9 — Testing + Hardening
 **Deliverables**
 - Property-based tests for filter laws.
 - Layer swapping tests for services.
@@ -251,8 +232,7 @@ Use this table as the single source of truth during implementation:
 | 6 | Complete | Store + sync + query + watch + output format/config done |
 | 7 | Complete | Credentials + rate limiting + docs + monitoring done |
 | 8 | Not started | Jetstream (optional) |
-| 9 | In progress | LLM cache + metadata + model defaults done; telemetry pending |
-| 10 | In progress | Property tests done; CLI smoke tests pending |
+| 9 | In progress | Property tests done; CLI smoke tests pending |
 
 ---
 
@@ -262,8 +242,6 @@ Use this table as the single source of truth during implementation:
 - Persistence uses file-based `KeyValueStore` for event log + rebuildable index (SQLite optional later).
 - CLI defaults to NDJSON output; logs to stderr.
 - Jetstream integration is optional.
-- LLM providers are explicit and ordered via `SKYGENT_LLM_PROVIDERS`; no implicit default.
-- LLM fallback/retries are handled via `ExecutionPlan` with per-step attempts/schedule.
 
 ---
 
@@ -271,7 +249,6 @@ Use this table as the single source of truth during implementation:
 
 **Resolved**
 - Retention: keep append-only event log as source of truth; derived views rebuildable. Pruning is a future opt-in tool.
-- LLM provider default: none. Require explicit env config; allow ordered fallback via `SKYGENT_LLM_PROVIDERS`.
 
 **Still Open**
 - Index scale limits: define a trigger (e.g. >1M events or slow queries) to add SQLite-backed indexes.

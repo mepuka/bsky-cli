@@ -75,14 +75,12 @@ Each entry shows a DSL example and the equivalent JSON shape.
   - `{ "_tag": "HasValidLinks", "onError": { "_tag": "Exclude" } }`
 - Trending (effectful): `trending:#ai,onError=include`
   - `{ "_tag": "Trending", "tag": "#ai", "onError": { "_tag": "Include" } }`
-- LLM (effectful): `llm:"score tech",minConfidence=0.7,onError=include`
-  - `{ "_tag": "Llm", "prompt": "score tech", "minConfidence": 0.7, "onError": { "_tag": "Include" } }`
 
 Note: `haslinks` only checks for link presence. `links`/`validlinks` validates HTTP status (effectful and cached).
 
 ## Error policies for effectful filters
 
-Use `onError` with `HasValidLinks`, `Trending`, or `Llm`:
+Use `onError` with `HasValidLinks` or `Trending`:
 
 - `onError=include`
 - `onError=exclude`
@@ -90,6 +88,5 @@ Use `onError` with `HasValidLinks`, `Trending`, or `Llm`:
 
 Defaults:
 
-- `llm` and `trending`: include on error
+- `trending`: include on error
 - `links`/`validlinks`: exclude on error
-- `llm` default `minConfidence` is 0.7

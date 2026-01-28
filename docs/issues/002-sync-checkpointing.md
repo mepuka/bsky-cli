@@ -30,7 +30,7 @@ if (shouldSave) {
 ## Impact
 
 *   **No Resume Capability:** If a long-running sync operation (e.g., syncing a full timeline or a large feed) is interrupted by a crash, network failure, or user cancellation (Ctrl+C), **all progress is lost**.
-*   **Redundant Processing:** The next sync attempt will fail to find an updated checkpoint and will restart from the beginning (or the last successful run), re-downloading and re-processing previously handled data. This wastes bandwidth, API limits, and LLM costs.
+*   **Redundant Processing:** The next sync attempt will fail to find an updated checkpoint and will restart from the beginning (or the last successful run), re-downloading and re-processing previously handled data. This wastes bandwidth and API limits.
 
 ## Recommendation
 

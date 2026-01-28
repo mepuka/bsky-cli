@@ -39,12 +39,11 @@ if (!force) {
 *   Proceed only on 'y'.
 
 ### 3. Missing Configuration Verification
-Users setting up the tool for the first time have no easy way to verify their environment variables (credentials key, LLM keys, Bluesky auth) without running a command that might fail halfway through.
+Users setting up the tool for the first time have no easy way to verify their environment variables (credentials key, Bluesky auth) without running a command that might fail halfway through.
 
 **Recommendation:**
 *   Add a `skygent config check` command.
 *   It should verify:
     *   `SKYGENT_CREDENTIALS_KEY` is a valid AES key.
     *   Bluesky credentials allow successful login.
-    *   LLM API keys are accepted (simple ping/list models).
     *   Store root path is writable.
