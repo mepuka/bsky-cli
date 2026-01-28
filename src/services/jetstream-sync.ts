@@ -1,5 +1,6 @@
 import {
   Chunk,
+  Clock,
   Context,
   Duration,
   Effect,
@@ -19,7 +20,6 @@ import { ProfileResolver } from "./profile-resolver.js";
 import { EventMeta, PostDelete, PostUpsert } from "../domain/events.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { filterExprSignature } from "../domain/filter.js";
-import type { LlmDecisionMeta } from "../domain/llm.js";
 import type { Post } from "../domain/post.js";
 import { EventId, PostCid, PostUri, Timestamp } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
@@ -60,7 +60,6 @@ type PreparedOutcome =
   | {
       readonly _tag: "Upsert";
       readonly post: Post;
-      readonly llm: ReadonlyArray<LlmDecisionMeta>;
       readonly checkExists: boolean;
     }
   | { readonly _tag: "Delete"; readonly uri: PostUri; readonly cid: PostCid | undefined }
@@ -139,19 +138,16 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
 
       const makeMeta = (
         command: string,
-        filterHash: string,
-        llmMeta: ReadonlyArray<LlmDecisionMeta>
+        filterHash: string
       ) =>
-        Schema.decodeUnknown(Timestamp)(new Date().toISOString()).pipe(
+        Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) => Schema.decodeUnknown(Timestamp)(new Date(now).toISOString())),
           Effect.mapError(toSyncError("store", "Failed to create event metadata")),
           Effect.map((createdAt) =>
             EventMeta.make({
               source: "jetstream",
               command,
               filterExprHash: filterHash,
-              model: llmMeta[0]?.modelId,
-              promptHash: llmMeta[0]?.promptHash,
-              llm: llmMeta.length > 0 ? llmMeta : undefined,
               createdAt
             })
           )
@@ -161,11 +157,10 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
         target: StoreRef,
         command: string,
         filterHash: string,
-        post: Post,
-        llmMeta: ReadonlyArray<LlmDecisionMeta>
+        post: Post
       ) =>
         Effect.gen(function* () {
-          const meta = yield* makeMeta(command, filterHash, llmMeta);
+          const meta = yield* makeMeta(command, filterHash);
           const event = PostUpsert.make({ post, meta });
           return yield* committer
             .appendUpsert(target, event)
@@ -181,11 +176,10 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
         target: StoreRef,
         command: string,
         filterHash: string,
-        post: Post,
-        llmMeta: ReadonlyArray<LlmDecisionMeta>
+        post: Post
       ) =>
         Effect.gen(function* () {
-          const meta = yield* makeMeta(command, filterHash, llmMeta);
+          const meta = yield* makeMeta(command, filterHash);
           const event = PostUpsert.make({ post, meta });
           const stored = yield* committer
             .appendUpsertIfMissing(target, event)
@@ -205,7 +199,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
         cid: PostCid | undefined
       ) =>
         Effect.gen(function* () {
-          const meta = yield* makeMeta(command, filterHash, []);
+          const meta = yield* makeMeta(command, filterHash);
           const event = PostDelete.make({ uri, cid, meta });
           return yield* committer
             .appendDelete(target, event)
@@ -221,14 +215,14 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
         (
           config: JetstreamSyncConfig,
           predicate: (post: Post) => Effect.Effect<
-            { readonly ok: boolean; readonly llm: ReadonlyArray<LlmDecisionMeta> },
+            { readonly ok: boolean },
             unknown
           >,
           activeCheckpoint: Option.Option<SyncCheckpoint>
         ) =>
           Effect.gen(function* () {
             const filterHash = filterExprSignature(config.filter);
-            const startTime = Date.now();
+            const startTime = yield* Clock.currentTimeMillis;
             const strict = config.strict === true;
             const maxErrors = config.maxErrors;
             const initialLastEventId = Option.flatMap(activeCheckpoint, (value) =>
@@ -257,9 +251,8 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
               if (!shouldSave) {
                 return Effect.void;
               }
-              return Schema.decodeUnknown(Timestamp)(
-                new Date().toISOString()
-              ).pipe(
+              return Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) => Schema.decodeUnknown(Timestamp)(new Date(now).toISOString())),
                 Effect.mapError(
                   toSyncError("store", "Failed to create checkpoint timestamp")
                 ),
@@ -331,7 +324,6 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                       ? ({
                           _tag: "Upsert",
                           post,
-                          llm: evaluated.llm,
                           checkExists: message._tag === "CommitCreate"
                         } as const)
                       : ({ _tag: "Skip" } as const);
@@ -388,8 +380,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                         config.store,
                         config.command,
                         filterHash,
-                        prepared.post,
-                        prepared.llm
+                        prepared.post
                       ).pipe(
                         Effect.map((eventId) =>
                           Option.match(eventId, {
@@ -405,8 +396,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                         config.store,
                         config.command,
                         filterHash,
-                        prepared.post,
-                        prepared.llm
+                        prepared.post
                       ).pipe(
                         Effect.map(
                           (eventId): SyncOutcome => ({
@@ -460,7 +450,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                   }
                 }
                 const cursor = String(Math.max(0, Math.trunc(maxCursor)));
-                const now = Date.now();
+                const now = yield* Clock.currentTimeMillis;
                 const update = yield* Ref.modify(
                   stateRef,
                   (state): readonly [

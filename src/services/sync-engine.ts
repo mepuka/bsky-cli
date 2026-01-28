@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
+import { Clock, Context, Duration, Effect, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
 import { FilterRuntime } from "./filter-runtime.js";
 import { PostParser } from "./post-parser.js";
 import { StoreCommitter } from "./store-commit.js";
@@ -6,7 +6,6 @@ import { BskyClient } from "./bsky-client.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { filterExprSignature } from "../domain/filter.js";
 import { EventMeta, PostUpsert } from "../domain/events.js";
-import type { LlmDecisionMeta } from "../domain/llm.js";
 import type { Post } from "../domain/post.js";
 import { EventId, Timestamp } from "../domain/primitives.js";
 import type { RawPost } from "../domain/raw.js";
@@ -27,7 +26,7 @@ import { SyncReporter } from "./sync-reporter.js";
 import { SyncSettings } from "./sync-settings.js";
 
 type PreparedOutcome =
-  | { readonly _tag: "Store"; readonly post: Post; readonly llm: ReadonlyArray<LlmDecisionMeta> }
+  | { readonly _tag: "Store"; readonly post: Post }
   | { readonly _tag: "Skip" }
   | { readonly _tag: "Error"; readonly error: SyncError };
 
@@ -119,8 +118,9 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
 
             const filterHash = filterExprSignature(filter);
 
-            const makeMeta = (llmMeta: ReadonlyArray<LlmDecisionMeta>) =>
-              Schema.decodeUnknown(Timestamp)(new Date().toISOString()).pipe(
+            const makeMeta = () =>
+              Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) => Schema.decodeUnknown(Timestamp)(new Date(now).toISOString())),
                 Effect.mapError(
                   toSyncError("store", "Failed to create event metadata")
                 ),
@@ -129,17 +129,14 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                     source: sourceLabel(source),
                     command: commandForSource(source),
                     filterExprHash: filterHash,
-                    model: llmMeta[0]?.modelId,
-                    promptHash: llmMeta[0]?.promptHash,
-                    llm: llmMeta.length > 0 ? llmMeta : undefined,
                     createdAt
                   })
                 )
               );
 
-            const storePost = (post: Post, llmMeta: ReadonlyArray<LlmDecisionMeta>) =>
+            const storePost = (post: Post) =>
               Effect.gen(function* () {
-                const meta = yield* makeMeta(llmMeta);
+                const meta = yield* makeMeta();
                 const event = PostUpsert.make({ post, meta });
                 const stored = yield* committer
                   .appendUpsertIfMissing(target, event)
@@ -159,8 +156,8 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                     Effect.mapError(
                       toSyncError("filter", "Filter evaluation failed")
                     ),
-                    Effect.map(({ ok, llm }) =>
-                      ok ? ({ _tag: "Store", post, llm } as const) : skippedPrepared
+                    Effect.map(({ ok }) =>
+                      ok ? ({ _tag: "Store", post } as const) : skippedPrepared
                     )
                   )
                 ),
@@ -179,7 +176,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                   case "Error":
                     return { _tag: "Error", error: prepared.error } as const;
                   case "Store": {
-                    const stored = yield* storePost(prepared.post, prepared.llm);
+                    const stored = yield* storePost(prepared.post);
                     return Option.match(stored, {
                       onNone: () => skippedOutcome,
                       onSome: (eventId) => ({ _tag: "Stored", eventId } as const)
@@ -272,7 +269,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               );
             };
 
-            const startTime = Date.now();
+            const startTime = yield* Clock.currentTimeMillis;
             const initialState: SyncState = {
               result: initial,
               lastEventId: Option.none<EventId>(),
@@ -323,7 +320,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       state.skipped + (outcome._tag === "Skipped" ? 1 : 0);
                     const errors =
                       state.errors + (outcome._tag === "Error" ? 1 : 0);
-                    const now = Date.now();
+                    const now = yield* Clock.currentTimeMillis;
                     const shouldReport =
                       processed % 100 === 0 || now - state.lastReportAt >= 5000;
                     if (shouldReport) {
@@ -376,7 +373,11 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               Effect.withRequestBatching(true),
               Effect.ensuring(
                 Ref.get(stateRef).pipe(
-                  Effect.flatMap((state) => saveCheckpoint(state, Date.now())),
+                  Effect.flatMap((state) =>
+                    Clock.currentTimeMillis.pipe(
+                      Effect.flatMap((now) => saveCheckpoint(state, now))
+                    )
+                  ),
                   Effect.catchAll(() => Effect.void)
                 )
               )

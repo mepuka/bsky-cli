@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Random, Ref, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Random, Ref, Schema } from "effect";
 import type * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import { StoreIoError } from "../domain/errors.js";
@@ -99,7 +99,7 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
       const generateEventId = Effect.fn("StoreWriter.generateEventId")(() =>
         Effect.gen(function* () {
           const state = yield* Ref.get(idState);
-          const now = Date.now();
+          const now = yield* Clock.currentTimeMillis;
           let time = state.lastTime;
           let digits = state.lastRandom;
 

@@ -1,5 +1,5 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Chunk, Context, Effect, Exit, Layer, Option, Schema, Scope } from "effect";
+import { Chunk, Clock, Context, Effect, Exit, Layer, Option, Schema, Scope } from "effect";
 import * as Reactivity from "@effect/experimental/Reactivity";
 import * as Migrator from "@effect/sql/Migrator";
 import * as MigratorFileSystem from "@effect/sql/Migrator/FileSystem";
@@ -133,7 +133,8 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
               return storeRefFromMetadata(existing);
             }
 
-            const now = new Date().toISOString();
+            const nowMillis = yield* Clock.currentTimeMillis;
+            const now = new Date(nowMillis).toISOString();
             const configJson = yield* encodeConfigJson(config);
             yield* insertStore({
               name,
