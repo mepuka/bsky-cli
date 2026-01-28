@@ -34,5 +34,5 @@ export class PostEventRecord extends Schema.Class<PostEventRecord>("PostEventRec
 export class StoreQuery extends Schema.Class<StoreQuery>("StoreQuery")({
   range: Schema.optional(Schema.Struct({ start: Timestamp, end: Timestamp })),
   filter: Schema.optional(FilterExprSchema),
-  limit: Schema.optional(Schema.Number)
+  limit: Schema.optional(Schema.NonNegativeInt)
 }) {}

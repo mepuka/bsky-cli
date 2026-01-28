@@ -89,6 +89,13 @@ export const queryCommand = Command.make(
         });
       }
 
+      if (Option.isSome(limit) && limit.value <= 0) {
+        return yield* CliInputError.make({
+          message: "--limit must be a positive integer.",
+          cause: { limit: limit.value }
+        });
+      }
+
       const query = StoreQuery.make({
         range: Option.getOrUndefined(parsedRange),
         filter: Option.getOrUndefined(parsedFilter),
