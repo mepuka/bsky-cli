@@ -44,7 +44,8 @@ export class RawPost extends Schema.Class<RawPost>("RawPost")({
   viewer: Schema.optional(PostViewerState),
   threadgate: Schema.optional(ThreadgateView),
   debug: Schema.optional(Schema.Unknown),
-  feed: Schema.optional(FeedContext)
+  feed: Schema.optional(FeedContext),
+  _pageCursor: Schema.optional(Schema.String)
 }) {}
 
 export const PostFromRaw = Schema.transformOrFail(RawPost, Post, {

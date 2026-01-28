@@ -26,9 +26,9 @@ import { SyncReporter } from "./sync-reporter.js";
 import { SyncSettings } from "./sync-settings.js";
 
 type PreparedOutcome =
-  | { readonly _tag: "Store"; readonly post: Post }
-  | { readonly _tag: "Skip" }
-  | { readonly _tag: "Error"; readonly error: SyncError };
+  | { readonly _tag: "Store"; readonly post: Post; readonly pageCursor?: string }
+  | { readonly _tag: "Skip"; readonly pageCursor?: string }
+  | { readonly _tag: "Error"; readonly error: SyncError; readonly pageCursor?: string };
 
 const skippedPrepared: PreparedOutcome = { _tag: "Skip" };
 
@@ -157,12 +157,14 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       toSyncError("filter", "Filter evaluation failed")
                     ),
                     Effect.map(({ ok }) =>
-                      ok ? ({ _tag: "Store", post } as const) : skippedPrepared
+                      ok
+                        ? ({ _tag: "Store", post, pageCursor: raw._pageCursor } as const)
+                        : ({ _tag: "Skip", pageCursor: raw._pageCursor } as const)
                     )
                   )
                 ),
                 Effect.catchAll((error) =>
-                  Effect.succeed({ _tag: "Error", error } as const)
+                  Effect.succeed({ _tag: "Error", error, pageCursor: raw._pageCursor } as const)
                 )
               );
 
@@ -222,6 +224,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
             type SyncState = {
               readonly result: SyncResult;
               readonly lastEventId: Option.Option<EventId>;
+              readonly latestCursor: Option.Option<string>;
               readonly processed: number;
               readonly stored: number;
               readonly skipped: number;
@@ -251,9 +254,10 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                   toSyncError("store", "Failed to create checkpoint timestamp")
                 ),
                 Effect.flatMap((updatedAt) => {
+                  const effectiveCursor = Option.orElse(state.latestCursor, () => cursorOption);
                   const checkpoint = SyncCheckpoint.make({
                     source,
-                    cursor: Option.getOrUndefined(cursorOption),
+                    cursor: Option.getOrUndefined(effectiveCursor),
                     lastEventId: Option.getOrUndefined(lastEventId),
                     filterHash,
                     updatedAt
@@ -273,6 +277,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
             const initialState: SyncState = {
               result: initial,
               lastEventId: Option.none<EventId>(),
+              latestCursor: Option.none<string>(),
               processed: 0,
               stored: 0,
               skipped: 0,
@@ -339,12 +344,17 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       );
                     }
 
+                    const nextCursor = prepared.pageCursor
+                      ? Option.some(prepared.pageCursor)
+                      : state.latestCursor;
+
                     const nextState: SyncState = {
                       result: SyncResultMonoid.combine(state.result, delta),
                       lastEventId:
                         outcome._tag === "Stored"
                           ? Option.some(outcome.eventId)
                           : state.lastEventId,
+                      latestCursor: nextCursor,
                       processed,
                       stored,
                       skipped,

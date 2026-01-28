@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { BskyClient } from "../../src/services/bsky-client.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
-import { LlmDecision } from "../../src/services/llm.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
 import { PostParser } from "../../src/services/post-parser.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
@@ -22,7 +21,7 @@ import { SyncSettings, SyncSettingsOverrides } from "../../src/services/sync-set
 import { all } from "../../src/domain/filter.js";
 import { RawPost } from "../../src/domain/raw.js";
 import { StoreRef } from "../../src/domain/store.js";
-import { DataSource } from "../../src/domain/sync.js";
+import { DataSource, SyncCheckpoint } from "../../src/domain/sync.js";
 
 const sampleRaw = Schema.decodeUnknownSync(RawPost)({
   uri: "at://did:plc:example/app.bsky.feed.post/1",
@@ -49,7 +48,6 @@ const bskyLayer = Layer.succeed(
 );
 
 const filterRuntimeLayer = FilterRuntime.layer.pipe(
-  Layer.provideMerge(LlmDecision.testLayer),
   Layer.provideMerge(LinkValidator.testLayer),
   Layer.provideMerge(TrendingTopics.testLayer)
 );
@@ -165,6 +163,91 @@ describe("SyncEngine", () => {
       expect(outcome.first.postsAdded).toBe(1);
       expect(outcome.second.postsAdded).toBe(0);
       expect(outcome.second.postsSkipped).toBe(1);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("checkpoint cursor advances with page cursor from stream", async () => {
+    const page1Post = Schema.decodeUnknownSync(RawPost)({
+      uri: "at://did:plc:example/app.bsky.feed.post/p1",
+      author: "alice.bsky",
+      record: { text: "Page 1", createdAt: "2026-01-01T00:00:00.000Z" },
+      _pageCursor: "cursor-page-1"
+    });
+    const page2Post = Schema.decodeUnknownSync(RawPost)({
+      uri: "at://did:plc:example/app.bsky.feed.post/p2",
+      author: "alice.bsky",
+      record: { text: "Page 2", createdAt: "2026-01-01T00:00:01.000Z" },
+      _pageCursor: "cursor-page-2"
+    });
+
+    const cursorBskyLayer = Layer.succeed(
+      BskyClient,
+      BskyClient.of({
+        getTimeline: () => Stream.fromIterable([page1Post, page2Post]),
+        getNotifications: () => Stream.empty,
+        getFeed: () => Stream.empty,
+        getPost: () => Effect.succeed(page1Post)
+      })
+    );
+
+    const program = Effect.gen(function* () {
+      const sync = yield* SyncEngine;
+      const checkpointStore = yield* SyncCheckpointStore;
+
+      yield* sync.sync(DataSource.timeline(), sampleStore, all());
+
+      const checkpoint = yield* checkpointStore.load(
+        sampleStore,
+        DataSource.timeline()
+      );
+      return checkpoint;
+    });
+
+    const tempDir = await makeTempDir();
+    const overrides = Layer.succeed(ConfigOverrides, { storeRoot: tempDir });
+    const syncOverrides = Layer.succeed(SyncSettingsOverrides, {});
+    const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+    const syncSettingsLayer = SyncSettings.layer.pipe(Layer.provide(syncOverrides));
+    const storageLayer = KeyValueStore.layerMemory;
+    const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+    const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
+    const indexLayer = StoreIndex.layer.pipe(
+      Layer.provideMerge(storeDbLayer),
+      Layer.provideMerge(eventLogLayer)
+    );
+    const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+    const committerLayer = StoreCommitter.layer.pipe(
+      Layer.provideMerge(storeDbLayer),
+      Layer.provideMerge(writerLayer)
+    );
+    const checkpointLayer = SyncCheckpointStore.layer.pipe(
+      Layer.provideMerge(storageLayer)
+    );
+
+    const layer = SyncEngine.layer.pipe(
+      Layer.provideMerge(cursorBskyLayer),
+      Layer.provideMerge(PostParser.layer),
+      Layer.provideMerge(filterRuntimeLayer),
+      Layer.provideMerge(committerLayer),
+      Layer.provideMerge(indexLayer),
+      Layer.provideMerge(eventLogLayer),
+      Layer.provideMerge(checkpointLayer),
+      Layer.provideMerge(SyncReporter.layer),
+      Layer.provideMerge(syncSettingsLayer),
+      Layer.provideMerge(appConfigLayer),
+      Layer.provideMerge(storageLayer),
+      Layer.provideMerge(storeDbLayer),
+      Layer.provideMerge(BunContext.layer)
+    );
+
+    try {
+      const checkpoint = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      expect(Option.isSome(checkpoint)).toBe(true);
+      if (Option.isSome(checkpoint)) {
+        expect(checkpoint.value.cursor).toBe("cursor-page-2");
+      }
     } finally {
       await removeTempDir(tempDir);
     }

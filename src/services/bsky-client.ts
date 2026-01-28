@@ -707,12 +707,13 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
             ).pipe(Effect.mapError(toBskyError("Failed to fetch timeline")));
             const posts = yield* toRawPostsFromFeed(response.data.feed);
             const nextCursor = response.data.cursor;
+            const tagged = posts.map((p) => new RawPost({ ...p, _pageCursor: nextCursor }));
             const hasNext =
-              posts.length > 0 &&
+              tagged.length > 0 &&
               typeof nextCursor === "string" &&
               nextCursor !== cursor;
             return [
-              Chunk.fromIterable(posts),
+              Chunk.fromIterable(tagged),
               hasNext ? Option.some(nextCursor) : Option.none()
             ] as const;
           })
@@ -735,12 +736,13 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
             ).pipe(Effect.mapError(toBskyError("Failed to fetch feed")));
             const posts = yield* toRawPostsFromFeed(response.data.feed);
             const nextCursor = response.data.cursor;
+            const tagged = posts.map((p) => new RawPost({ ...p, _pageCursor: nextCursor }));
             const hasNext =
-              posts.length > 0 &&
+              tagged.length > 0 &&
               typeof nextCursor === "string" &&
               nextCursor !== cursor;
             return [
-              Chunk.fromIterable(posts),
+              Chunk.fromIterable(tagged),
               hasNext ? Option.some(nextCursor) : Option.none()
             ] as const;
           })
@@ -836,12 +838,13 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                 Option.isSome(item) ? [item.value] : []
               );
             const nextCursor = response.data.cursor;
+            const tagged = filtered.map((p) => new RawPost({ ...p, _pageCursor: nextCursor }));
             const hasNext =
-              filtered.length > 0 &&
+              tagged.length > 0 &&
               typeof nextCursor === "string" &&
               nextCursor !== cursor;
             return [
-              Chunk.fromIterable(filtered),
+              Chunk.fromIterable(tagged),
               hasNext ? Option.some(nextCursor) : Option.none()
             ] as const;
           })
