@@ -20,4 +20,32 @@ describe("dataSourceKey", () => {
 
     expect(dataSourceKey(first)).toBe(dataSourceKey(second));
   });
+
+  test("includes author feed options in the key", () => {
+    const base = DataSource.author("alice.bsky.social");
+    const filtered = DataSource.author("alice.bsky.social", {
+      filter: "posts_no_replies"
+    });
+    const includePins = DataSource.author("alice.bsky.social", {
+      includePins: true
+    });
+
+    expect(dataSourceKey(base)).not.toBe(dataSourceKey(filtered));
+    expect(dataSourceKey(base)).not.toBe(dataSourceKey(includePins));
+  });
+
+  test("includes thread options in the key", () => {
+    const base = DataSource.thread("at://did:plc:example/app.bsky.feed.post/xyz");
+    const withDepth = DataSource.thread(
+      "at://did:plc:example/app.bsky.feed.post/xyz",
+      { depth: 10 }
+    );
+    const withParentHeight = DataSource.thread(
+      "at://did:plc:example/app.bsky.feed.post/xyz",
+      { parentHeight: 5 }
+    );
+
+    expect(dataSourceKey(base)).not.toBe(dataSourceKey(withDepth));
+    expect(dataSourceKey(base)).not.toBe(dataSourceKey(withParentHeight));
+  });
 });

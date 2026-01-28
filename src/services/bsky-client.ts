@@ -1,9 +1,10 @@
-import { AtpAgent } from "@atproto/api";
+import { AtpAgent, AppBskyFeedDefs } from "@atproto/api";
 import { messageFromCause } from "./shared.js";
 import type {
   AppBskyActorGetProfiles,
-  AppBskyFeedDefs,
+  AppBskyFeedGetAuthorFeed,
   AppBskyFeedGetFeed,
+  AppBskyFeedGetPostThread,
   AppBskyFeedGetPosts,
   AppBskyFeedGetTimeline,
   AppBskyFeedPost,
@@ -55,6 +56,7 @@ import {
   FeedReasonUnknown,
   FeedReplyRef,
   Label,
+  AuthorFeedFilter,
   PostEmbed,
   PostMetrics,
   PostViewerState,
@@ -72,6 +74,18 @@ export interface FeedOptions {
   readonly cursor?: string;
 }
 
+export interface AuthorFeedOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly filter?: AuthorFeedFilter;
+  readonly includePins?: boolean;
+}
+
+export interface ThreadOptions {
+  readonly depth?: number;
+  readonly parentHeight?: number;
+}
+
 export interface NotificationsOptions {
   readonly limit?: number;
   readonly cursor?: string;
@@ -79,6 +93,7 @@ export interface NotificationsOptions {
 
 type FeedViewPost = AppBskyFeedDefs.FeedViewPost;
 type PostView = AppBskyFeedDefs.PostView;
+type ThreadViewPost = AppBskyFeedDefs.ThreadViewPost;
 
 
 const toBskyError = (message: string) => (cause: unknown) =>
@@ -594,6 +609,52 @@ const isPostRecord = (record: unknown): record is AppBskyFeedPost.Record =>
   record !== null &&
   (record as { $type?: unknown }).$type === "app.bsky.feed.post";
 
+const collectThreadChildren = (node: ThreadViewPost): ReadonlyArray<ThreadViewPost> => {
+  const items: Array<ThreadViewPost> = [];
+  const parent = node.parent;
+  if (parent && AppBskyFeedDefs.isThreadViewPost(parent)) {
+    items.push(parent);
+  }
+  if (Array.isArray(node.replies)) {
+    for (const reply of node.replies) {
+      if (AppBskyFeedDefs.isThreadViewPost(reply)) {
+        items.push(reply);
+      }
+    }
+  }
+  return items;
+};
+
+const unfoldThread = (root: ThreadViewPost) =>
+  Stream.unfoldEffect(
+    { queue: [root] as ReadonlyArray<ThreadViewPost>, seen: new Set<string>() },
+    (state) =>
+      Effect.sync(() => {
+        const queue = state.queue.slice();
+        while (queue.length > 0) {
+          const next = queue.shift()!;
+          const nextUri = next.post?.uri;
+          const children = collectThreadChildren(next);
+          queue.push(...children);
+          if (typeof nextUri === "string") {
+            if (state.seen.has(nextUri)) {
+              continue;
+            }
+            state.seen.add(nextUri);
+          }
+          return Option.some([next, { queue, seen: state.seen }] as const);
+        }
+        return Option.none();
+      })
+  );
+
+const toRawPostsFromThread = (root: ThreadViewPost) =>
+  unfoldThread(root).pipe(
+    Stream.mapEffect((node) => toRawPost(node.post)),
+    Stream.runCollect,
+    Effect.map(Chunk.toReadonlyArray)
+  );
+
 export class BskyClient extends Context.Tag("@skygent/BskyClient")<
   BskyClient,
   {
@@ -605,7 +666,15 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       uri: string,
       opts?: FeedOptions
     ) => Stream.Stream<RawPost, BskyError>;
+    readonly getAuthorFeed: (
+      actor: string,
+      opts?: AuthorFeedOptions
+    ) => Stream.Stream<RawPost, BskyError>;
     readonly getPost: (uri: string) => Effect.Effect<RawPost, BskyError>;
+    readonly getPostThread: (
+      uri: string,
+      opts?: ThreadOptions
+    ) => Effect.Effect<ReadonlyArray<RawPost>, BskyError>;
     readonly getProfiles: (
       actors: ReadonlyArray<string>
     ) => Effect.Effect<ReadonlyArray<ProfileBasic>, BskyError>;
@@ -757,6 +826,41 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           })
         );
 
+      const getAuthorFeed = (actor: string, opts?: AuthorFeedOptions) =>
+        paginate(opts?.cursor, (cursor) =>
+          Effect.gen(function* () {
+            yield* ensureAuth(false);
+            const includePins = opts?.includePins;
+            const params = withCursor(
+              {
+                actor,
+                limit: opts?.limit ?? 50,
+                ...(opts?.filter ? { filter: opts.filter } : {}),
+                ...(includePins !== undefined ? { includePins } : {})
+              },
+              cursor
+            );
+            const response = yield* withRetry(
+              withRateLimit(
+                Effect.tryPromise<AppBskyFeedGetAuthorFeed.Response>(() =>
+                  agent.app.bsky.feed.getAuthorFeed(params)
+                )
+              )
+            ).pipe(Effect.mapError(toBskyError("Failed to fetch author feed")));
+            const posts = yield* toRawPostsFromFeed(response.data.feed);
+            const nextCursor = response.data.cursor;
+            const tagged = posts.map((p) => new RawPost({ ...p, _pageCursor: nextCursor }));
+            const hasNext =
+              tagged.length > 0 &&
+              typeof nextCursor === "string" &&
+              nextCursor !== cursor;
+            return [
+              Chunk.fromIterable(tagged),
+              hasNext ? Option.some(nextCursor) : Option.none()
+            ] as const;
+          })
+        );
+
       const getPost = (uri: string) =>
         Effect.gen(function* () {
           yield* ensureAuth(false);
@@ -775,6 +879,31 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
             });
           }
           return yield* toRawPost(postView);
+        });
+
+      const getPostThread = (uri: string, opts?: ThreadOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = {
+            uri,
+            ...(opts?.depth !== undefined ? { depth: opts.depth } : {}),
+            ...(opts?.parentHeight !== undefined
+              ? { parentHeight: opts.parentHeight }
+              : {})
+          };
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyFeedGetPostThread.Response>(() =>
+                agent.app.bsky.feed.getPostThread(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch post thread")));
+
+          if (!AppBskyFeedDefs.isThreadViewPost(response.data.thread)) {
+            return [] as ReadonlyArray<RawPost>;
+          }
+
+          return yield* toRawPostsFromThread(response.data.thread);
         });
 
       const getProfiles = (actors: ReadonlyArray<string>) =>
@@ -886,7 +1015,9 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
         getTimeline,
         getNotifications,
         getFeed,
+        getAuthorFeed,
         getPost,
+        getPostThread,
         getProfiles,
         getTrendingTopics: () => getTrendingTopics
       });

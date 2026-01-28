@@ -1,0 +1,36 @@
+{
+  "feed": [
+    {
+      "post": {
+        "uri": "at://did:plc:alice/app.bsky.feed.post/10",
+        "cid": "bafkreigks6arfsq3xxfpvqrrwonchxcnu6do76auprhhfomao6c273sixm",
+        "author": {
+          "did": "did:plc:alice",
+          "handle": "alice.bsky"
+        },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "text": "Author feed post one",
+          "createdAt": "2026-01-03T00:00:00.000Z"
+        },
+        "indexedAt": "2026-01-03T00:00:01.000Z"
+      }
+    },
+    {
+      "post": {
+        "uri": "at://did:plc:alice/app.bsky.feed.post/11",
+        "cid": "bafkreib6epubmabzlffdhckpmvsodmjuro6xuaei2qwevs3t52xnlhaatu",
+        "author": {
+          "did": "did:plc:alice",
+          "handle": "alice.bsky"
+        },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "text": "Author feed post two",
+          "createdAt": "2026-01-04T00:00:00.000Z"
+        },
+        "indexedAt": "2026-01-04T00:00:01.000Z"
+      }
+    }
+  ]
+}

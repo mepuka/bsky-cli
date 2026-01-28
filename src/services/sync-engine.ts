@@ -56,6 +56,10 @@ const sourceLabel = (source: DataSource) => {
       return "feed";
     case "Notifications":
       return "notifications";
+    case "Author":
+      return "author";
+    case "Thread":
+      return "thread";
     case "Jetstream":
       return "jetstream";
   }
@@ -69,6 +73,10 @@ const commandForSource = (source: DataSource) => {
       return `sync feed ${source.uri}`;
     case "Notifications":
       return "sync notifications";
+    case "Author":
+      return `sync author ${source.actor}`;
+    case "Thread":
+      return `sync thread ${source.uri}`;
     case "Jetstream":
       return "sync jetstream";
   }
@@ -212,6 +220,38 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       onNone: () => undefined,
                       onSome: (value) => ({ cursor: value })
                     })
+                  );
+                case "Author":
+                  const authorOptions = {
+                    ...(source.filter !== undefined
+                      ? { filter: source.filter }
+                      : {}),
+                    ...(source.includePins !== undefined
+                      ? { includePins: source.includePins }
+                      : {})
+                  };
+                  return client.getAuthorFeed(
+                    source.actor,
+                    Option.match(cursorOption, {
+                      onNone: () => authorOptions,
+                      onSome: (value) => ({
+                        ...authorOptions,
+                        cursor: value
+                      })
+                    })
+                  );
+                case "Thread":
+                  return Stream.unwrap(
+                    client
+                      .getPostThread(source.uri, {
+                        ...(source.depth !== undefined
+                          ? { depth: source.depth }
+                          : {}),
+                        ...(source.parentHeight !== undefined
+                          ? { parentHeight: source.parentHeight }
+                          : {})
+                      })
+                      .pipe(Effect.map((posts) => Stream.fromIterable(posts)))
                   );
                 case "Jetstream":
                   return Stream.fail(

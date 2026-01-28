@@ -4,7 +4,14 @@ import { EventId, PostCid, PostUri, Timestamp, StoreName } from "./primitives.js
 import { FilterExprSchema } from "./filter.js";
 
 export class EventMeta extends Schema.Class<EventMeta>("EventMeta")({
-  source: Schema.Literal("timeline", "notifications", "jetstream", "feed"),
+  source: Schema.Literal(
+    "timeline",
+    "notifications",
+    "jetstream",
+    "feed",
+    "author",
+    "thread"
+  ),
   command: Schema.String,
   filterExprHash: Schema.optional(Schema.String),
   createdAt: Timestamp,

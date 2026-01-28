@@ -14,11 +14,18 @@ import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { StoreLock } from "../services/store-lock.js";
 import { makeWatchCommandBody } from "./sync-factory.js";
+import { CliInputError } from "./errors.js";
 import {
   feedUriArg,
+  postUriArg,
+  actorArg,
   storeNameOption,
   filterOption,
   filterJsonOption,
+  postFilterOption,
+  postFilterJsonOption,
+  authorFilterOption,
+  includePinsOption,
   quietOption,
   strictOption,
   maxErrorsOption,
@@ -31,6 +38,33 @@ const intervalOption = Options.text("interval").pipe(
   ),
   Options.optional
 );
+const depthOption = Options.integer("depth").pipe(
+  Options.withDescription("Thread reply depth to include (0-1000, default 6)"),
+  Options.optional
+);
+const parentHeightOption = Options.integer("parent-height").pipe(
+  Options.withDescription("Thread parent height to include (0-1000, default 80)"),
+  Options.optional
+);
+
+const parseBoundedIntOption = (
+  value: Option.Option<number>,
+  name: string,
+  min: number,
+  max: number
+) =>
+  Option.match(value, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (raw) =>
+      raw < min || raw > max
+        ? Effect.fail(
+            CliInputError.make({
+              message: `${name} must be between ${min} and ${max}.`,
+              cause: raw
+            })
+          )
+        : Effect.succeed(Option.some(raw))
+  });
 
 const timelineCommand = Command.make(
   "timeline",
@@ -94,6 +128,98 @@ const notificationsCommand = Command.make(
       "Watch notifications and emit sync results",
       ["skygent watch notifications --store my-store --interval \"1 minute\" --quiet"],
       ["Tip: add --quiet to suppress progress logs."]
+    )
+  )
+);
+
+const authorCommand = Command.make(
+  "author",
+  {
+    actor: actorArg,
+    store: storeNameOption,
+    filter: authorFilterOption,
+    includePins: includePinsOption,
+    postFilter: postFilterOption,
+    postFilterJson: postFilterJsonOption,
+    interval: intervalOption,
+    quiet: quietOption
+  },
+  ({ actor, filter, includePins, postFilter, postFilterJson, interval, store, quiet }) =>
+    Effect.gen(function* () {
+      const apiFilter = Option.getOrUndefined(filter);
+      const source = DataSource.author(actor, {
+        ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
+        ...(includePins ? { includePins: true } : {})
+      });
+      const run = makeWatchCommandBody("author", () => source, {
+        actor,
+        ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
+        ...(includePins ? { includePins: true } : {})
+      });
+      return yield* run({
+        store,
+        filter: postFilter,
+        filterJson: postFilterJson,
+        interval,
+        quiet
+      });
+    })
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Watch an author's feed and emit sync results",
+      [
+        "skygent watch author alice.bsky.social --store my-store",
+        "skygent watch author did:plc:example --store my-store --filter posts_no_replies --include-pins"
+      ],
+      ["Tip: use --post-filter to apply the DSL filter to synced posts."]
+    )
+  )
+);
+
+const threadCommand = Command.make(
+  "thread",
+  {
+    uri: postUriArg,
+    store: storeNameOption,
+    depth: depthOption,
+    parentHeight: parentHeightOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    interval: intervalOption,
+    quiet: quietOption
+  },
+  ({ uri, depth, parentHeight, filter, filterJson, interval, store, quiet }) =>
+    Effect.gen(function* () {
+      const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
+      const parsedParentHeight = yield* parseBoundedIntOption(
+        parentHeight,
+        "parent-height",
+        0,
+        1000
+      );
+      const depthValue = Option.getOrUndefined(parsedDepth);
+      const parentHeightValue = Option.getOrUndefined(parsedParentHeight);
+      const source = DataSource.thread(uri, {
+        ...(depthValue !== undefined ? { depth: depthValue } : {}),
+        ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
+      });
+      const run = makeWatchCommandBody("thread", () => source, {
+        uri,
+        ...(depthValue !== undefined ? { depth: depthValue } : {}),
+        ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
+      });
+      return yield* run({ store, filter, filterJson, interval, quiet });
+    })
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Watch a thread and emit sync results",
+      [
+        "skygent watch thread at://did:plc:example/app.bsky.feed.post/xyz --store my-store",
+        "skygent watch thread at://did:plc:example/app.bsky.feed.post/xyz --store my-store --depth 10 --parent-height 5"
+      ],
+      ["Tip: use --filter to apply the DSL filter to thread posts."]
     )
   )
 );
@@ -197,6 +323,8 @@ export const watchCommand = Command.make("watch", {}).pipe(
     timelineCommand,
     feedCommand,
     notificationsCommand,
+    authorCommand,
+    threadCommand,
     jetstreamCommand
   ]),
   Command.withDescription(

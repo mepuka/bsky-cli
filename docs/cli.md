@@ -66,6 +66,8 @@ One-off ingestion into a store.
 - `sync timeline --store <name> [--filter <dsl>] [--filter-json <json>] [--quiet]`
 - `sync feed <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--quiet]`
 - `sync notifications --store <name> [--filter <dsl>] [--filter-json <json>] [--quiet]`
+- `sync author <actor> --store <name> [--filter <posts_with_replies|posts_no_replies|posts_with_media|posts_and_author_threads>] [--include-pins] [--post-filter <dsl>] [--post-filter-json <json>] [--quiet]`
+- `sync thread <uri> --store <name> [--depth <n>] [--parent-height <n>] [--filter <dsl>] [--filter-json <json>] [--quiet]`
 - `sync jetstream --store <name> [--filter <dsl>] [--filter-json <json>] [--limit <n> | --duration <duration>] [--endpoint <url>] [--collections <csv>] [--dids <csv>] [--cursor <micros>] [--compress] [--max-message-size <bytes>] [--strict] [--max-errors <n>] [--quiet]`
 
 Examples:
@@ -73,6 +75,8 @@ Examples:
 ```bash
 bun run index.ts sync timeline --store my-store
 bun run index.ts sync feed at://did:plc:... --store my-store
+bun run index.ts sync author alice.bsky.social --store my-store --filter posts_no_replies
+bun run index.ts sync thread at://did:plc:.../app.bsky.feed.post/... --store my-store
 bun run index.ts sync jetstream --store my-store --limit 500
 ```
 
@@ -91,6 +95,8 @@ Repeated polling + streaming NDJSON results to stdout.
 - `watch timeline --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
 - `watch feed <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
 - `watch notifications --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
+- `watch author <actor> --store <name> [--filter <posts_with_replies|posts_no_replies|posts_with_media|posts_and_author_threads>] [--include-pins] [--post-filter <dsl>] [--post-filter-json <json>] [--interval <duration>] [--quiet]`
+- `watch thread <uri> --store <name> [--depth <n>] [--parent-height <n>] [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
 - `watch jetstream --store <name> [--filter <dsl>] [--filter-json <json>] [--endpoint <url>] [--collections <csv>] [--dids <csv>] [--cursor <micros>] [--compress] [--max-message-size <bytes>] [--strict] [--max-errors <n>] [--quiet]`
 
 `--interval` accepts strings like "30 seconds" or "500 millis". Default is 30 seconds.

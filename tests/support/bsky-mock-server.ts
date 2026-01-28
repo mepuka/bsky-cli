@@ -6,6 +6,8 @@ type Fixtures = {
   readonly timeline: unknown;
   readonly feed: unknown;
   readonly notifications: unknown;
+  readonly authorFeed?: unknown;
+  readonly postThread?: unknown;
   readonly session?: unknown;
 };
 
@@ -55,6 +57,18 @@ const makeMockFetch = (fixtures: Fixtures, fallback: typeof fetch): typeof fetch
 
     if (method === "GET" && pathname === "/xrpc/app.bsky.feed.getFeed") {
       return jsonResponse(fixtures.feed);
+    }
+
+    if (method === "GET" && pathname === "/xrpc/app.bsky.feed.getAuthorFeed") {
+      return fixtures.authorFeed
+        ? jsonResponse(fixtures.authorFeed)
+        : new Response("not found", { status: 404 });
+    }
+
+    if (method === "GET" && pathname === "/xrpc/app.bsky.feed.getPostThread") {
+      return fixtures.postThread
+        ? jsonResponse(fixtures.postThread)
+        : new Response("not found", { status: 404 });
     }
 
     if (

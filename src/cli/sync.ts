@@ -18,9 +18,15 @@ import { CliInputError } from "./errors.js";
 import { makeSyncCommandBody } from "./sync-factory.js";
 import {
   feedUriArg,
+  postUriArg,
+  actorArg,
   storeNameOption,
   filterOption,
   filterJsonOption,
+  postFilterOption,
+  postFilterJsonOption,
+  authorFilterOption,
+  includePinsOption,
   quietOption,
   strictOption,
   maxErrorsOption,
@@ -33,6 +39,14 @@ const limitOption = Options.integer("limit").pipe(
 );
 const durationOption = Options.text("duration").pipe(
   Options.withDescription("Stop after a duration (e.g. \"2 minutes\")"),
+  Options.optional
+);
+const depthOption = Options.integer("depth").pipe(
+  Options.withDescription("Thread reply depth to include (0-1000, default 6)"),
+  Options.optional
+);
+const parentHeightOption = Options.integer("parent-height").pipe(
+  Options.withDescription("Thread parent height to include (0-1000, default 80)"),
   Options.optional
 );
 
@@ -73,6 +87,25 @@ const parseDuration = (value: Option.Option<string>) =>
             : Effect.succeed(Option.some(duration))
         )
       )
+  });
+
+const parseBoundedIntOption = (
+  value: Option.Option<number>,
+  name: string,
+  min: number,
+  max: number
+) =>
+  Option.match(value, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (raw) =>
+      raw < min || raw > max
+        ? Effect.fail(
+            CliInputError.make({
+              message: `${name} must be between ${min} and ${max}.`,
+              cause: raw
+            })
+          )
+        : Effect.succeed(Option.some(raw))
   });
 
 const timelineCommand = Command.make(
@@ -118,6 +151,95 @@ const notificationsCommand = Command.make(
       "Sync notifications into a store",
       ["skygent sync notifications --store my-store --quiet"],
       ["Tip: add --quiet to suppress progress logs."]
+    )
+  )
+);
+
+const authorCommand = Command.make(
+  "author",
+  {
+    actor: actorArg,
+    store: storeNameOption,
+    filter: authorFilterOption,
+    includePins: includePinsOption,
+    postFilter: postFilterOption,
+    postFilterJson: postFilterJsonOption,
+    quiet: quietOption
+  },
+  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet }) =>
+    Effect.gen(function* () {
+      const apiFilter = Option.getOrUndefined(filter);
+      const source = DataSource.author(actor, {
+        ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
+        ...(includePins ? { includePins: true } : {})
+      });
+      const run = makeSyncCommandBody("author", () => source, {
+        actor,
+        ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
+        ...(includePins ? { includePins: true } : {})
+      });
+      return yield* run({
+        store,
+        filter: postFilter,
+        filterJson: postFilterJson,
+        quiet
+      });
+    })
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Sync posts from a specific author",
+      [
+        "skygent sync author alice.bsky.social --store my-store",
+        "skygent sync author did:plc:example --store my-store --filter posts_no_replies --include-pins"
+      ],
+      ["Tip: use --post-filter to apply the DSL filter to synced posts."]
+    )
+  )
+);
+
+const threadCommand = Command.make(
+  "thread",
+  {
+    uri: postUriArg,
+    store: storeNameOption,
+    depth: depthOption,
+    parentHeight: parentHeightOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    quiet: quietOption
+  },
+  ({ uri, depth, parentHeight, filter, filterJson, store, quiet }) =>
+    Effect.gen(function* () {
+      const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
+      const parsedParentHeight = yield* parseBoundedIntOption(
+        parentHeight,
+        "parent-height",
+        0,
+        1000
+      );
+      const depthValue = Option.getOrUndefined(parsedDepth);
+      const parentHeightValue = Option.getOrUndefined(parsedParentHeight);
+      const source = DataSource.thread(uri, {
+        ...(depthValue !== undefined ? { depth: depthValue } : {}),
+        ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
+      });
+      const run = makeSyncCommandBody("thread", () => source, {
+        uri,
+        ...(depthValue !== undefined ? { depth: depthValue } : {}),
+        ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
+      });
+      return yield* run({ store, filter, filterJson, quiet });
+    })
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Sync a post thread (parents + replies) into a store",
+      [
+        "skygent sync thread at://did:plc:example/app.bsky.feed.post/xyz --store my-store",
+        "skygent sync thread at://did:plc:example/app.bsky.feed.post/xyz --store my-store --depth 10 --parent-height 5"
+      ],
+      ["Tip: use --filter to apply the DSL filter to thread posts."]
     )
   )
 );
@@ -246,6 +368,8 @@ export const syncCommand = Command.make("sync", {}).pipe(
     timelineCommand,
     feedCommand,
     notificationsCommand,
+    authorCommand,
+    threadCommand,
     jetstreamCommand
   ]),
   Command.withDescription(

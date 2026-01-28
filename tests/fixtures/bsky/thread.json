@@ -1,0 +1,60 @@
+{
+  "thread": {
+    "$type": "app.bsky.feed.defs#threadViewPost",
+    "post": {
+      "uri": "at://did:plc:root/app.bsky.feed.post/100",
+      "cid": "bafkreigks6arfsq3xxfpvqrrwonchxcnu6do76auprhhfomao6c273sixm",
+      "author": {
+        "did": "did:plc:root",
+        "handle": "root.bsky"
+      },
+      "record": {
+        "$type": "app.bsky.feed.post",
+        "text": "Root post",
+        "createdAt": "2026-01-05T00:00:00.000Z"
+      },
+      "indexedAt": "2026-01-05T00:00:01.000Z"
+    },
+    "parent": {
+      "$type": "app.bsky.feed.defs#threadViewPost",
+      "post": {
+        "uri": "at://did:plc:parent/app.bsky.feed.post/99",
+        "cid": "bafkreib6epubmabzlffdhckpmvsodmjuro6xuaei2qwevs3t52xnlhaatu",
+        "author": {
+          "did": "did:plc:parent",
+          "handle": "parent.bsky"
+        },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "text": "Parent post",
+          "createdAt": "2026-01-04T00:00:00.000Z"
+        },
+        "indexedAt": "2026-01-04T00:00:01.000Z"
+      }
+    },
+    "replies": [
+      {
+        "$type": "app.bsky.feed.defs#threadViewPost",
+        "post": {
+          "uri": "at://did:plc:reply/app.bsky.feed.post/101",
+          "cid": "bafkreigks6arfsq3xxfpvqrrwonchxcnu6do76auprhhfomao6c273sixm",
+          "author": {
+            "did": "did:plc:reply",
+            "handle": "reply.bsky"
+          },
+          "record": {
+            "$type": "app.bsky.feed.post",
+            "text": "Reply post",
+            "createdAt": "2026-01-06T00:00:00.000Z"
+          },
+          "indexedAt": "2026-01-06T00:00:01.000Z"
+        }
+      },
+      {
+        "$type": "app.bsky.feed.defs#notFoundPost",
+        "uri": "at://did:plc:missing/app.bsky.feed.post/404",
+        "notFound": true
+      }
+    ]
+  }
+}

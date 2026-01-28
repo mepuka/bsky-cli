@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import * as Monoid from "@effect/typeclass/Monoid";
 import * as Semigroup from "@effect/typeclass/Semigroup";
 import { MonoidSum } from "@effect/typeclass/data/Number";
+import { AuthorFeedFilter } from "./bsky.js";
 import { FilterExprSchema } from "./filter.js";
 import { StoreRef } from "./store.js";
 import { EventId, Timestamp } from "./primitives.js";
@@ -55,6 +56,18 @@ export class DataSourceNotifications extends Schema.TaggedClass<DataSourceNotifi
   {}
 ) {}
 
+export class DataSourceAuthor extends Schema.TaggedClass<DataSourceAuthor>()("Author", {
+  actor: Schema.String,
+  filter: Schema.optional(AuthorFeedFilter),
+  includePins: Schema.optional(Schema.Boolean)
+}) {}
+
+export class DataSourceThread extends Schema.TaggedClass<DataSourceThread>()("Thread", {
+  uri: Schema.String,
+  depth: Schema.optional(Schema.NonNegativeInt),
+  parentHeight: Schema.optional(Schema.NonNegativeInt)
+}) {}
+
 export class DataSourceJetstream extends Schema.TaggedClass<DataSourceJetstream>()(
   "Jetstream",
   {
@@ -70,6 +83,8 @@ export const DataSourceSchema = Schema.Union(
   DataSourceTimeline,
   DataSourceFeed,
   DataSourceNotifications,
+  DataSourceAuthor,
+  DataSourceThread,
   DataSourceJetstream
 );
 export type DataSource = typeof DataSourceSchema.Type;
@@ -78,6 +93,30 @@ export const DataSource = {
   timeline: (): DataSource => DataSourceTimeline.make({}),
   feed: (uri: string): DataSource => DataSourceFeed.make({ uri }),
   notifications: (): DataSource => DataSourceNotifications.make({}),
+  author: (
+    actor: string,
+    options?: {
+      readonly filter?: AuthorFeedFilter;
+      readonly includePins?: boolean;
+    }
+  ): DataSource =>
+    DataSourceAuthor.make({
+      actor,
+      filter: options?.filter,
+      includePins: options?.includePins
+    }),
+  thread: (
+    uri: string,
+    options?: {
+      readonly depth?: number;
+      readonly parentHeight?: number;
+    }
+  ): DataSource =>
+    DataSourceThread.make({
+      uri,
+      depth: options?.depth,
+      parentHeight: options?.parentHeight
+    }),
   jetstream: (options?: {
     readonly endpoint?: string;
     readonly collections?: ReadonlyArray<string>;
@@ -133,6 +172,19 @@ export const dataSourceKey = (source: DataSource): string => {
       return `feed:${source.uri}`;
     case "Notifications":
       return "notifications";
+    case "Author": {
+      const filter = source.filter ?? "";
+      const includePins =
+        source.includePins === undefined ? "" : source.includePins ? "1" : "0";
+      return `author:${encodeURIComponent(source.actor)}:${encodeURIComponent(
+        filter
+      )}:${includePins}`;
+    }
+    case "Thread": {
+      const depth = source.depth ?? "";
+      const parentHeight = source.parentHeight ?? "";
+      return `thread:${encodeURIComponent(source.uri)}:${depth}:${parentHeight}`;
+    }
     case "Jetstream": {
       const endpoint = source.endpoint ?? "";
       const collections = normalizeList(source.collections);

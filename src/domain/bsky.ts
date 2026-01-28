@@ -1,6 +1,14 @@
 import { Schema } from "effect";
 import { AtUri, Did, Handle, PostCid, PostUri, Timestamp } from "./primitives.js";
 
+export const AuthorFeedFilter = Schema.Literal(
+  "posts_with_replies",
+  "posts_no_replies",
+  "posts_with_media",
+  "posts_and_author_threads"
+);
+export type AuthorFeedFilter = typeof AuthorFeedFilter.Type;
+
 export class StrongRef extends Schema.Class<StrongRef>("StrongRef")({
   uri: AtUri,
   cid: PostCid

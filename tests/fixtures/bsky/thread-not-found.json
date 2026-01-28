@@ -1,0 +1,7 @@
+{
+  "thread": {
+    "$type": "app.bsky.feed.defs#notFoundPost",
+    "uri": "at://did:plc:missing/app.bsky.feed.post/404",
+    "notFound": true
+  }
+}
