@@ -127,6 +127,26 @@ Check derived view status.
 
 - `view status <view> <source>`
 
+### config
+
+Configuration helpers.
+
+- `config check`
+
+Runs a series of health checks and outputs a JSON report with an `ok` boolean and a `checks` array. Each check has a `name`, `status` (`ok`, `warn`, or `error`), and an optional `message`.
+
+Checks performed:
+
+1. **store-root** -- verifies the store root directory exists and is writable.
+2. **credentials** -- verifies credentials are configured and loadable.
+3. **bluesky** -- attempts a Bluesky API call (skipped when credentials are missing).
+
+Example:
+
+```bash
+bun run index.ts config check
+```
+
 ### filter
 
 Manage saved filters (for reuse in DSL via `@name`).

@@ -61,3 +61,9 @@ Resource monitoring:
 - `SKYGENT_RESOURCE_STORE_WARN_BYTES`
 - `SKYGENT_RESOURCE_RSS_WARN_BYTES`
 
+Sync settings:
+
+- `SKYGENT_SYNC_CONCURRENCY` -- number of concurrent sync operations. Must be a positive integer. Default: `5`.
+- `SKYGENT_SYNC_CHECKPOINT_EVERY` -- persist a checkpoint after this many ingested items. Must be a positive integer. Default: `100`.
+- `SKYGENT_SYNC_CHECKPOINT_INTERVAL_MS` -- minimum milliseconds between time-based checkpoints. Must be non-negative. Default: `5000`.
+
