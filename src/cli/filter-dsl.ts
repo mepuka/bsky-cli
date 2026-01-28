@@ -513,11 +513,8 @@ const parsePolicy = (
     }
   });
 
-const DEFAULT_LLM_MIN_CONFIDENCE = 0.7;
-
 const defaultLinksPolicy = () => ExcludeOnError.make({});
 const defaultTrendingPolicy = () => IncludeOnError.make({});
-const defaultLlmPolicy = () => IncludeOnError.make({});
 
 const decodeHandle = (raw: string, source: string, position: number) =>
   Schema.decodeUnknown(Handle)(raw).pipe(
@@ -987,43 +984,6 @@ class Parser {
           );
           yield* ensureNoUnknownOptions(options, self.input);
           return { _tag: "Trending", tag, onError: policy };
-        }
-        case "llm": {
-          if (baseValue.length === 0) {
-            return yield* self.fail("LLM prompt cannot be empty.", token.position);
-          }
-          const minConfidenceOption = yield* takeOption(
-            options,
-            ["minConfidence", "min", "confidence"],
-            "minConfidence",
-            self.input
-          );
-          const minConfidence = minConfidenceOption
-            ? yield* parseNumberOption(
-                minConfidenceOption,
-                self.input,
-                "minConfidence"
-              )
-            : DEFAULT_LLM_MIN_CONFIDENCE;
-          if (minConfidence < 0 || minConfidence > 1) {
-            return yield* self.fail(
-              "minConfidence must be between 0 and 1.",
-              minConfidenceOption?.position ?? token.position
-            );
-          }
-          const policy = yield* parsePolicy(
-            options,
-            defaultLlmPolicy(),
-            self.input,
-            token.position
-          );
-          yield* ensureNoUnknownOptions(options, self.input);
-          return {
-            _tag: "Llm",
-            prompt: baseValue,
-            minConfidence,
-            onError: policy
-          };
         }
         default:
           return yield* self.fail(`Unknown filter type "${key}".`, token.position);

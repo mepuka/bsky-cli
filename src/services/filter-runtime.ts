@@ -1,28 +1,16 @@
-import { Chunk, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
+import { Chunk, Context, Duration, Effect, Layer, Schedule } from "effect";
 import { FilterCompileError, FilterEvalError } from "../domain/errors.js";
 import type { FilterExpr } from "../domain/filter.js";
 import type { FilterErrorPolicy } from "../domain/policies.js";
 import type { Post } from "../domain/post.js";
 import type { FilterExplanation } from "../domain/filter-explain.js";
-import type { LlmDecisionMeta } from "../domain/llm.js";
-import { LlmDecision, LlmDecisionRequest } from "./llm.js";
 import type { LinkValidatorService } from "./link-validator.js";
 import type { TrendingTopicsService } from "./trending-topics.js";
 import { LinkValidator } from "./link-validator.js";
 import { TrendingTopics } from "./trending-topics.js";
 
 type Predicate = (post: Post) => Effect.Effect<boolean, FilterEvalError>;
-type LlmRecorder = (meta: LlmDecisionMeta) => Effect.Effect<void>;
-type PredicateWithMeta = (
-  post: Post,
-  record: LlmRecorder
-) => Effect.Effect<boolean, FilterEvalError>;
 type Explainer = (post: Post) => Effect.Effect<FilterExplanation, FilterEvalError>;
-type LlmDecider = {
-  readonly decideDetailed: (
-    request: LlmDecisionRequest
-  ) => Effect.Effect<LlmDecisionMeta, FilterEvalError>;
-};
 
 const embedTag = (embed: Post["embed"]): string | undefined => {
   if (!embed || typeof embed !== "object" || !("_tag" in embed)) {
@@ -165,7 +153,6 @@ const skippedNode = (expr: FilterExpr, reason: string): FilterExplanation => ({
 });
 
 const buildExplanation = (
-  llm: LlmDecider,
   links: LinkValidatorService,
   trending: TrendingTopicsService
 ): ((expr: FilterExpr) => Effect.Effect<Explainer, FilterCompileError>) =>
@@ -368,8 +355,8 @@ const buildExplanation = (
           });
         };
       case "And": {
-        const left = yield* buildExplanation(llm, links, trending)(expr.left);
-        const right = yield* buildExplanation(llm, links, trending)(expr.right);
+        const left = yield* buildExplanation(links, trending)(expr.left);
+        const right = yield* buildExplanation(links, trending)(expr.right);
         return (post: Post) =>
           left(post).pipe(
             Effect.flatMap((leftResult) => {
@@ -394,8 +381,8 @@ const buildExplanation = (
           );
       }
       case "Or": {
-        const left = yield* buildExplanation(llm, links, trending)(expr.left);
-        const right = yield* buildExplanation(llm, links, trending)(expr.right);
+        const left = yield* buildExplanation(links, trending)(expr.left);
+        const right = yield* buildExplanation(links, trending)(expr.right);
         return (post: Post) =>
           left(post).pipe(
             Effect.flatMap((leftResult) => {
@@ -420,7 +407,7 @@ const buildExplanation = (
           );
       }
       case "Not": {
-        const inner = yield* buildExplanation(llm, links, trending)(expr.expr);
+        const inner = yield* buildExplanation(links, trending)(expr.expr);
         return (post: Post) =>
           inner(post).pipe(
             Effect.map((innerResult) => ({
@@ -466,30 +453,6 @@ const buildExplanation = (
             })
           );
       }
-      case "Llm": {
-        return (post: Post) => {
-          const request = new LlmDecisionRequest({
-            prompt: expr.prompt,
-            text: post.text,
-            minConfidence: expr.minConfidence
-          });
-          return explainPolicy(
-            expr.onError,
-            llm.decideDetailed(request),
-            (meta) => ({
-              _tag: "Llm",
-              ok: meta.keep,
-              detail: `score=${meta.score}, minConfidence=${meta.minConfidence}`,
-              llm: meta
-            }),
-            (error, policyTag) => ({
-              _tag: "Llm",
-              ok: policyTag === "Include",
-              detail: `error=${messageFromError(error)}, policy=${policyTag}`
-            })
-          );
-        };
-      }
       default:
         return yield* FilterCompileError.make({
           message: `Unknown filter tag: ${(expr as { _tag: string })._tag}`
@@ -498,50 +461,49 @@ const buildExplanation = (
   });
 
 const buildPredicate = (
-  llm: LlmDecider,
   links: LinkValidatorService,
   trending: TrendingTopicsService
-): ((expr: FilterExpr) => Effect.Effect<PredicateWithMeta, FilterCompileError>) =>
+): ((expr: FilterExpr) => Effect.Effect<Predicate, FilterCompileError>) =>
   Effect.fn("FilterRuntime.buildPredicate")(function* (expr: FilterExpr) {
     switch (expr._tag) {
       case "All":
-        return (_post: Post, _record: LlmRecorder) => Effect.succeed(true);
+        return (_post: Post) => Effect.succeed(true);
       case "None":
-        return (_post: Post, _record: LlmRecorder) => Effect.succeed(false);
+        return (_post: Post) => Effect.succeed(false);
       case "Author":
-        return (post: Post, _record: LlmRecorder) =>
+        return (post: Post) =>
           Effect.succeed(post.author === expr.handle);
       case "Hashtag":
-        return (post: Post, _record: LlmRecorder) =>
+        return (post: Post) =>
           Effect.succeed(post.hashtags.some((tag) => tag === expr.tag));
       case "AuthorIn": {
         const handles = new Set(expr.handles);
-        return (post: Post, _record: LlmRecorder) =>
+        return (post: Post) =>
           Effect.succeed(handles.has(post.author));
       }
       case "HashtagIn": {
         const tags = new Set(expr.tags);
-        return (post: Post, _record: LlmRecorder) =>
+        return (post: Post) =>
           Effect.succeed(post.hashtags.some((tag) => tags.has(tag)));
       }
       case "Contains": {
         const needle = expr.caseSensitive ? expr.text : expr.text.toLowerCase();
-        return (post: Post, _record: LlmRecorder) => {
+        return (post: Post) => {
           const haystack = expr.caseSensitive ? post.text : post.text.toLowerCase();
           return Effect.succeed(haystack.includes(needle));
         };
       }
       case "IsReply":
-        return (post: Post, _record: LlmRecorder) => Effect.succeed(!!post.reply);
+        return (post: Post) => Effect.succeed(!!post.reply);
       case "IsQuote":
-        return (post: Post, _record: LlmRecorder) => Effect.succeed(isQuote(post));
+        return (post: Post) => Effect.succeed(isQuote(post));
       case "IsRepost":
-        return (post: Post, _record: LlmRecorder) => Effect.succeed(isRepost(post));
+        return (post: Post) => Effect.succeed(isRepost(post));
       case "IsOriginal":
-        return (post: Post, _record: LlmRecorder) =>
+        return (post: Post) =>
           Effect.succeed(!post.reply && !isQuote(post) && !isRepost(post));
       case "Engagement":
-        return (post: Post, _record: LlmRecorder) => {
+        return (post: Post) => {
           const metrics = post.metrics;
           const likes = metrics?.likeCount ?? 0;
           const reposts = metrics?.repostCount ?? 0;
@@ -555,17 +517,17 @@ const buildPredicate = (
           );
         };
       case "HasImages":
-        return (post: Post, _record: LlmRecorder) => Effect.succeed(hasImages(post));
+        return (post: Post) => Effect.succeed(hasImages(post));
       case "HasVideo":
-        return (post: Post, _record: LlmRecorder) => Effect.succeed(hasVideo(post));
+        return (post: Post) => Effect.succeed(hasVideo(post));
       case "HasLinks":
-        return (post: Post, _record: LlmRecorder) =>
+        return (post: Post) =>
           Effect.succeed(hasExternalLink(post));
       case "HasMedia":
-        return (post: Post, _record: LlmRecorder) => Effect.succeed(hasMedia(post));
+        return (post: Post) => Effect.succeed(hasMedia(post));
       case "Language": {
         const langs = new Set(expr.langs.map((lang) => lang.toLowerCase()));
-        return (post: Post, _record: LlmRecorder) => {
+        return (post: Post) => {
           if (!post.langs || post.langs.length === 0) {
             return Effect.succeed(false);
           }
@@ -591,7 +553,7 @@ const buildPredicate = (
                 })
             })
         );
-        return (post: Post, _record: LlmRecorder) =>
+        return (post: Post) =>
           Effect.succeed(
             compiled.some((regex) => {
               if (regex.global || regex.sticky) {
@@ -602,65 +564,47 @@ const buildPredicate = (
           );
       }
       case "DateRange":
-        return (post: Post, _record: LlmRecorder) => {
+        return (post: Post) => {
           const created = post.createdAt.getTime();
           return Effect.succeed(
             created >= expr.start.getTime() && created <= expr.end.getTime()
           );
         };
       case "And": {
-        const left = yield* buildPredicate(llm, links, trending)(expr.left);
-        const right = yield* buildPredicate(llm, links, trending)(expr.right);
-        return (post: Post, record: LlmRecorder) =>
-          left(post, record).pipe(
+        const left = yield* buildPredicate(links, trending)(expr.left);
+        const right = yield* buildPredicate(links, trending)(expr.right);
+        return (post: Post) =>
+          left(post).pipe(
             Effect.flatMap((ok) =>
-              ok ? right(post, record) : Effect.succeed(false)
+              ok ? right(post) : Effect.succeed(false)
             )
           );
       }
       case "Or": {
-        const left = yield* buildPredicate(llm, links, trending)(expr.left);
-        const right = yield* buildPredicate(llm, links, trending)(expr.right);
-        return (post: Post, record: LlmRecorder) =>
-          left(post, record).pipe(
+        const left = yield* buildPredicate(links, trending)(expr.left);
+        const right = yield* buildPredicate(links, trending)(expr.right);
+        return (post: Post) =>
+          left(post).pipe(
             Effect.flatMap((ok) =>
-              ok ? Effect.succeed(true) : right(post, record)
+              ok ? Effect.succeed(true) : right(post)
             )
           );
       }
       case "Not": {
-        const inner = yield* buildPredicate(llm, links, trending)(expr.expr);
-        return (post: Post, record: LlmRecorder) =>
-          inner(post, record).pipe(Effect.map((ok) => !ok));
+        const inner = yield* buildPredicate(links, trending)(expr.expr);
+        return (post: Post) =>
+          inner(post).pipe(Effect.map((ok) => !ok));
       }
       case "HasValidLinks": {
-        return (post: Post, _record: LlmRecorder) =>
+        return (post: Post) =>
           withPolicy(
             expr.onError,
             links.hasValidLink(post.links.map((link) => link.toString()))
           );
       }
       case "Trending": {
-        return (_post: Post, _record: LlmRecorder) =>
+        return (_post: Post) =>
           withPolicy(expr.onError, trending.isTrending(expr.tag));
-      }
-      case "Llm": {
-        return (post: Post, record: LlmRecorder) =>
-          withPolicy(
-            expr.onError,
-            llm
-              .decideDetailed(
-                new LlmDecisionRequest({
-                  prompt: expr.prompt,
-                  text: post.text,
-                  minConfidence: expr.minConfidence
-                })
-              )
-              .pipe(
-                Effect.tap(record),
-                Effect.map((meta) => meta.keep)
-              )
-          );
       }
       default:
         return yield* FilterCompileError.make({
@@ -679,7 +623,7 @@ export class FilterRuntime extends Context.Tag("@skygent/FilterRuntime")<
       expr: FilterExpr
     ) => Effect.Effect<
       (post: Post) => Effect.Effect<
-        { readonly ok: boolean; readonly llm: ReadonlyArray<LlmDecisionMeta> },
+        { readonly ok: boolean },
         FilterEvalError
       >,
       FilterCompileError
@@ -698,35 +642,24 @@ export class FilterRuntime extends Context.Tag("@skygent/FilterRuntime")<
   static readonly layer = Layer.effect(
     FilterRuntime,
     Effect.gen(function* () {
-      const llm = yield* LlmDecision;
       const links = yield* LinkValidator;
       const trending = yield* TrendingTopics;
-      const noopRecord: LlmRecorder = () => Effect.void;
       const evaluate = Effect.fn("FilterRuntime.evaluate")((expr: FilterExpr) =>
-        buildPredicate(llm, links, trending)(expr).pipe(
-          Effect.map((predicate) => (post: Post) => predicate(post, noopRecord))
-        )
+        buildPredicate(links, trending)(expr)
       );
       const evaluateWithMetadata = Effect.fn(
         "FilterRuntime.evaluateWithMetadata"
       )((expr: FilterExpr) =>
-        buildPredicate(llm, links, trending)(expr).pipe(
+        buildPredicate(links, trending)(expr).pipe(
           Effect.map((predicate) => (post: Post) =>
-            Effect.gen(function* () {
-              const ref = yield* Ref.make<ReadonlyArray<LlmDecisionMeta>>([]);
-              const record: LlmRecorder = (meta) =>
-                Ref.update(ref, (items) => [...items, meta]);
-              const ok = yield* predicate(post, record);
-              const llm = yield* Ref.get(ref);
-              return { ok, llm };
-            })
+            predicate(post).pipe(Effect.map((ok) => ({ ok })))
           )
         )
       );
       const evaluateBatch = Effect.fn("FilterRuntime.evaluateBatch")((expr: FilterExpr) =>
-        buildPredicate(llm, links, trending)(expr).pipe(
+        buildPredicate(links, trending)(expr).pipe(
           Effect.map((predicate) => (posts: Chunk.Chunk<Post>) =>
-            Effect.all(Array.from(posts, (post) => predicate(post, noopRecord)), {
+            Effect.all(Array.from(posts, (post) => predicate(post)), {
               batching: true,
               concurrency: "unbounded"
             }).pipe(
@@ -737,7 +670,7 @@ export class FilterRuntime extends Context.Tag("@skygent/FilterRuntime")<
         )
       );
       const explain = Effect.fn("FilterRuntime.explain")((expr: FilterExpr) =>
-        buildExplanation(llm, links, trending)(expr)
+        buildExplanation(links, trending)(expr)
       );
 
       return FilterRuntime.of({ evaluate, evaluateWithMetadata, evaluateBatch, explain });

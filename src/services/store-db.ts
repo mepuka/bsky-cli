@@ -35,15 +35,29 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
       const path = yield* Path.Path;
       const reactivity = yield* Reactivity.Reactivity;
 
-      const scope = yield* Scope.make();
-      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-
-      const clients = yield* Ref.make(new Map<string, SqlClient.SqlClient>());
+      type CachedClient = {
+        readonly client: SqlClient.SqlClient;
+        readonly scope: Scope.CloseableScope;
+      };
+      const clients = yield* Ref.make(new Map<string, CachedClient>());
       const clientLock = yield* Effect.makeSemaphore(1);
 
       const migrate = Migrator.make({})({
         loader: MigratorFileSystem.fromFileSystem(migrationsDir)
       });
+
+      const closeAllClients = () =>
+        Ref.get(clients).pipe(
+          Effect.flatMap((current) =>
+            Effect.forEach(
+              current.values(),
+              ({ scope }) => Scope.close(scope, Exit.void),
+              { discard: true }
+            )
+          )
+        );
+
+      yield* Effect.addFinalizer(() => closeAllClients());
 
       const openClient = (store: StoreRef) =>
         Effect.gen(function* () {
@@ -51,8 +65,9 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
           const dbDir = path.dirname(dbPath);
           yield* fs.makeDirectory(dbDir, { recursive: true });
 
+          const clientScope = yield* Scope.make();
           const client = yield* SqliteClient.make({ filename: dbPath }).pipe(
-            Effect.provideService(Scope.Scope, scope),
+            Effect.provideService(Scope.Scope, clientScope),
             Effect.provideService(Reactivity.Reactivity, reactivity)
           );
 
@@ -62,14 +77,14 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
             Effect.provideService(FileSystem.FileSystem, fs)
           );
 
-          return client;
+          return { client, scope: clientScope };
         });
 
       const getClient = (store: StoreRef) =>
         Effect.gen(function* () {
           const cached = (yield* Ref.get(clients)).get(store.name);
           if (cached) {
-            return cached;
+            return cached.client;
           }
 
           return yield* clientLock.withPermits(1)(
@@ -77,16 +92,16 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
               const current = yield* Ref.get(clients);
               const existing = current.get(store.name);
               if (existing) {
-                return existing;
+                return existing.client;
               }
 
-              const client = yield* openClient(store);
+              const created = yield* openClient(store);
 
               const next = new Map(current);
-              next.set(store.name, client);
+              next.set(store.name, created);
               yield* Ref.set(clients, next);
 
-              return client;
+              return created.client;
             })
           );
         });
@@ -101,11 +116,18 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
         );
 
       const removeClient = (storeName: string) =>
-        Ref.update(clients, (current) => {
+        Ref.modify(clients, (current) => {
           const next = new Map(current);
-          next.delete(storeName);
-          return next;
-        });
+          const existing = next.get(storeName);
+          if (existing) {
+            next.delete(storeName);
+          }
+          return [existing, next] as const;
+        }).pipe(
+          Effect.flatMap((existing) =>
+            existing ? Scope.close(existing.scope, Exit.void) : Effect.void
+          )
+        );
 
       return StoreDb.of({ withClient, removeClient });
     })

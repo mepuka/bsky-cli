@@ -65,6 +65,16 @@ export interface TimelineOptions {
   readonly cursor?: string;
 }
 
+export interface FeedOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface NotificationsOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
 type FeedViewPost = AppBskyFeedDefs.FeedViewPost;
 type PostView = AppBskyFeedDefs.PostView;
 
@@ -595,8 +605,13 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
   BskyClient,
   {
     readonly getTimeline: (opts?: TimelineOptions) => Stream.Stream<RawPost, BskyError>;
-    readonly getNotifications: () => Stream.Stream<RawPost, BskyError>;
-    readonly getFeed: (uri: string) => Stream.Stream<RawPost, BskyError>;
+    readonly getNotifications: (
+      opts?: NotificationsOptions
+    ) => Stream.Stream<RawPost, BskyError>;
+    readonly getFeed: (
+      uri: string,
+      opts?: FeedOptions
+    ) => Stream.Stream<RawPost, BskyError>;
     readonly getPost: (uri: string) => Effect.Effect<RawPost, BskyError>;
     readonly getProfiles: (
       actors: ReadonlyArray<string>
@@ -719,12 +734,12 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           })
         );
 
-      const getFeed = (uri: string) =>
-        paginate(undefined, (cursor) =>
+      const getFeed = (uri: string, opts?: FeedOptions) =>
+        paginate(opts?.cursor, (cursor) =>
           Effect.gen(function* () {
             yield* ensureAuth(false);
             const params = withCursor(
-              { feed: uri, limit: 50 },
+              { feed: uri, limit: opts?.limit ?? 50 },
               cursor
             );
             const response = yield* withRetry(
@@ -798,11 +813,11 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           return results.flat();
         });
 
-      const getNotifications = () =>
-        paginate(undefined, (cursor) =>
+      const getNotifications = (opts?: NotificationsOptions) =>
+        paginate(opts?.cursor, (cursor) =>
           Effect.gen(function* () {
             yield* ensureAuth(true);
-            const params = withCursor({ limit: 50 }, cursor);
+            const params = withCursor({ limit: opts?.limit ?? 50 }, cursor);
             const response = yield* withRetry(
               withRateLimit(
                 Effect.tryPromise<AppBskyNotificationListNotifications.Response>(() =>

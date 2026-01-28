@@ -20,24 +20,11 @@ import type { FilterExpr } from "../src/domain/filter.js";
 import { EventMeta, PostDelete, PostUpsert } from "../src/domain/events.js";
 import { Post } from "../src/domain/post.js";
 import { Hashtag, PostCid, PostUri, Timestamp } from "../src/domain/primitives.js";
-import { LlmDecision } from "../src/services/llm.js";
 import { LinkValidator } from "../src/services/link-validator.js";
 import { TrendingTopics } from "../src/services/trending-topics.js";
-import { ExcludeOnError } from "../src/domain/policies.js";
 import { AppConfigService, ConfigOverrides } from "../src/services/app-config.js";
 
 // Mock services
-const MockLlmDecision = Layer.succeed(LlmDecision, {
-  decide: () => Effect.succeed(true),
-  decideDetailed: () =>
-    Effect.succeed({
-      keep: true,
-      confidence: 0.9,
-      modelId: "test-model",
-      promptHash: "test-hash"
-    })
-});
-
 const MockLinkValidator = Layer.succeed(LinkValidator, {
   hasValidLink: () => Effect.succeed(true)
 });
@@ -92,7 +79,6 @@ const buildTestLayer = (storeRoot: string) => {
     FilterRuntime.layer,
     FilterCompiler.layer
   ).pipe(
-    Layer.provideMerge(MockLlmDecision),
     Layer.provideMerge(MockLinkValidator),
     Layer.provideMerge(MockTrendingTopics)
   );
@@ -149,27 +135,6 @@ describe("DerivationEngine", () => {
   const sourceRef = StoreRef.make({ name: "source", root: "stores/source" });
   const targetRef = StoreRef.make({ name: "target", root: "stores/target" });
 
-  test("EventTime mode rejects Llm filters", () => withTestLayer(
-    Effect.gen(function* () {
-      const engine = yield* DerivationEngine;
-      const filter: FilterExpr = { _tag: "Llm", prompt: "test", minConfidence: 0.8, onError: { _tag: "Exclude" } };
-
-      const result = yield* engine.derive(sourceRef, targetRef, filter, {
-        mode: "EventTime",
-        reset: false
-      }).pipe(Effect.either);
-
-      expect(result._tag).toBe("Left");
-      if (result._tag === "Left") {
-        const error = result.left;
-        expect(error._tag).toBe("DerivationError");
-        if (error._tag === "DerivationError") {
-          expect(error.reason).toContain("EventTime mode only supports pure filters");
-        }
-      }
-    }))
-  );
-
   test("rejects when source and target are the same store", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
@@ -215,28 +180,6 @@ describe("DerivationEngine", () => {
 
       expect(result.eventsProcessed).toBe(2);
       expect(result.eventsMatched).toBe(2);
-    }))
-  );
-
-  test("DeriveTime mode accepts Llm filters", () => withTestLayer(
-    Effect.gen(function* () {
-      const engine = yield* DerivationEngine;
-      const writer = yield* StoreWriter;
-      const index = yield* StoreIndex;
-      const filter: FilterExpr = { _tag: "Llm", prompt: "test", minConfidence: 0.8, onError: ExcludeOnError.make({}) };
-
-      const post = createTestPost("at://test/post1", "Test post");
-      const event = PostUpsert.make({ post, meta: createTestMeta() });
-      const record = yield* writer.append(sourceRef, event);
-      yield* index.apply(sourceRef, record);
-
-      const result = yield* engine.derive(sourceRef, targetRef, filter, {
-        mode: "DeriveTime",
-        reset: false
-      });
-
-      expect(result.eventsProcessed).toBe(1);
-      expect(result.eventsMatched).toBe(1);
     }))
   );
 

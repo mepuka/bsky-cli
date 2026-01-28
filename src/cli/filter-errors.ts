@@ -25,8 +25,7 @@ const validFilterTags = [
   "Regex",
   "DateRange",
   "HasValidLinks",
-  "Trending",
-  "Llm"
+  "Trending"
 ];
 
 const filterDocs = "docs/filters/README.md";
@@ -108,7 +107,7 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
       received: receivedValue,
       expected: { _tag: "Hashtag", tag: "#ai" },
       fix:
-        "Add a valid _tag such as Hashtag, Author, Regex, DateRange, or Llm.",
+        "Add a valid _tag such as Hashtag, Author, Regex, or DateRange.",
       details: [`See ${filterDocs} for filter examples.`],
       validTags: validFilterTags
     });
@@ -178,19 +177,6 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
       fix: "Add handle with the full Bluesky handle."
     });
   }
-  if (tag === "Llm" && issues.some((issue) => hasPath(issue, "minConfidence"))) {
-    return validationError({
-      message: "Llm filter requires minConfidence between 0 and 1.",
-      received: receivedValue,
-      expected: {
-        _tag: "Llm",
-        prompt: "score tech posts",
-        minConfidence: 0.8,
-        onError: { _tag: "Exclude" }
-      },
-      fix: "Set minConfidence to a number between 0 and 1."
-    });
-  }
   if (tag === "DateRange" && issues.some((issue) => hasPath(issue, "start") || hasPath(issue, "end"))) {
     return validationError({
       message: "DateRange filter requires start and end ISO timestamps with timezone.",
@@ -213,7 +199,7 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
     });
   }
   if (
-    (tag === "HasValidLinks" || tag === "Trending" || tag === "Llm") &&
+    (tag === "HasValidLinks" || tag === "Trending") &&
     issues.some((issue) => hasPath(issue, "onError"))
   ) {
     return validationError({

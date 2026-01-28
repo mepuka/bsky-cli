@@ -22,8 +22,6 @@ export type FilterDescription = {
   readonly estimatedCost: "very low" | "low" | "medium" | "high";
 };
 
-const DEFAULT_LLM_MIN_CONFIDENCE = 0.7;
-
 const quoteValue = (value: string) => {
   const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
   return `"${escaped}"`;
@@ -55,12 +53,11 @@ const formatPolicy = (policy: FilterErrorPolicy) => {
   }
 };
 
-const isDefaultPolicy = (tag: "HasValidLinks" | "Trending" | "Llm", policy: FilterErrorPolicy) => {
+const isDefaultPolicy = (tag: "HasValidLinks" | "Trending", policy: FilterErrorPolicy) => {
   switch (tag) {
     case "HasValidLinks":
       return policy._tag === "Exclude";
     case "Trending":
-    case "Llm":
       return policy._tag === "Include";
   }
 };
@@ -128,13 +125,6 @@ const formatLeafValue = (expr: FilterExpr): string => {
       return "valid links";
     case "Trending":
       return expr.tag;
-    case "Llm": {
-      const parts = [`prompt=${formatValue(expr.prompt)}`];
-      if (expr.minConfidence !== DEFAULT_LLM_MIN_CONFIDENCE) {
-        parts.push(`minConfidence=${expr.minConfidence}`);
-      }
-      return parts.join(", ");
-    }
     case "All":
       return "all";
     case "None":
@@ -188,8 +178,6 @@ const formatLeafPhrase = (expr: FilterExpr): string => {
       return "with valid links";
     case "Trending":
       return `matching trending ${expr.tag}`;
-    case "Llm":
-      return `matching LLM prompt ${formatValue(expr.prompt)}`;
     case "All":
       return "that match all posts";
     case "None":
@@ -292,16 +280,6 @@ export const formatFilterExpr = (expr: FilterExpr, parentPrec = 0): string => {
         ? []
         : [`onError=${formatPolicy(expr.onError)}`];
       return formatWithOptions("trending", expr.tag, options);
-    }
-    case "Llm": {
-      const options: string[] = [];
-      if (expr.minConfidence !== DEFAULT_LLM_MIN_CONFIDENCE) {
-        options.push(`minConfidence=${expr.minConfidence}`);
-      }
-      if (!isDefaultPolicy("Llm", expr.onError)) {
-        options.push(`onError=${formatPolicy(expr.onError)}`);
-      }
-      return formatWithOptions("llm", formatValue(expr.prompt), options);
     }
   }
 };
@@ -500,8 +478,6 @@ const conditionLine = (condition: FilterCondition) => {
       return `${prefix}have valid links`;
     case "Trending":
       return `${prefix}match trending: ${condition.value}`;
-    case "Llm":
-      return `${prefix}match LLM prompt: ${condition.value}`;
     default:
       return `${prefix}match ${condition.type}: ${condition.value}`;
   }

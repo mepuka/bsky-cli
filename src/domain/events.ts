@@ -1,6 +1,5 @@
 import { Schema } from "effect";
 import { Post } from "./post.js";
-import { LlmDecisionMeta } from "./llm.js";
 import { EventId, PostCid, PostUri, Timestamp, StoreName } from "./primitives.js";
 import { FilterExprSchema } from "./filter.js";
 
@@ -8,9 +7,6 @@ export class EventMeta extends Schema.Class<EventMeta>("EventMeta")({
   source: Schema.Literal("timeline", "notifications", "jetstream", "feed"),
   command: Schema.String,
   filterExprHash: Schema.optional(Schema.String),
-  model: Schema.optional(Schema.String),
-  promptHash: Schema.optional(Schema.String),
-  llm: Schema.optional(Schema.Array(LlmDecisionMeta)),
   createdAt: Timestamp,
   sourceStore: Schema.optional(StoreName)
 }) {}

@@ -70,7 +70,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             if (options.mode === "EventTime" && isEffectfulFilter(filterExpr)) {
               return yield* DerivationError.make({
                 reason:
-                  "EventTime mode only supports pure filters. Use --mode derive-time for Llm/Trending/HasValidLinks.",
+                  "EventTime mode only supports pure filters. Use --mode derive-time for Trending/HasValidLinks.",
                 sourceStore: sourceRef.name,
                 targetStore: targetRef.name
               });

@@ -84,7 +84,7 @@ export const deriveCommand = Command.make(
       if (evaluationMode === "EventTime" && isEffectfulFilter(filterExpr)) {
         return yield* CliInputError.make({
           message:
-            "EventTime mode does not allow Llm/Trending/HasValidLinks filters. Use --mode derive-time for effectful filters.",
+            "EventTime mode does not allow Trending/HasValidLinks filters. Use --mode derive-time for effectful filters.",
           cause: { filterExpr, mode: evaluationMode }
         });
       }

@@ -111,40 +111,6 @@ describe("filter DSL", () => {
     });
   });
 
-  test("parses llm filter with retry policy", async () => {
-    const result = await Effect.runPromise(
-      parseFilterDsl(
-        "llm:\"score tech posts\",minConfidence=0.6,onError=retry,maxRetries=3,baseDelay=\"1 second\""
-      ).pipe(Effect.provide(emptyLibraryLayer))
-    );
-
-    expect(result._tag).toBe("Llm");
-    if (result._tag === "Llm") {
-      expect(result.prompt).toBe("score tech posts");
-      expect(result.minConfidence).toBeCloseTo(0.6);
-      expect(result.onError._tag).toBe("Retry");
-      if (result.onError._tag === "Retry") {
-        expect(result.onError.maxRetries).toBe(3);
-        expect(Duration.toMillis(result.onError.baseDelay)).toBe(1000);
-      }
-    }
-  });
-
-  test("rejects retry policy missing baseDelay", async () => {
-    const result = await Effect.runPromise(
-      Effect.either(
-        parseFilterDsl("llm:\"hi\",onError=retry,maxRetries=2").pipe(
-          Effect.provide(emptyLibraryLayer)
-        )
-      )
-    );
-
-    expect(result._tag).toBe("Left");
-    if (result._tag === "Left") {
-      expect(result.left.message).toContain("baseDelay");
-    }
-  });
-
   test("parses named filter references", async () => {
     const result = await Effect.runPromise(
       parseFilterDsl("@tech").pipe(Effect.provide(namedLibraryLayer))

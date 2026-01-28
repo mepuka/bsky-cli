@@ -5,7 +5,6 @@ import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { Jetstream, JetstreamMessage } from "effect-jetstream";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
-import { LlmDecision } from "../../src/services/llm.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
 import { PostParser } from "../../src/services/post-parser.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
@@ -133,7 +132,6 @@ const profileLayer = Layer.succeed(
 );
 
 const filterRuntimeLayer = FilterRuntime.layer.pipe(
-  Layer.provideMerge(LlmDecision.testLayer),
   Layer.provideMerge(LinkValidator.testLayer),
   Layer.provideMerge(TrendingTopics.testLayer)
 );

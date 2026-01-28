@@ -4,8 +4,6 @@ import * as FetchHttpClient from "@effect/platform/FetchHttpClient";
 import { Effect, Layer } from "effect";
 import { BskyClient } from "../services/bsky-client.js";
 import { FilterRuntime } from "../services/filter-runtime.js";
-import { LlmDecision, LlmPlan, LlmSettings } from "../services/llm.js";
-import { LlmTelemetry } from "../services/llm-telemetry.js";
 import { PostParser } from "../services/post-parser.js";
 import { AppConfigService } from "../services/app-config.js";
 import { CredentialStore } from "../services/credential-store.js";
@@ -20,7 +18,6 @@ import { SyncCheckpointStore } from "../services/sync-checkpoint-store.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { SyncSettings } from "../services/sync-settings.js";
 import { StoreCleaner } from "../services/store-cleaner.js";
-import { IdGenerator } from "@effect/ai";
 import { LinkValidator } from "../services/link-validator.js";
 import { TrendingTopics } from "../services/trending-topics.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
@@ -72,19 +69,6 @@ const cleanerLayer = StoreCleaner.layer.pipe(
 const checkpointLayer = SyncCheckpointStore.layer.pipe(
   Layer.provideMerge(storageLayer)
 );
-const idGeneratorLayer = Layer.succeed(
-  IdGenerator.IdGenerator,
-  IdGenerator.defaultIdGenerator
-);
-const llmDecisionLayer = LlmDecision.layer.pipe(
-  Layer.provideMerge(
-    LlmPlan.layer.pipe(Layer.provide(LlmSettings.layer))
-  ),
-  Layer.provideMerge(LlmSettings.layer),
-  Layer.provideMerge(idGeneratorLayer),
-  Layer.provideMerge(storageLayer),
-  Layer.provideMerge(LlmTelemetry.layer)
-);
 const linkValidatorLayer = LinkValidator.layer.pipe(
   Layer.provideMerge(storageLayer),
   Layer.provideMerge(FetchHttpClient.layer)
@@ -98,7 +82,6 @@ const resourceMonitorLayer = ResourceMonitor.layer.pipe(
   Layer.provideMerge(appConfigLayer)
 );
 const runtimeLayer = FilterRuntime.layer.pipe(
-  Layer.provideMerge(llmDecisionLayer),
   Layer.provideMerge(linkValidatorLayer),
   Layer.provideMerge(trendingTopicsLayer)
 );

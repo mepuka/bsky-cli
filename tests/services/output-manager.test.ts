@@ -11,7 +11,6 @@ import { StoreDb } from "../../src/services/store-db.js";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { FilterCompiler } from "../../src/services/filter-compiler.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
-import { LlmDecision } from "../../src/services/llm.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
 import { TrendingTopics } from "../../src/services/trending-topics.js";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
@@ -59,7 +58,6 @@ const buildLayer = (storeRoot: string) => {
   const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
   const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer));
   const runtimeLayer = FilterRuntime.layer.pipe(
-    Layer.provideMerge(LlmDecision.testLayer),
     Layer.provideMerge(LinkValidator.testLayer),
     Layer.provideMerge(TrendingTopics.testLayer)
   );

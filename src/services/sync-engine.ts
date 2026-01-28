@@ -207,9 +207,20 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                     })
                   );
                 case "Feed":
-                  return client.getFeed(source.uri);
+                  return client.getFeed(
+                    source.uri,
+                    Option.match(cursorOption, {
+                      onNone: () => undefined,
+                      onSome: (value) => ({ cursor: value })
+                    })
+                  );
                 case "Notifications":
-                  return client.getNotifications();
+                  return client.getNotifications(
+                    Option.match(cursorOption, {
+                      onNone: () => undefined,
+                      onSome: (value) => ({ cursor: value })
+                    })
+                  );
                 case "Jetstream":
                   return Stream.fail(
                     SyncError.make({
