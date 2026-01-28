@@ -1,6 +1,5 @@
 import { Command } from "@effect/cli";
 import { BunContext } from "@effect/platform-bun";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Ref, Sink, Stream } from "effect";
 import { CliOutput, type CliOutputService } from "../../src/cli/output.js";
@@ -10,6 +9,9 @@ import { LineageStore } from "../../src/services/lineage-store.js";
 import { StoreManager } from "../../src/services/store-manager.js";
 import { StoreCleaner } from "../../src/services/store-cleaner.js";
 import { CliPreferences } from "../../src/cli/preferences.js";
+import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
+import * as KeyValueStore from "@effect/platform/KeyValueStore";
+import { FileSystem } from "@effect/platform";
 
 const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
 
@@ -69,8 +71,19 @@ describe("CLI store command", () => {
       version: "0.0.0"
     });
     const { layer, stdoutRef, stderrRef } = makeOutputCapture();
+    const storeRoot = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return yield* fs.makeTempDirectory();
+      }).pipe(Effect.provide(BunContext.layer))
+    );
+    const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+    const appConfigLayer = AppConfigService.layer.pipe(
+      Layer.provide(overrides),
+      Layer.provide(BunContext.layer)
+    );
     const storeLayer = Layer.mergeAll(
-      StoreManager.layer,
+      StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer)),
       LineageStore.layer
     ).pipe(Layer.provide(KeyValueStore.layerMemory));
     const cleanerLayer = Layer.succeed(
@@ -84,9 +97,8 @@ describe("CLI store command", () => {
       layer,
       storeLayer,
       cleanerLayer,
-      preferencesLayer,
-      BunContext.layer
-    );
+      preferencesLayer
+    ).pipe(Layer.provideMerge(BunContext.layer));
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -98,6 +110,13 @@ describe("CLI store command", () => {
 
     const stdout = await Effect.runPromise(Ref.get(stdoutRef));
     const stderr = await Effect.runPromise(Ref.get(stderrRef));
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.remove(storeRoot, { recursive: true });
+      }).pipe(Effect.provide(BunContext.layer))
+    );
 
     expect(stderr.length).toBe(0);
 

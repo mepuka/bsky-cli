@@ -7,6 +7,7 @@ import { DerivationEngine } from "../src/services/derivation-engine.js";
 import { StoreEventLog } from "../src/services/store-event-log.js";
 import { StoreWriter } from "../src/services/store-writer.js";
 import { StoreIndex } from "../src/services/store-index.js";
+import { StoreDb } from "../src/services/store-db.js";
 import { FilterRuntime } from "../src/services/filter-runtime.js";
 import { FilterCompiler } from "../src/services/filter-compiler.js";
 import { ViewCheckpointStore } from "../src/services/view-checkpoint-store.js";
@@ -68,13 +69,14 @@ const buildTestLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
   const storageLayer = KeyValueStore.layerMemory;
-  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
-    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(eventLogLayer)
   );
   const otherStorage = Layer.mergeAll(
-    StoreWriter.layer,
+    StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer)),
     ViewCheckpointStore.layer,
     LineageStore.layer
   ).pipe(Layer.provideMerge(storageLayer));
@@ -90,6 +92,7 @@ const buildTestLayer = (storeRoot: string) => {
   return Layer.mergeAll(
     appConfigLayer,
     storageLayer,
+    storeDbLayer,
     eventLogLayer,
     indexLayer,
     otherStorage,

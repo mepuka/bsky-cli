@@ -1,11 +1,11 @@
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
-import { Context, Effect, Layer, Option, Random, Ref, Schema } from "effect";
+import { Context, Effect, Layer, Random, Ref, Schema } from "effect";
+import * as SqlSchema from "@effect/sql/SqlSchema";
 import { StoreIoError } from "../domain/errors.js";
 import { PostEvent, PostEventRecord } from "../domain/events.js";
-import { EventId } from "../domain/primitives.js";
+import { EventId, PostUri } from "../domain/primitives.js";
 import type { StorePath } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
-import { storePrefix } from "./store-keys.js";
+import { StoreDb } from "./store-db.js";
 
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const MAX_ULID_TIME = 0xffff_ffff_ffff;
@@ -48,10 +48,21 @@ const incrementRandomDigits = (digits: ReadonlyArray<number>) => {
   return { digits: next, overflow: true } as const;
 };
 
-const eventKey = (event: PostEvent, id: EventId) =>
-  `events/${event.meta.source}/${id}`;
-const manifestKey = "events/manifest";
-const lastEventIdKey = "events/last-id";
+const eventLogMetaKey = "last_event_id";
+
+const eventLogInsertRow = Schema.Struct({
+  event_id: EventId,
+  event_type: Schema.String,
+  post_uri: PostUri,
+  payload_json: Schema.String,
+  created_at: Schema.String,
+  source: Schema.String
+});
+
+const eventLogMetaRow = Schema.Struct({
+  key: Schema.String,
+  value: Schema.String
+});
 
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
   StoreIoError.make({ path, cause });
@@ -68,10 +79,7 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
   static readonly layer = Layer.effect(
     StoreWriter,
     Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const events = kv.forSchema(PostEventRecord);
-      const manifest = kv.forSchema(Schema.Array(Schema.String));
-      const lastEventId = kv.forSchema(EventId);
+      const storeDb = yield* StoreDb;
       const idState = yield* Ref.make({
         lastTime: 0,
         lastRandom: [] as ReadonlyArray<number>
@@ -114,26 +122,53 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
       const append = Effect.fn("StoreWriter.append")(
         (store: StoreRef, event: PostEvent) =>
           Effect.gen(function* () {
-            const prefix = storePrefix(store);
-            const storeEvents = KeyValueStore.prefix(events, prefix);
-            const storeManifest = KeyValueStore.prefix(manifest, prefix);
-            const storeLastEventId = KeyValueStore.prefix(lastEventId, prefix);
             const id = yield* generateEventId();
             const record = PostEventRecord.make({
               id,
               version: 1,
               event
             });
-            const key = eventKey(event, id);
-            yield* storeEvents.set(key, record);
-            yield* storeLastEventId.set(lastEventIdKey, record.id);
-            const updated = yield* storeManifest.modify(manifestKey, (keys) => [
-              ...keys,
-              key
-            ]);
-            if (Option.isNone(updated)) {
-              yield* storeManifest.set(manifestKey, [key]);
-            }
+            const payloadJson = yield* Schema.encode(
+              Schema.parseJson(PostEventRecord)
+            )(record).pipe(Effect.mapError(toStoreIoError(store.root)));
+            const postUri =
+              record.event._tag === "PostUpsert"
+                ? record.event.post.uri
+                : record.event.uri;
+            const createdAt =
+              record.event.meta.createdAt instanceof Date
+                ? record.event.meta.createdAt.toISOString()
+                : new Date(record.event.meta.createdAt).toISOString();
+
+            yield* storeDb.withClient(store, (client) => {
+              const insertEvent = SqlSchema.void({
+                Request: eventLogInsertRow,
+                execute: (row) =>
+                  client`INSERT INTO event_log ${client.insert(row)}`
+              });
+              const upsertMeta = SqlSchema.void({
+                Request: eventLogMetaRow,
+                execute: (row) =>
+                  client`INSERT INTO event_log_meta (key, value)
+                    VALUES (${row.key}, ${row.value})
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+              });
+
+              return Effect.gen(function* () {
+                yield* insertEvent({
+                  event_id: record.id,
+                  event_type: record.event._tag,
+                  post_uri: postUri,
+                  payload_json: payloadJson,
+                  created_at: createdAt,
+                  source: record.event.meta.source
+                });
+                yield* upsertMeta({
+                  key: eventLogMetaKey,
+                  value: record.id
+                });
+              }).pipe(client.withTransaction);
+            });
             return record;
           }).pipe(Effect.mapError(toStoreIoError(store.root)))
       );

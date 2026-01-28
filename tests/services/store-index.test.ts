@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { Chunk, Effect, Layer, Option, Schema, Stream } from "effect";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { StoreIndex } from "../../src/services/store-index.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
 import { StoreWriter } from "../../src/services/store-writer.js";
+import { StoreDb } from "../../src/services/store-db.js";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { EventMeta, PostEventRecord, PostDelete, PostUpsert, StoreQuery } from "../../src/domain/events.js";
 import { EventId, Timestamp } from "../../src/domain/primitives.js";
@@ -65,17 +65,17 @@ const removeTempDir = (path: string) =>
 const buildLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
-  const storageLayer = KeyValueStore.layerMemory;
-  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
-  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storageLayer));
+  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
-    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(eventLogLayer)
   );
 
   return Layer.mergeAll(
     appConfigLayer,
-    storageLayer,
+    storeDbLayer,
     eventLogLayer,
     writerLayer,
     indexLayer
@@ -225,11 +225,19 @@ describe("StoreIndex", () => {
       }).pipe(Effect.provide(BunContext.layer))
     );
 
-    const fsLayer = StoreIndex.layer.pipe(
-      Layer.provideMerge(AppConfigService.layer.pipe(Layer.provide(Layer.succeed(ConfigOverrides, { storeRoot: tempDir })))),
-      Layer.provideMerge(StoreEventLog.layer.pipe(Layer.provideMerge(KeyValueStore.layerFileSystem(tempDir)))),
-      Layer.provideMerge(BunContext.layer)
-    );
+    const overrides = Layer.succeed(ConfigOverrides, { storeRoot: tempDir });
+    const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+    const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+    const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
+    const fsLayer = Layer.mergeAll(
+      appConfigLayer,
+      storeDbLayer,
+      eventLogLayer,
+      StoreIndex.layer.pipe(
+        Layer.provideMerge(storeDbLayer),
+        Layer.provideMerge(eventLogLayer)
+      )
+    ).pipe(Layer.provideMerge(BunContext.layer));
 
     try {
       await Effect.runPromise(

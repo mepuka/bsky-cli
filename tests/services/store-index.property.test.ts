@@ -4,9 +4,9 @@ import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import * as fc from "effect/FastCheck";
 import * as Arbitrary from "effect/Arbitrary";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { StoreIndex } from "../../src/services/store-index.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
+import { StoreDb } from "../../src/services/store-db.js";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { EventMeta, PostDelete, PostEventRecord, PostUpsert, StoreQuery } from "../../src/domain/events.js";
 import { EventId, Handle, Hashtag, PostUri } from "../../src/domain/primitives.js";
@@ -208,14 +208,14 @@ const removeTempDir = (path: string) =>
 const buildLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
-  const storageLayer = KeyValueStore.layerMemory;
-  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
-    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(eventLogLayer)
   );
 
-  return Layer.mergeAll(appConfigLayer, storageLayer, eventLogLayer, indexLayer).pipe(
+  return Layer.mergeAll(appConfigLayer, storeDbLayer, eventLogLayer, indexLayer).pipe(
     Layer.provideMerge(BunContext.layer)
   );
 };

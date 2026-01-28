@@ -11,6 +11,7 @@ import { PostParser } from "../../src/services/post-parser.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
 import { StoreIndex } from "../../src/services/store-index.js";
 import { StoreWriter } from "../../src/services/store-writer.js";
+import { StoreDb } from "../../src/services/store-db.js";
 import { SyncEngine } from "../../src/services/sync-engine.js";
 import { SyncCheckpointStore } from "../../src/services/sync-checkpoint-store.js";
 import { SyncReporter } from "../../src/services/sync-reporter.js";
@@ -74,12 +75,13 @@ const buildLayer = (storeRoot: string) => {
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
   const syncSettingsLayer = SyncSettings.layer.pipe(Layer.provide(syncOverrides));
   const storageLayer = KeyValueStore.layerMemory;
-  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
-    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(eventLogLayer)
   );
-  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storageLayer));
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
   const checkpointLayer = SyncCheckpointStore.layer.pipe(
     Layer.provideMerge(storageLayer)
   );
@@ -96,6 +98,7 @@ const buildLayer = (storeRoot: string) => {
     Layer.provideMerge(syncSettingsLayer),
     Layer.provideMerge(appConfigLayer),
     Layer.provideMerge(storageLayer),
+    Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(BunContext.layer)
   );
 };

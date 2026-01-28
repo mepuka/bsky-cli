@@ -11,6 +11,7 @@ import { AppConfigService } from "../services/app-config.js";
 import { CredentialStore } from "../services/credential-store.js";
 import { StoreEventLog } from "../services/store-event-log.js";
 import { StoreIndex } from "../services/store-index.js";
+import { StoreDb } from "../services/store-db.js";
 import { StoreManager } from "../services/store-manager.js";
 import { StoreWriter } from "../services/store-writer.js";
 import { SyncEngine } from "../services/sync-engine.js";
@@ -49,13 +50,14 @@ const storageLayer = Layer.unwrapEffect(
     return KeyValueStore.layerFileSystem(kvRoot);
   })
 ).pipe(Layer.provide(appConfigLayer));
-const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storageLayer));
-const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
 const indexLayer = StoreIndex.layer.pipe(
-  Layer.provideMerge(appConfigLayer),
+  Layer.provideMerge(storeDbLayer),
   Layer.provideMerge(eventLogLayer)
 );
-const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(storageLayer));
+const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer));
 const cleanerLayer = StoreCleaner.layer.pipe(
   Layer.provideMerge(managerLayer),
   Layer.provideMerge(indexLayer),

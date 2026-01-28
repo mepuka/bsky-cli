@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { FileSystem, Path } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { Chunk, Effect, Layer, Schema } from "effect";
 import { OutputManager } from "../../src/services/output-manager.js";
 import { StoreManager } from "../../src/services/store-manager.js";
 import { StoreWriter } from "../../src/services/store-writer.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
 import { StoreIndex } from "../../src/services/store-index.js";
+import { StoreDb } from "../../src/services/store-db.js";
+import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { FilterCompiler } from "../../src/services/filter-compiler.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
 import { LlmDecision } from "../../src/services/llm.js";
@@ -49,13 +50,14 @@ const buildLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
   const storageLayer = KeyValueStore.layerMemory;
-  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
-    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(eventLogLayer)
   );
-  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storageLayer));
-  const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(storageLayer));
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+  const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer));
   const runtimeLayer = FilterRuntime.layer.pipe(
     Layer.provideMerge(LlmDecision.testLayer),
     Layer.provideMerge(LinkValidator.testLayer),
@@ -71,6 +73,7 @@ const buildLayer = (storeRoot: string) => {
   const baseLayer = Layer.mergeAll(
     appConfigLayer,
     storageLayer,
+    storeDbLayer,
     eventLogLayer,
     indexLayer,
     writerLayer,

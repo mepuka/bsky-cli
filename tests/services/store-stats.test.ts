@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { Effect, Layer, Schema } from "effect";
 import { StoreStats } from "../../src/services/store-stats.js";
 import { StoreManager } from "../../src/services/store-manager.js";
 import { StoreWriter } from "../../src/services/store-writer.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
 import { StoreIndex } from "../../src/services/store-index.js";
+import { StoreDb } from "../../src/services/store-db.js";
+import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { LineageStore } from "../../src/services/lineage-store.js";
 import { SyncCheckpointStore } from "../../src/services/sync-checkpoint-store.js";
 import { ViewCheckpointStore } from "../../src/services/view-checkpoint-store.js";
@@ -25,11 +26,13 @@ const makeAppConfigLayer = (storeRoot: string) => {
 
 const testLayers = (storeRoot: string) => {
   const kvLayer = KeyValueStore.layerMemory;
-  const managerLayer = StoreManager.layer.pipe(Layer.provide(kvLayer));
-  const writerLayer = StoreWriter.layer.pipe(Layer.provide(kvLayer));
-  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provide(kvLayer));
+  const appConfigLayer = makeAppConfigLayer(storeRoot);
+  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
-    Layer.provideMerge(makeAppConfigLayer(storeRoot)),
+    Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(eventLogLayer)
   );
   const lineageLayer = LineageStore.layer.pipe(Layer.provide(kvLayer));
@@ -44,7 +47,6 @@ const testLayers = (storeRoot: string) => {
     Layer.provideMerge(eventLogLayer),
     Layer.provideMerge(managerLayer)
   );
-  const appConfigLayer = makeAppConfigLayer(storeRoot);
   const storeStatsLayer = StoreStats.layer.pipe(
     Layer.provideMerge(appConfigLayer),
     Layer.provideMerge(managerLayer),
@@ -61,6 +63,7 @@ const testLayers = (storeRoot: string) => {
     writerLayer,
     indexLayer,
     eventLogLayer,
+    storeDbLayer,
     lineageLayer,
     syncCheckpointLayer,
     derivationValidatorLayer,

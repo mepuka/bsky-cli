@@ -1,5 +1,4 @@
 import { Command } from "@effect/cli";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Option, Ref, Schema, Sink, Stream } from "effect";
 import { deriveCommand } from "../../src/cli/derive.js";
@@ -14,6 +13,9 @@ import { ViewCheckpointStore } from "../../src/services/view-checkpoint-store.js
 import { FilterLibrary } from "../../src/services/filter-library.js";
 import { FilterNotFound } from "../../src/domain/errors.js";
 import { CliPreferences } from "../../src/cli/preferences.js";
+import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
+import { BunContext } from "@effect/platform-bun";
+import { FileSystem } from "@effect/platform";
 
 const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
 
@@ -73,8 +75,19 @@ describe("CLI derive command", () => {
       version: "0.0.0"
     });
     const { layer: outputLayer } = makeOutputCapture();
+    const storeRoot = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return yield* fs.makeTempDirectory();
+      }).pipe(Effect.provide(BunContext.layer))
+    );
+    const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+    const appConfigLayer = AppConfigService.layer.pipe(
+      Layer.provide(overrides),
+      Layer.provide(BunContext.layer)
+    );
     const storeLayer = StoreManager.layer.pipe(
-      Layer.provide(KeyValueStore.layerMemory)
+      Layer.provideMerge(appConfigLayer)
     );
     const engineLayer = Layer.succeed(
       DerivationEngine,
@@ -125,8 +138,9 @@ describe("CLI derive command", () => {
       checkpointsLayer,
       outputManagerLayer,
       filterLibraryLayer,
-      preferencesLayer
-    );
+      preferencesLayer,
+      appConfigLayer
+    ).pipe(Layer.provideMerge(BunContext.layer));
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -149,5 +163,12 @@ describe("CLI derive command", () => {
     );
 
     expect(Option.isSome(result)).toBe(true);
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.remove(storeRoot, { recursive: true });
+      }).pipe(Effect.provide(BunContext.layer))
+    );
   });
 });

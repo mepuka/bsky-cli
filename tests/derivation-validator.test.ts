@@ -9,6 +9,7 @@ import { StoreEventLog } from "../src/services/store-event-log.js";
 import { StoreWriter } from "../src/services/store-writer.js";
 import { StoreManager } from "../src/services/store-manager.js";
 import { StoreIndex } from "../src/services/store-index.js";
+import { StoreDb } from "../src/services/store-db.js";
 import { StoreRef } from "../src/domain/store.js";
 import { StoreName, Timestamp } from "../src/domain/primitives.js";
 import { defaultStoreConfig } from "../src/domain/defaults.js";
@@ -77,20 +78,22 @@ const buildTestLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
   const storageLayer = KeyValueStore.layerMemory;
-  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storageLayer));
+  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
-    Layer.provideMerge(appConfigLayer),
+    Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(eventLogLayer)
   );
   const storageServices = Layer.mergeAll(
-    StoreWriter.layer,
-    StoreManager.layer,
+    StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer)),
+    StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer)),
     ViewCheckpointStore.layer
   ).pipe(Layer.provideMerge(storageLayer));
 
   return Layer.mergeAll(
     appConfigLayer,
     storageLayer,
+    storeDbLayer,
     eventLogLayer,
     indexLayer,
     storageServices,

@@ -1,11 +1,6 @@
-import { FileSystem, Path } from "@effect/platform";
-import { Chunk, Context, Effect, Exit, Layer, Option, Ref, Schema, Scope, Stream } from "effect";
-import * as Reactivity from "@effect/experimental/Reactivity";
-import * as Migrator from "@effect/sql/Migrator";
-import * as MigratorFileSystem from "@effect/sql/Migrator/FileSystem";
+import { Chunk, Context, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
-import { SqliteClient } from "@effect/sql-sqlite-bun";
 import { StoreIndexError } from "../domain/errors.js";
 import { PostEventRecord } from "../domain/events.js";
 import type { PostEvent, StoreQuery } from "../domain/events.js";
@@ -13,12 +8,9 @@ import { IndexCheckpoint, PostIndexEntry } from "../domain/indexes.js";
 import { EventId, Handle, PostUri, Timestamp } from "../domain/primitives.js";
 import { Post } from "../domain/post.js";
 import type { StoreRef } from "../domain/store.js";
-import { AppConfigService } from "./app-config.js";
+import { StoreDb } from "./store-db.js";
 import { StoreEventLog } from "./store-event-log.js";
 
-const migrationsDir = decodeURIComponent(
-  new URL("../db/migrations/store-index", import.meta.url).pathname
-);
 const indexName = "primary";
 const entryPageSize = 500;
 
@@ -155,79 +147,26 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
   static readonly layer = Layer.scoped(
     StoreIndex,
     Effect.gen(function* () {
-      const config = yield* AppConfigService;
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
       const eventLog = yield* StoreEventLog;
-      const reactivity = yield* Reactivity.Reactivity;
-
-      const scope = yield* Scope.make();
-      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-
-      const clients = yield* Ref.make(new Map<string, SqlClient.SqlClient>());
-      const clientLock = yield* Effect.makeSemaphore(1);
-
-      const migrate = Migrator.make({})({
-        loader: MigratorFileSystem.fromFileSystem(migrationsDir)
-      });
-
-      const openClient = (store: StoreRef) =>
-        Effect.gen(function* () {
-          const dbPath = path.join(config.storeRoot, store.root, "index.sqlite");
-          const dbDir = path.dirname(dbPath);
-          yield* fs.makeDirectory(dbDir, { recursive: true });
-
-          const client = yield* SqliteClient.make({ filename: dbPath }).pipe(
-            Effect.provideService(Scope.Scope, scope),
-            Effect.provideService(Reactivity.Reactivity, reactivity)
-          );
-
-          yield* client`PRAGMA foreign_keys = ON`;
-          yield* migrate.pipe(
-            Effect.provideService(SqlClient.SqlClient, client),
-            Effect.provideService(FileSystem.FileSystem, fs)
-          );
-
-          yield* bootstrapStore(store, client);
-
-          return client;
-        });
-
-      const getClient = (store: StoreRef) =>
-        Effect.gen(function* () {
-          const cached = (yield* Ref.get(clients)).get(store.name);
-          if (cached) {
-            return cached;
-          }
-
-          return yield* clientLock.withPermits(1)(
-            Effect.gen(function* () {
-              const current = yield* Ref.get(clients);
-              const existing = current.get(store.name);
-              if (existing) {
-                return existing;
-              }
-
-              const client = yield* openClient(store);
-
-              const next = new Map(current);
-              next.set(store.name, client);
-              yield* Ref.set(clients, next);
-
-              return client;
-            })
-          );
-        });
-
+      const storeDb = yield* StoreDb;
+      const bootstrapped = yield* Ref.make(new Set<string>());
       const withClient = <A, E>(
         store: StoreRef,
         message: string,
         run: (client: SqlClient.SqlClient) => Effect.Effect<A, E>
       ) =>
-        getClient(store).pipe(
-          Effect.flatMap(run),
-          Effect.mapError(toStoreIndexError(message))
-        );
+        storeDb
+          .withClient(store, (client) =>
+            Ref.modify(bootstrapped, (state) => {
+              if (state.has(store.name)) {
+                return [Effect.void, state] as const;
+              }
+              const next = new Set(state);
+              next.add(store.name);
+              return [bootstrapStore(store, client), next] as const;
+            }).pipe(Effect.flatten, Effect.andThen(run(client)))
+          )
+          .pipe(Effect.mapError(toStoreIndexError(message)));
 
       const loadCheckpointWithClient = (client: SqlClient.SqlClient, index: string) => {
         const load = SqlSchema.findOne({
@@ -542,5 +481,5 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         rebuild
       });
     })
-  ).pipe(Layer.provide(Reactivity.layer));
+  );
 }

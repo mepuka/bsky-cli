@@ -1,14 +1,30 @@
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
-import { Chunk, Context, Effect, Layer, Option, Schema } from "effect";
+import { FileSystem, Path } from "@effect/platform";
+import { Chunk, Context, Effect, Exit, Layer, Option, Schema, Scope } from "effect";
+import * as Reactivity from "@effect/experimental/Reactivity";
+import * as Migrator from "@effect/sql/Migrator";
+import * as MigratorFileSystem from "@effect/sql/Migrator/FileSystem";
+import * as SqlClient from "@effect/sql/SqlClient";
+import * as SqlSchema from "@effect/sql/SqlSchema";
+import { SqliteClient } from "@effect/sql-sqlite-bun";
 import { StoreIoError } from "../domain/errors.js";
 import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
-import { StoreName, StorePath, Timestamp } from "../domain/primitives.js";
+import { StoreName, StorePath } from "../domain/primitives.js";
+import { AppConfigService } from "./app-config.js";
 
-const manifestKey = "stores/manifest";
-const metadataKey = (name: StoreName) => `stores/${name}/meta`;
-const configKey = (name: StoreName) => `stores/${name}/config`;
+const migrationsDir = decodeURIComponent(
+  new URL("../db/migrations/store-catalog", import.meta.url).pathname
+);
+
 const storeRootKey = (name: StoreName) => `stores/${name}`;
 const manifestPath = Schema.decodeUnknownSync(StorePath)("stores");
+
+const storeRow = Schema.Struct({
+  name: StoreName,
+  root: StorePath,
+  created_at: Schema.String,
+  updated_at: Schema.String,
+  config_json: Schema.String
+});
 
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
   StoreIoError.make({ path, cause });
@@ -35,44 +51,97 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
     ) => Effect.Effect<void, StoreIoError>;
   }
 >() {
-  static readonly layer = Layer.effect(
+  static readonly layer = Layer.scoped(
     StoreManager,
     Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const metadata = kv.forSchema(StoreMetadata);
-      const configs = kv.forSchema(StoreConfig);
-      const manifest = kv.forSchema(Schema.Array(StoreName));
+      const appConfig = yield* AppConfigService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const reactivity = yield* Reactivity.Reactivity;
+
+      const scope = yield* Scope.make();
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+
+      const dbPath = path.join(appConfig.storeRoot, "catalog.sqlite");
+      const dbDir = path.dirname(dbPath);
+      yield* fs.makeDirectory(dbDir, { recursive: true });
+
+      const client = yield* SqliteClient.make({ filename: dbPath }).pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provideService(Reactivity.Reactivity, reactivity)
+      );
+
+      const migrate = Migrator.make({})({
+        loader: MigratorFileSystem.fromFileSystem(migrationsDir)
+      });
+      yield* migrate.pipe(
+        Effect.provideService(SqlClient.SqlClient, client),
+        Effect.provideService(FileSystem.FileSystem, fs)
+      );
+
+      const decodeMetadataRow = (row: typeof storeRow.Type) =>
+        Schema.decodeUnknown(StoreMetadata)({
+          name: row.name,
+          root: row.root,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
+        }).pipe(Effect.mapError(toStoreIoError(manifestPath)));
+
+      const decodeConfigRow = (row: typeof storeRow.Type) =>
+        Schema.decodeUnknown(Schema.parseJson(StoreConfig))(row.config_json).pipe(
+          Effect.mapError(toStoreIoError(manifestPath))
+        );
+
+      const encodeConfigJson = (config: StoreConfig) =>
+        Schema.encode(Schema.parseJson(StoreConfig))(config).pipe(
+          Effect.mapError(toStoreIoError(manifestPath))
+        );
+
+      const findStore = SqlSchema.findAll({
+        Request: StoreName,
+        Result: storeRow,
+        execute: (name) =>
+          client`SELECT name, root, created_at, updated_at, config_json FROM stores WHERE name = ${name}`
+      });
+
+      const listStoresSql = SqlSchema.findAll({
+        Request: Schema.Void,
+        Result: storeRow,
+        execute: () =>
+          client`SELECT name, root, created_at, updated_at, config_json FROM stores ORDER BY name ASC`
+      });
+
+      const insertStore = SqlSchema.void({
+        Request: storeRow,
+        execute: (row) =>
+          client`INSERT INTO stores ${client.insert(row)}`
+      });
+
+      const deleteStoreSql = SqlSchema.void({
+        Request: StoreName,
+        execute: (name) =>
+          client`DELETE FROM stores WHERE name = ${name}`
+      });
+
       const createStore = Effect.fn("StoreManager.createStore")(
         (name: StoreName, config: StoreConfig) => {
           const root = Schema.decodeUnknownSync(StorePath)(storeRootKey(name));
           return Effect.gen(function* () {
-            const existing = yield* metadata.get(metadataKey(name));
-            if (Option.isSome(existing)) {
-              const existingConfig = yield* configs.get(configKey(name));
-              if (Option.isNone(existingConfig)) {
-                yield* configs.set(configKey(name), config);
-              }
-              return storeRefFromMetadata(existing.value);
+            const existingRows = yield* findStore(name);
+            if (existingRows.length > 0) {
+              const existing = yield* decodeMetadataRow(existingRows[0]!);
+              return storeRefFromMetadata(existing);
             }
 
-            const now = yield* Schema.decodeUnknown(Timestamp)(
-              new Date().toISOString()
-            );
-            const next = StoreMetadata.make({
+            const now = new Date().toISOString();
+            const configJson = yield* encodeConfigJson(config);
+            yield* insertStore({
               name,
               root,
-              createdAt: now,
-              updatedAt: now
+              created_at: now,
+              updated_at: now,
+              config_json: configJson
             });
-            yield* metadata.set(metadataKey(name), next);
-            yield* configs.set(configKey(name), config);
-
-            const updated = yield* manifest.modify(manifestKey, (names) =>
-              names.includes(name) ? names : [...names, name]
-            );
-            if (Option.isNone(updated)) {
-              yield* manifest.set(manifestKey, [name]);
-            }
 
             return StoreRef.make({ name, root });
           }).pipe(Effect.mapError(toStoreIoError(root)));
@@ -81,54 +150,53 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
 
       const getStore = Effect.fn("StoreManager.getStore")((name: StoreName) => {
         const root = Schema.decodeUnknownSync(StorePath)(storeRootKey(name));
-        return metadata
-          .get(metadataKey(name))
-          .pipe(
-            Effect.map(Option.map(storeRefFromMetadata)),
-            Effect.mapError(toStoreIoError(root))
-          );
+        return findStore(name).pipe(
+          Effect.flatMap((rows) =>
+            rows.length === 0
+              ? Effect.succeed(Option.none())
+              : decodeMetadataRow(rows[0]!).pipe(
+                  Effect.map((metadata) =>
+                    Option.some(storeRefFromMetadata(metadata))
+                  )
+                )
+          ),
+          Effect.mapError(toStoreIoError(root))
+        );
       });
 
       const getConfig = Effect.fn("StoreManager.getConfig")((name: StoreName) => {
         const root = Schema.decodeUnknownSync(StorePath)(storeRootKey(name));
-        return configs
-          .get(configKey(name))
-          .pipe(Effect.mapError(toStoreIoError(root)));
+        return findStore(name).pipe(
+          Effect.flatMap((rows) =>
+            rows.length === 0
+              ? Effect.succeed(Option.none())
+              : decodeConfigRow(rows[0]!).pipe(Effect.map(Option.some))
+          ),
+          Effect.mapError(toStoreIoError(root))
+        );
       });
 
       const deleteStore = Effect.fn("StoreManager.deleteStore")((name: StoreName) => {
         const root = Schema.decodeUnknownSync(StorePath)(storeRootKey(name));
-        return Effect.gen(function* () {
-          yield* metadata.remove(metadataKey(name));
-          yield* configs.remove(configKey(name));
-          const updated = yield* manifest.modify(manifestKey, (names) =>
-            names.filter((entry) => entry !== name)
-          );
-          if (Option.isNone(updated)) {
-            yield* manifest.remove(manifestKey);
-          }
-        }).pipe(Effect.mapError(toStoreIoError(root)));
+        return deleteStoreSql(name).pipe(Effect.mapError(toStoreIoError(root)));
       });
 
       const listStores = Effect.fn("StoreManager.listStores")(() =>
         Effect.gen(function* () {
-          const namesOption = yield* manifest.get(manifestKey);
-          if (Option.isNone(namesOption)) {
+          const rows = yield* listStoresSql(undefined);
+          if (rows.length === 0) {
             return Chunk.empty<StoreMetadata>();
           }
-
-          const entries = yield* Effect.forEach(
-            namesOption.value,
-            (name) => metadata.get(metadataKey(name)),
+          const decoded = yield* Effect.forEach(
+            rows,
+            (row) => decodeMetadataRow(row),
             { discard: false }
           );
-
-          const present = entries.filter(Option.isSome).map((entry) => entry.value);
-          return Chunk.fromIterable(present);
+          return Chunk.fromIterable(decoded);
         }).pipe(Effect.mapError(toStoreIoError(manifestPath)))
       );
 
       return StoreManager.of({ createStore, getStore, listStores, getConfig, deleteStore });
     })
-  );
+  ).pipe(Layer.provide(Reactivity.layer));
 }

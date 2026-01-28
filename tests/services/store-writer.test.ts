@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer, Option, Schema } from "effect";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
+import { Chunk, Effect, Layer, Option, Schema, Stream } from "effect";
+import { FileSystem } from "@effect/platform";
+import { BunContext } from "@effect/platform-bun";
 import { StoreWriter } from "../../src/services/store-writer.js";
-import { EventMeta, PostEventRecord, PostUpsert } from "../../src/domain/events.js";
+import { StoreEventLog } from "../../src/services/store-event-log.js";
+import { StoreDb } from "../../src/services/store-db.js";
+import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
+import { EventMeta, PostUpsert } from "../../src/domain/events.js";
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
-import { EventId } from "../../src/domain/primitives.js";
-import { storePrefix } from "../../src/services/store-keys.js";
 
 const samplePost = Schema.decodeUnknownSync(Post)({
   uri: "at://did:plc:example/app.bsky.feed.post/1",
@@ -27,87 +29,116 @@ const sampleMeta = Schema.decodeUnknownSync(EventMeta)({
 const sampleEvent = PostUpsert.make({ post: samplePost, meta: sampleMeta });
 const sampleStore = Schema.decodeUnknownSync(StoreRef)({
   name: "arsenal",
-  root: "/tmp/arsenal"
+  root: "stores/arsenal"
 });
 
-const testLayer = StoreWriter.layer.pipe(
-  Layer.provideMerge(KeyValueStore.layerMemory)
-);
+const makeTempDir = () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return yield* fs.makeTempDirectory();
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const removeTempDir = (path: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(path, { recursive: true });
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const buildLayer = (storeRoot: string) => {
+  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+
+  return Layer.mergeAll(
+    appConfigLayer,
+    storeDbLayer,
+    eventLogLayer,
+    writerLayer
+  ).pipe(Layer.provideMerge(BunContext.layer));
+};
 
 describe("StoreWriter", () => {
-  test("append writes event record to KV store", async () => {
+  test("append persists event record in SQL event log", async () => {
     const program = Effect.gen(function* () {
       const writer = yield* StoreWriter;
-      const kv = yield* KeyValueStore.KeyValueStore;
+      const eventLog = yield* StoreEventLog;
 
       const record = yield* writer.append(sampleStore, sampleEvent);
-      const key = `events/${record.event.meta.source}/${record.id}`;
-      const storeEvents = KeyValueStore.prefix(
-        kv.forSchema(PostEventRecord),
-        storePrefix(sampleStore)
-      );
-      const stored = yield* storeEvents.get(key);
+      const events = yield* eventLog
+        .stream(sampleStore)
+        .pipe(Stream.runCollect);
 
-      return { record, stored };
+      return { record, events };
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+    const tempDir = await makeTempDir();
+    try {
+      const layer = buildLayer(tempDir);
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      const events = Chunk.toReadonlyArray(result.events);
 
-    expect(Option.isSome(result.stored)).toBe(true);
-    if (Option.isSome(result.stored)) {
-      expect(result.stored.value).toEqual(result.record);
+      expect(events.length).toBe(1);
+      expect(events[0]!.id).toEqual(result.record.id);
+    } finally {
+      await removeTempDir(tempDir);
     }
   });
 
-  test("append updates last event ID in KV store", async () => {
+  test("append updates last event ID", async () => {
     const program = Effect.gen(function* () {
       const writer = yield* StoreWriter;
-      const kv = yield* KeyValueStore.KeyValueStore;
+      const eventLog = yield* StoreEventLog;
 
       const record = yield* writer.append(sampleStore, sampleEvent);
-      const lastEventIdKey = "events/last-id";
-      const storeLastEventId = KeyValueStore.prefix(
-        kv.forSchema(EventId),
-        storePrefix(sampleStore)
-      );
-      const storedLastId = yield* storeLastEventId.get(lastEventIdKey);
+      const lastId = yield* eventLog.getLastEventId(sampleStore);
 
-      return { record, storedLastId };
+      return { record, lastId };
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+    const tempDir = await makeTempDir();
+    try {
+      const layer = buildLayer(tempDir);
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    expect(Option.isSome(result.storedLastId)).toBe(true);
-    if (Option.isSome(result.storedLastId)) {
-      expect(result.storedLastId.value).toEqual(result.record.id);
+      expect(Option.isSome(result.lastId)).toBe(true);
+      if (Option.isSome(result.lastId)) {
+        expect(result.lastId.value).toEqual(result.record.id);
+      }
+    } finally {
+      await removeTempDir(tempDir);
     }
   });
 
   test("append updates last event ID with multiple events", async () => {
     const program = Effect.gen(function* () {
       const writer = yield* StoreWriter;
-      const kv = yield* KeyValueStore.KeyValueStore;
+      const eventLog = yield* StoreEventLog;
 
       const record1 = yield* writer.append(sampleStore, sampleEvent);
       const record2 = yield* writer.append(sampleStore, sampleEvent);
       const record3 = yield* writer.append(sampleStore, sampleEvent);
+      const lastId = yield* eventLog.getLastEventId(sampleStore);
 
-      const lastEventIdKey = "events/last-id";
-      const storeLastEventId = KeyValueStore.prefix(
-        kv.forSchema(EventId),
-        storePrefix(sampleStore)
-      );
-      const storedLastId = yield* storeLastEventId.get(lastEventIdKey);
-
-      return { record1, record2, record3, storedLastId };
+      return { record1, record2, record3, lastId };
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+    const tempDir = await makeTempDir();
+    try {
+      const layer = buildLayer(tempDir);
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    expect(Option.isSome(result.storedLastId)).toBe(true);
-    if (Option.isSome(result.storedLastId)) {
-      // Should store the ID of the last appended event
-      expect(result.storedLastId.value).toEqual(result.record3.id);
+      expect(Option.isSome(result.lastId)).toBe(true);
+      if (Option.isSome(result.lastId)) {
+        expect(result.lastId.value).toEqual(result.record3.id);
+      }
+    } finally {
+      await removeTempDir(tempDir);
     }
   });
 });

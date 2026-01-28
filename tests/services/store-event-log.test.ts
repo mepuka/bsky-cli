@@ -2,14 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Option, Schema } from "effect";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
 import { StoreWriter } from "../../src/services/store-writer.js";
+import { StoreDb } from "../../src/services/store-db.js";
+import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { EventMeta, PostUpsert } from "../../src/domain/events.js";
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
-import { EventId } from "../../src/domain/primitives.js";
-import { storePrefix } from "../../src/services/store-keys.js";
 
 const samplePost = Schema.decodeUnknownSync(Post)({
   uri: "at://did:plc:example/app.bsky.feed.post/1",
@@ -30,25 +29,55 @@ const sampleMeta = Schema.decodeUnknownSync(EventMeta)({
 const sampleEvent = PostUpsert.make({ post: samplePost, meta: sampleMeta });
 const sampleStore = Schema.decodeUnknownSync(StoreRef)({
   name: "arsenal",
-  root: "/tmp/arsenal"
+  root: "stores/arsenal"
 });
 
-const testLayer = Layer.mergeAll(
-  StoreEventLog.layer,
-  StoreWriter.layer
-).pipe(Layer.provideMerge(KeyValueStore.layerMemory));
+const makeTempDir = () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return yield* fs.makeTempDirectory();
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const removeTempDir = (path: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(path, { recursive: true });
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const buildLayer = (storeRoot: string) => {
+  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+
+  return Layer.mergeAll(
+    appConfigLayer,
+    storeDbLayer,
+    eventLogLayer,
+    writerLayer
+  ).pipe(Layer.provideMerge(BunContext.layer));
+};
 
 describe("StoreEventLog", () => {
   test("getLastEventId returns None when no events", async () => {
     const program = Effect.gen(function* () {
       const eventLog = yield* StoreEventLog;
-      const lastId = yield* eventLog.getLastEventId(sampleStore);
-      return lastId;
+      return yield* eventLog.getLastEventId(sampleStore);
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
-
-    expect(Option.isNone(result)).toBe(true);
+    const tempDir = await makeTempDir();
+    try {
+      const layer = buildLayer(tempDir);
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      expect(Option.isNone(result)).toBe(true);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 
   test("getLastEventId returns last event ID after append", async () => {
@@ -62,11 +91,17 @@ describe("StoreEventLog", () => {
       return { record, lastId };
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+    const tempDir = await makeTempDir();
+    try {
+      const layer = buildLayer(tempDir);
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    expect(Option.isSome(result.lastId)).toBe(true);
-    if (Option.isSome(result.lastId)) {
-      expect(result.lastId.value).toEqual(result.record.id);
+      expect(Option.isSome(result.lastId)).toBe(true);
+      if (Option.isSome(result.lastId)) {
+        expect(result.lastId.value).toEqual(result.record.id);
+      }
+    } finally {
+      await removeTempDir(tempDir);
     }
   });
 
@@ -83,11 +118,17 @@ describe("StoreEventLog", () => {
       return { record1, record2, record3, lastId };
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+    const tempDir = await makeTempDir();
+    try {
+      const layer = buildLayer(tempDir);
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    expect(Option.isSome(result.lastId)).toBe(true);
-    if (Option.isSome(result.lastId)) {
-      expect(result.lastId.value).toEqual(result.record3.id);
+      expect(Option.isSome(result.lastId)).toBe(true);
+      if (Option.isSome(result.lastId)) {
+        expect(result.lastId.value).toEqual(result.record3.id);
+      }
+    } finally {
+      await removeTempDir(tempDir);
     }
   });
 
@@ -106,39 +147,30 @@ describe("StoreEventLog", () => {
       return { lastIdBefore, lastIdAfter };
     });
 
-    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+    const tempDir = await makeTempDir();
+    try {
+      const layer = buildLayer(tempDir);
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-    expect(Option.isSome(result.lastIdBefore)).toBe(true);
-    expect(Option.isNone(result.lastIdAfter)).toBe(true);
+      expect(Option.isSome(result.lastIdBefore)).toBe(true);
+      expect(Option.isNone(result.lastIdAfter)).toBe(true);
+    } finally {
+      await removeTempDir(tempDir);
+    }
   });
 
-  test("clear ignores missing manifest in filesystem stores", async () => {
-    const tempDir = await Effect.runPromise(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        return yield* fs.makeTempDirectory();
-      }).pipe(Effect.provide(BunContext.layer))
-    );
+  test("clear on empty store does not fail", async () => {
+    const program = Effect.gen(function* () {
+      const eventLog = yield* StoreEventLog;
+      yield* eventLog.clear(sampleStore);
+    });
 
-    const fsLayer = StoreEventLog.layer.pipe(
-      Layer.provideMerge(KeyValueStore.layerFileSystem(tempDir)),
-      Layer.provideMerge(BunContext.layer)
-    );
-
+    const tempDir = await makeTempDir();
     try {
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const eventLog = yield* StoreEventLog;
-          yield* eventLog.clear(sampleStore);
-        }).pipe(Effect.provide(fsLayer))
-      );
+      const layer = buildLayer(tempDir);
+      await Effect.runPromise(program.pipe(Effect.provide(layer)));
     } finally {
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          yield* fs.remove(tempDir, { recursive: true });
-        }).pipe(Effect.provide(BunContext.layer))
-      );
+      await removeTempDir(tempDir);
     }
   });
 });
