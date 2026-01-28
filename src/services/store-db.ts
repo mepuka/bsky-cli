@@ -24,6 +24,7 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
       store: StoreRef,
       run: (client: SqlClient.SqlClient) => Effect.Effect<A, E>
     ) => Effect.Effect<A, StoreIoError | E>;
+    readonly removeClient: (storeName: string) => Effect.Effect<void>;
   }
 >() {
   static readonly layer = Layer.scoped(
@@ -99,7 +100,14 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
           Effect.flatMap(run)
         );
 
-      return StoreDb.of({ withClient });
+      const removeClient = (storeName: string) =>
+        Ref.update(clients, (current) => {
+          const next = new Map(current);
+          next.delete(storeName);
+          return next;
+        });
+
+      return StoreDb.of({ withClient, removeClient });
     })
   ).pipe(Layer.provide(Reactivity.layer));
 }
