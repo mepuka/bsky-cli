@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 
-export const Handle = Schema.String.pipe(
-  Schema.pattern(/^[a-z0-9][a-z0-9.-]{1,63}$/i),
+export const Handle = Schema.Lowercase.pipe(
+  Schema.pattern(/^[a-z0-9][a-z0-9.-]{1,63}$/),
   Schema.brand("Handle")
 );
 export type Handle = typeof Handle.Type;

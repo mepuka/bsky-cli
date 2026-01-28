@@ -64,7 +64,8 @@ const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer))
 const cleanerLayer = StoreCleaner.layer.pipe(
   Layer.provideMerge(managerLayer),
   Layer.provideMerge(indexLayer),
-  Layer.provideMerge(eventLogLayer)
+  Layer.provideMerge(eventLogLayer),
+  Layer.provideMerge(storeDbLayer)
 );
 const checkpointLayer = SyncCheckpointStore.layer.pipe(
   Layer.provideMerge(storageLayer)
