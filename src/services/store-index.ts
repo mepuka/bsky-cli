@@ -195,16 +195,24 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
           );
 
           const state = yield* stream.pipe(
+            Stream.grouped(entryPageSize),
             Stream.runFoldEffect(
               {
                 count: 0,
                 lastId: Option.none<PostEventRecord["id"]>()
               },
-              (state, record) =>
-                client.withTransaction(applyWithClient(client, record)).pipe(
-                  Effect.as({
-                    count: state.count + 1,
-                    lastId: Option.some(record.id)
+              (state, batch) =>
+                client.withTransaction(
+                  Effect.gen(function* () {
+                    for (const record of batch) {
+                      yield* applyWithClient(client, record);
+                    }
+                    const size = Chunk.size(batch);
+                    const lastRecord = size > 0 ? Option.some(Chunk.unsafeLast(batch).id) : state.lastId;
+                    return {
+                      count: state.count + size,
+                      lastId: lastRecord
+                    };
                   })
                 )
             )
@@ -342,48 +350,56 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
           )
       );
 
-      const query = (store: StoreRef, query: StoreQuery) =>
-        Stream.unwrap(
-          withClient(store, "StoreIndex.query failed", (client) => {
-            const start = query.range ? toIso(query.range.start) : undefined;
-            const end = query.range ? toIso(query.range.end) : undefined;
+      const query = (store: StoreRef, q: StoreQuery) => {
+        const start = q.range ? toIso(q.range.start) : undefined;
+        const end = q.range ? toIso(q.range.end) : undefined;
+        const userLimit = q.limit;
 
-            const fetchRows = () => {
-              if (query.range && query.limit) {
-                return client`SELECT post_json FROM posts
-                  WHERE created_at >= ${start} AND created_at <= ${end}
-                  ORDER BY created_at ASC
-                  LIMIT ${query.limit}`;
-              }
-              if (query.range) {
-                return client`SELECT post_json FROM posts
-                  WHERE created_at >= ${start} AND created_at <= ${end}
-                  ORDER BY created_at ASC`;
-              }
-              if (query.limit) {
-                return client`SELECT post_json FROM posts
-                  ORDER BY created_at ASC
-                  LIMIT ${query.limit}`;
-              }
-              return client`SELECT post_json FROM posts ORDER BY created_at ASC`;
-            };
+        return Stream.paginateChunkEffect(
+          { offset: 0, fetched: 0 },
+          ({ offset, fetched }) =>
+            withClient(store, "StoreIndex.query failed", (client) =>
+              Effect.gen(function* () {
+                const pageSize =
+                  userLimit !== undefined
+                    ? Math.min(entryPageSize, userLimit - fetched)
+                    : entryPageSize;
 
-            return Effect.gen(function* () {
-              const rows = yield* fetchRows();
-              const decoded = yield* Schema.decodeUnknown(
-                Schema.Array(postJsonRow)
-              )(rows).pipe(
-                Effect.mapError(toStoreIndexError("StoreIndex.query decode failed"))
-              );
-              const posts = yield* Effect.forEach(
-                decoded,
-                (row) => decodePostJson(row.post_json),
-                { discard: false }
-              );
-              return Stream.fromIterable(posts);
-            });
-          })
+                const rows = q.range
+                  ? yield* client`SELECT post_json FROM posts
+                      WHERE created_at >= ${start} AND created_at <= ${end}
+                      ORDER BY created_at ASC
+                      LIMIT ${pageSize} OFFSET ${offset}`
+                  : yield* client`SELECT post_json FROM posts
+                      ORDER BY created_at ASC
+                      LIMIT ${pageSize} OFFSET ${offset}`;
+
+                const decoded = yield* Schema.decodeUnknown(
+                  Schema.Array(postJsonRow)
+                )(rows).pipe(
+                  Effect.mapError(toStoreIndexError("StoreIndex.query decode failed"))
+                );
+
+                const posts = yield* Effect.forEach(
+                  decoded,
+                  (row) => decodePostJson(row.post_json),
+                  { discard: false }
+                );
+
+                const newFetched = fetched + posts.length;
+                const done =
+                  posts.length < pageSize ||
+                  (userLimit !== undefined && newFetched >= userLimit);
+
+                const next = done
+                  ? Option.none<{ offset: number; fetched: number }>()
+                  : Option.some({ offset: offset + pageSize, fetched: newFetched });
+
+                return [Chunk.fromIterable(posts), next] as const;
+              })
+            )
         );
+      };
 
       const entries = (store: StoreRef) =>
         Stream.paginateChunkEffect(0, (offset) =>
