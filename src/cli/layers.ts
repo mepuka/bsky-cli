@@ -27,6 +27,7 @@ import { ResourceMonitor } from "../services/resource-monitor.js";
 import { CliOutput } from "./output.js";
 import { DerivationEngine } from "../services/derivation-engine.js";
 import { DerivationValidator } from "../services/derivation-validator.js";
+import { DerivationSettings } from "../services/derivation-settings.js";
 import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
 import { LineageStore } from "../services/lineage-store.js";
 import { FilterCompiler } from "../services/filter-compiler.js";
@@ -133,7 +134,8 @@ const derivationEngineLayer = DerivationEngine.layer.pipe(
   Layer.provideMerge(compilerLayer),
   Layer.provideMerge(runtimeLayer),
   Layer.provideMerge(viewCheckpointLayer),
-  Layer.provideMerge(lineageLayer)
+  Layer.provideMerge(lineageLayer),
+  Layer.provideMerge(DerivationSettings.layer)
 );
 const derivationValidatorLayer = DerivationValidator.layer.pipe(
   Layer.provideMerge(viewCheckpointLayer),

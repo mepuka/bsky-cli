@@ -3,6 +3,7 @@ import { Layer, Option } from "effect";
 import { CliLive } from "./layers.js";
 import { ConfigOverrides } from "../services/app-config.js";
 import { CredentialsOverrides } from "../services/credential-store.js";
+import { DerivationSettingsOverrides } from "../services/derivation-settings.js";
 import { SyncSettingsOverrides } from "../services/sync-settings.js";
 import { CliPreferences } from "./preferences.js";
 import { storeCommand } from "./store.js";
@@ -39,7 +40,8 @@ export const app = Command.make("skygent", configOptions).pipe(
           Layer.mergeAll(
             Layer.succeed(ConfigOverrides, toConfigOverrides(config)),
             Layer.succeed(CredentialsOverrides, toCredentialsOverrides(config)),
-            Layer.succeed(SyncSettingsOverrides, toSyncSettingsOverrides(config))
+            Layer.succeed(SyncSettingsOverrides, toSyncSettingsOverrides(config)),
+            DerivationSettingsOverrides.layer
           )
         )
       ),

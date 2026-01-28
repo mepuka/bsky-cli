@@ -4,6 +4,7 @@ import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { DerivationEngine } from "../src/services/derivation-engine.js";
+import { DerivationSettings, DerivationSettingsOverrides } from "../src/services/derivation-settings.js";
 import { StoreEventLog } from "../src/services/store-event-log.js";
 import { StoreWriter } from "../src/services/store-writer.js";
 import { StoreIndex } from "../src/services/store-index.js";
@@ -104,10 +105,12 @@ const buildTestLayer = (storeRoot: string) => {
     indexLayer,
     otherStorage,
     filterServices,
+    DerivationSettingsOverrides.layer,
     DerivationEngine.layer.pipe(
       Layer.provideMerge(indexLayer),
       Layer.provideMerge(otherStorage),
-      Layer.provideMerge(filterServices)
+      Layer.provideMerge(filterServices),
+      Layer.provideMerge(DerivationSettings.layer)
     )
   ).pipe(Layer.provideMerge(BunContext.layer));
 };

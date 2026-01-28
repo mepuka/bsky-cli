@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Option, ParseResult, Schema, Stream } from "effect";
+import { Clock, Context, Effect, Exit, Layer, Option, ParseResult, Ref, Schema, Stream } from "effect";
 import { StoreEventLog } from "./store-event-log.js";
 import { StoreIndex } from "./store-index.js";
 import { StoreCommitter } from "./store-commit.js";
@@ -6,6 +6,7 @@ import { FilterRuntime } from "./filter-runtime.js";
 import { FilterCompiler } from "./filter-compiler.js";
 import { ViewCheckpointStore } from "./view-checkpoint-store.js";
 import { LineageStore } from "./lineage-store.js";
+import { DerivationSettings } from "./derivation-settings.js";
 import { FilterOutput, FilterSpec } from "../domain/store.js";
 import type { StoreRef } from "../domain/store.js";
 import { filterExprSignature, isEffectfulFilter } from "../domain/filter.js";
@@ -18,7 +19,7 @@ import {
   StoreLineage,
   StoreSource
 } from "../domain/derivation.js";
-import { EventMeta, PostDelete, PostUpsert } from "../domain/events.js";
+import { EventMeta, PostDelete, PostEventRecord, PostUpsert } from "../domain/events.js";
 import { EventId, Timestamp } from "../domain/primitives.js";
 import type { FilterCompileError, FilterEvalError, StoreIndexError, StoreIoError } from "../domain/errors.js";
 
@@ -51,6 +52,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
       const runtime = yield* FilterRuntime;
       const checkpoints = yield* ViewCheckpointStore;
       const lineageStore = yield* LineageStore;
+      const settings = yield* DerivationSettings;
 
       const derive = Effect.fn("DerivationEngine.derive")(
         (sourceRef, targetRef, filterExpr, options) =>
@@ -131,95 +133,161 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
               return Option.none();
             });
 
-            // Event streaming with runFoldEffect
-            const result = yield* eventLog.stream(sourceRef).pipe(
+            type DerivationState = {
+              readonly processed: number;
+              readonly matched: number;
+              readonly skipped: number;
+              readonly deletes: number;
+              readonly lastSourceId: Option.Option<EventId>;
+              readonly lastCheckpointAt: number;
+            };
+
+            const saveCheckpointFromState = (state: DerivationState, now: number) =>
+              Schema.decodeUnknown(Timestamp)(new Date(now).toISOString()).pipe(
+                Effect.flatMap((timestamp) => {
+                  const checkpoint = DerivationCheckpoint.make({
+                    viewName: targetRef.name,
+                    sourceStore: sourceRef.name,
+                    targetStore: targetRef.name,
+                    filterHash,
+                    evaluationMode: options.mode,
+                    lastSourceEventId: Option.getOrUndefined(state.lastSourceId),
+                    eventsProcessed: state.processed,
+                    eventsMatched: state.matched,
+                    deletesPropagated: state.deletes,
+                    updatedAt: timestamp
+                  });
+                  return checkpoints.save(checkpoint);
+                })
+              );
+
+            const shouldCheckpoint = (state: DerivationState, now: number) =>
+              state.processed > 0 &&
+              (state.processed % settings.checkpointEvery === 0 ||
+                (settings.checkpointIntervalMs > 0 &&
+                  now - state.lastCheckpointAt >= settings.checkpointIntervalMs));
+
+            const initialState: DerivationState = {
+              processed: 0,
+              matched: 0,
+              skipped: 0,
+              deletes: 0,
+              lastSourceId: Option.none<EventId>(),
+              lastCheckpointAt: startTimeMillis
+            };
+
+            const stateRef = yield* Ref.make(initialState);
+
+            const finalizeState = (nextState: DerivationState) =>
+              Effect.gen(function* () {
+                const now = yield* Clock.currentTimeMillis;
+                if (shouldCheckpoint(nextState, now)) {
+                  yield* saveCheckpointFromState(nextState, now);
+                  const updated = { ...nextState, lastCheckpointAt: now };
+                  yield* Ref.set(stateRef, updated);
+                  return updated;
+                }
+                yield* Ref.set(stateRef, nextState);
+                return nextState;
+              });
+
+            const processRecord = (state: DerivationState, record: PostEventRecord) =>
+              Effect.gen(function* () {
+                const event = record.event;
+                const nextLast = Option.some(record.id);
+
+                const baseState: DerivationState = {
+                  processed: state.processed + 1,
+                  matched: state.matched,
+                  skipped: state.skipped,
+                  deletes: state.deletes,
+                  lastSourceId: nextLast,
+                  lastCheckpointAt: state.lastCheckpointAt
+                };
+
+                // PostDelete: propagate ALL unfiltered
+                if (event._tag === "PostDelete") {
+                  const derivedMeta = EventMeta.make({
+                    ...event.meta,
+                    sourceStore: sourceRef.name
+                  });
+                  const derivedEvent = PostDelete.make({ ...event, meta: derivedMeta });
+                  yield* committer.appendDelete(targetRef, derivedEvent);
+                  return yield* finalizeState({
+                    ...baseState,
+                    deletes: baseState.deletes + 1
+                  });
+                }
+
+                // URI deduplication: check if post already exists
+                const exists = yield* index.hasUri(targetRef, event.post.uri);
+                if (exists) {
+                  return yield* finalizeState({
+                    ...baseState,
+                    skipped: baseState.skipped + 1
+                  });
+                }
+
+                // Filter evaluation: failures propagate to caller
+                const matches = yield* predicate(event.post);
+
+                if (matches) {
+                  const derivedMeta = EventMeta.make({
+                    ...event.meta,
+                    sourceStore: sourceRef.name
+                  });
+                  const derivedEvent = PostUpsert.make({ post: event.post, meta: derivedMeta });
+                  const stored = yield* committer.appendUpsertIfMissing(
+                    targetRef,
+                    derivedEvent
+                  );
+                  return yield* finalizeState(
+                    Option.match(stored, {
+                      onNone: () => ({
+                        ...baseState,
+                        skipped: baseState.skipped + 1
+                      }),
+                      onSome: () => ({
+                        ...baseState,
+                        matched: baseState.matched + 1
+                      })
+                    })
+                  );
+                }
+
+                return yield* finalizeState({
+                  ...baseState,
+                  skipped: baseState.skipped + 1
+                });
+              });
+
+            // Event streaming with runFoldEffect + periodic checkpoints
+            const fold = eventLog.stream(sourceRef).pipe(
               Stream.filter((record) =>
                 Option.match(startAfter, {
                   onNone: () => true,
                   onSome: (id: EventId) => record.id.localeCompare(id) > 0
                 })
               ),
-              Stream.runFoldEffect(
-                {
-                  processed: 0,
-                  matched: 0,
-                  skipped: 0,
-                  deletes: 0,
-                  lastSourceId: Option.none<EventId>()
-                },
-                (state, record) =>
-                  Effect.gen(function* () {
-                    const event = record.event;
-                    const nextLast = Option.some(record.id);
+              Stream.runFoldEffect(initialState, processRecord)
+            );
 
-                    // PostDelete: propagate ALL unfiltered
-                    if (event._tag === "PostDelete") {
-                      const derivedMeta = EventMeta.make({
-                        ...event.meta,
-                        sourceStore: sourceRef.name
-                      });
-                      const derivedEvent = PostDelete.make({ ...event, meta: derivedMeta });
-                      yield* committer.appendDelete(targetRef, derivedEvent);
-                      return {
-                        processed: state.processed + 1,
-                        matched: state.matched,
-                        skipped: state.skipped,
-                        deletes: state.deletes + 1,
-                        lastSourceId: nextLast
-                      };
-                    }
-
-                    // URI deduplication: check if post already exists
-                    const exists = yield* index.hasUri(targetRef, event.post.uri);
-                    if (exists) {
-                      return {
-                        processed: state.processed + 1,
-                        matched: state.matched,
-                        skipped: state.skipped + 1,
-                        deletes: state.deletes,
-                        lastSourceId: nextLast
-                      };
-                    }
-
-                    // Filter evaluation: failures propagate to caller
-                    const matches = yield* predicate(event.post);
-
-                    if (matches) {
-                      const derivedMeta = EventMeta.make({
-                        ...event.meta,
-                        sourceStore: sourceRef.name
-                      });
-                      const derivedEvent = PostUpsert.make({ post: event.post, meta: derivedMeta });
-                      const stored = yield* committer.appendUpsertIfMissing(
-                        targetRef,
-                        derivedEvent
-                      );
-                      return Option.match(stored, {
-                        onNone: () => ({
-                          processed: state.processed + 1,
-                          matched: state.matched,
-                          skipped: state.skipped + 1,
-                          deletes: state.deletes,
-                          lastSourceId: nextLast
-                        }),
-                        onSome: () => ({
-                          processed: state.processed + 1,
-                          matched: state.matched + 1,
-                          skipped: state.skipped,
-                          deletes: state.deletes,
-                          lastSourceId: nextLast
-                        })
-                      });
-                    }
-
-                    return {
-                      processed: state.processed + 1,
-                      matched: state.matched,
-                      skipped: state.skipped + 1,
-                      deletes: state.deletes,
-                      lastSourceId: nextLast
-                    };
-                  })
+            const result = yield* fold.pipe(
+              Effect.onExit((exit) =>
+                Exit.isFailure(exit)
+                  ? Ref.get(stateRef).pipe(
+                      Effect.flatMap((state) =>
+                        state.processed > 0
+                          ? Clock.currentTimeMillis.pipe(
+                              Effect.flatMap((now) =>
+                                saveCheckpointFromState(state, now)
+                              )
+                            )
+                          : Effect.void
+                      ),
+                      Effect.catchAll(() => Effect.void)
+                    )
+                  : Effect.void
               )
             );
 
