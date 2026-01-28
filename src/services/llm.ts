@@ -7,6 +7,7 @@ import * as GoogleLanguageModel from "@effect/ai-google/GoogleLanguageModel";
 import * as OpenAiClient from "@effect/ai-openai/OpenAiClient";
 import * as OpenAiLanguageModel from "@effect/ai-openai/OpenAiLanguageModel";
 import * as OpenAiGenerated from "@effect/ai-openai/Generated";
+import * as FetchHttpClient from "@effect/platform/FetchHttpClient";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import {
   Clock,
@@ -234,14 +235,14 @@ const googleLayer = (model: string, temperature: number) =>
 
 const providerLayer = (provider: LlmProvider, model: string, temperature: number) =>
   Effect.gen(function* () {
-    switch (provider) {
-      case "openai":
-        return yield* openAiLayer(model, temperature);
-      case "anthropic":
-        return yield* anthropicLayer(model, temperature);
-      case "google":
-        return yield* googleLayer(model, temperature);
-    }
+    const baseLayer =
+      provider === "openai"
+        ? yield* openAiLayer(model, temperature)
+        : provider === "anthropic"
+          ? yield* anthropicLayer(model, temperature)
+          : yield* googleLayer(model, temperature);
+
+    return baseLayer.pipe(Layer.provide(FetchHttpClient.layer));
   });
 
 type PromptStrategy = "auto" | "single" | "batch";
