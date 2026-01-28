@@ -1,4 +1,14 @@
-import { Chunk, Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Chunk,
+  Context,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream
+} from "effect";
 import { Jetstream, JetstreamMessage } from "effect-jetstream";
 import { FilterRuntime } from "./filter-runtime.js";
 import { PostParser } from "./post-parser.js";
@@ -122,6 +132,10 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
       const checkpoints = yield* SyncCheckpointStore;
       const reporter = yield* SyncReporter;
       const profiles = yield* ProfileResolver;
+      const safeShutdown = jetstream.shutdown.pipe(
+        Effect.timeout(Duration.seconds(5)),
+        Effect.catchAll(() => Effect.void)
+      );
 
       const makeMeta = (
         command: string,
@@ -274,13 +288,9 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
               Stream.filter(isPostCommit)
             );
 
-            const limited = typeof config.limit === "number"
+            const bounded = typeof config.limit === "number"
               ? baseStream.pipe(Stream.take(config.limit))
               : baseStream;
-
-            const bounded = config.duration
-              ? limited.pipe(Stream.interruptAfter(config.duration))
-              : limited;
 
             const prepareCommit = (
               message: CommitMessage
@@ -526,7 +536,8 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                   Effect.flatMap(saveCheckpointFromState),
                   Effect.catchAll(() => Effect.void)
                 )
-              )
+              ),
+              Stream.ensuring(safeShutdown)
             );
           })
       );
@@ -552,9 +563,31 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
           );
 
           const stream = yield* processStream(config, predicate, activeCheckpoint);
-          return yield* stream.pipe(
-            Stream.runFold(SyncResultMonoid.empty, SyncResultMonoid.combine)
+          const resultRef = yield* Ref.make(SyncResultMonoid.empty);
+          const tagged = stream.pipe(
+            Stream.tap((result) =>
+              Ref.update(resultRef, (current) =>
+                SyncResultMonoid.combine(current, result)
+              )
+            )
           );
+          const withTimeout = config.duration
+            ? tagged.pipe(
+                Stream.interruptWhen(
+                  Effect.sleep(config.duration).pipe(
+                    Effect.zipRight(
+                      Effect.logWarning(
+                        "Jetstream sync exceeded duration; shutting down.",
+                        { durationMs: Duration.toMillis(config.duration) }
+                      )
+                    ),
+                    Effect.zipRight(safeShutdown)
+                  )
+                )
+              )
+            : tagged;
+          yield* Stream.runDrain(withTimeout);
+          return yield* Ref.get(resultRef);
         })
       );
 

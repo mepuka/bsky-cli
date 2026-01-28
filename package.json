@@ -44,6 +44,6 @@
     "@effect/sql-sqlite-bun": "^0.50.0",
     "@effect/typeclass": "^0.38.0",
     "effect": "^3.19.15",
-    "effect-jetstream": "^1.0.3"
+    "effect-jetstream": "^1.0.4"
   }
 }

@@ -1,5 +1,5 @@
 import { BunSink } from "@effect/platform-bun";
-import type { PlatformError } from "@effect/platform/Error";
+import { SystemError, type PlatformError } from "@effect/platform/Error";
 import { Context, Effect, Layer, Sink, Stream } from "effect";
 
 const jsonLine = (value: unknown, pretty?: boolean) =>
@@ -29,19 +29,44 @@ export class CliOutput extends Context.Tag("@skygent/CliOutput")<
 >() {
   static readonly layer = Layer.succeed(
     CliOutput,
-    CliOutput.of({
-      stdout: BunSink.stdout,
-      stderr: BunSink.stderr,
-      writeJson: (value, pretty) =>
-        writeToSink(BunSink.stdout, ensureNewline(jsonLine(value, pretty))),
-      writeText: (value) => writeToSink(BunSink.stdout, ensureNewline(value)),
-      writeJsonStream: (stream) =>
-        stream.pipe(
-          Stream.map((value) => `${jsonLine(value)}\n`),
-          Stream.run(BunSink.stdout)
-        ),
-      writeStderr: (value) => writeToSink(BunSink.stderr, ensureNewline(value))
-    })
+    (() => {
+      const stdout = BunSink.fromWritable(
+        () => process.stdout,
+        (cause) =>
+          new SystemError({
+            module: "Stream",
+            method: "stdout",
+            reason: "Unknown",
+            cause
+          }),
+        { endOnDone: false }
+      );
+      const stderr = BunSink.fromWritable(
+        () => process.stderr,
+        (cause) =>
+          new SystemError({
+            module: "Stream",
+            method: "stderr",
+            reason: "Unknown",
+            cause
+          }),
+        { endOnDone: false }
+      );
+
+      return CliOutput.of({
+        stdout,
+        stderr,
+        writeJson: (value, pretty) =>
+          writeToSink(stdout, ensureNewline(jsonLine(value, pretty))),
+        writeText: (value) => writeToSink(stdout, ensureNewline(value)),
+        writeJsonStream: (stream) =>
+          stream.pipe(
+            Stream.map((value) => `${jsonLine(value)}\n`),
+            Stream.run(stdout)
+          ),
+        writeStderr: (value) => writeToSink(stderr, ensureNewline(value))
+      });
+    })()
   );
 }
 

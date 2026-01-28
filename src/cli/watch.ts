@@ -286,10 +286,10 @@ const jetstreamCommand = Command.make(
         storeRef,
         Effect.gen(function* () {
           yield* logInfo("Starting watch", { source: "jetstream", store: storeRef.name });
-          const stream = yield* Effect.gen(function* () {
+          yield* Effect.gen(function* () {
             const engine = yield* JetstreamSyncEngine;
             const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
-            return engine.watch({
+            const stream = engine.watch({
               source: selection.source,
               store: storeRef,
               filter: expr,
@@ -298,12 +298,15 @@ const jetstreamCommand = Command.make(
               ...(strict ? { strict } : {}),
               ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
             });
+            const outputStream = stream.pipe(
+              Stream.map((event) => event.result),
+              Stream.provideService(
+                SyncReporter,
+                makeSyncReporter(quiet, monitor, output)
+              )
+            );
+            return yield* writeJsonStream(outputStream);
           }).pipe(Effect.provide(engineLayer));
-          const outputStream = stream.pipe(
-            Stream.map((event) => event.result),
-            Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-          );
-          yield* writeJsonStream(outputStream);
         })
       );
     })

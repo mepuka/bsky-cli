@@ -121,7 +121,8 @@ const makeJetstreamLayer = (stream: Stream.Stream<JetstreamMessage.JetstreamMess
     [Jetstream.TypeId]: Jetstream.TypeId,
     stream,
     send: () => Effect.void,
-    updateOptions: () => Effect.void
+    updateOptions: () => Effect.void,
+    shutdown: Effect.void
   });
 
 const profileLayer = Layer.succeed(

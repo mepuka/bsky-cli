@@ -128,5 +128,11 @@ const program = cli(process.argv).pipe(
 BunRuntime.runMain({
   disableErrorReporting: true,
   disablePrettyLogger: true,
-  teardown: (exit, onExit) => onExit(exitCodeFromExit(exit))
+  teardown: (exit, onExit) => {
+    const code = exitCodeFromExit(exit);
+    onExit(code);
+    if (typeof process !== "undefined") {
+      process.exit(code);
+    }
+  }
 })(program);
