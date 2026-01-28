@@ -1,4 +1,5 @@
 import { Clock, Context, Duration, Effect, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
+import { messageFromCause } from "./shared.js";
 import { FilterRuntime } from "./filter-runtime.js";
 import { PostParser } from "./post-parser.js";
 import { StoreCommitter } from "./store-commit.js";
@@ -38,15 +39,6 @@ type SyncOutcome =
 
 const skippedOutcome: SyncOutcome = { _tag: "Skipped" };
 
-const messageFromCause = (fallback: string, cause: unknown) => {
-  if (typeof cause === "object" && cause !== null && "message" in cause) {
-    const message = (cause as { readonly message?: unknown }).message;
-    if (typeof message === "string" && message.length > 0) {
-      return message;
-    }
-  }
-  return fallback;
-};
 
 const toSyncError =
   (stage: SyncStage, fallback: string) => (cause: unknown) =>

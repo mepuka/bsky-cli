@@ -1,5 +1,6 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Clock, Effect, Option, ParseResult, Stream } from "effect";
+import { formatSchemaError } from "./shared.js";
+import { Chunk, Clock, Effect, Option, Stream } from "effect";
 import { StoreQuery } from "../domain/events.js";
 import { RawPost } from "../domain/raw.js";
 import type { Post } from "../domain/post.js";
@@ -72,12 +73,6 @@ const requireFilterExpr = (
     onSome: () => Effect.void
   });
 
-const formatSchemaError = (error: unknown) => {
-  if (ParseResult.isParseError(error)) {
-    return ParseResult.TreeFormatter.formatErrorSync(error);
-  }
-  return String(error);
-};
 
 const requireSinglePostInput = (
   postJson: Option.Option<string>,

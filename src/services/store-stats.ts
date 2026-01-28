@@ -1,4 +1,5 @@
 import { FileSystem, Path } from "@effect/platform";
+import { directorySize } from "./shared.js";
 import { Context, Effect, Layer, Option } from "effect";
 import { AppConfigService } from "./app-config.js";
 import { StoreManager } from "./store-manager.js";
@@ -74,31 +75,6 @@ const formatBytes = (bytes: number) => {
   return `${rounded}${unit}`;
 };
 
-const directorySize = (fs: FileSystem.FileSystem, path: Path.Path, root: string) =>
-  Effect.gen(function* () {
-    const exists = yield* fs.exists(root).pipe(Effect.orElseSucceed(() => false));
-    if (!exists) {
-      return 0;
-    }
-    const entries = yield* fs
-      .readDirectory(root, { recursive: true })
-      .pipe(Effect.orElseSucceed(() => []));
-    if (entries.length === 0) {
-      return 0;
-    }
-    const sizes = yield* Effect.forEach(
-      entries,
-      (entry) =>
-        fs
-          .stat(path.join(root, entry))
-          .pipe(
-            Effect.map((info) => (info.type === "File" ? Number(info.size) : 0)),
-            Effect.orElseSucceed(() => 0)
-          ),
-      { concurrency: 10 }
-    );
-    return sizes.reduce((total, size) => total + size, 0);
-  });
 
 const isDerived = (lineage: Option.Option<StoreLineage>) =>
   Option.isSome(lineage) && lineage.value.isDerived;

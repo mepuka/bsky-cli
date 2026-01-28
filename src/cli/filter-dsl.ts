@@ -1,4 +1,5 @@
-import { Context, Duration, Effect, ParseResult, Schema } from "effect";
+import { Context, Duration, Effect, Schema } from "effect";
+import { formatSchemaError } from "./shared.js";
 import type { FilterEngagement, FilterExpr } from "../domain/filter.js";
 import { all, and, none, not, or } from "../domain/filter.js";
 import type { FilterErrorPolicy } from "../domain/policies.js";
@@ -17,12 +18,6 @@ type Token =
   | { readonly _tag: "Or"; readonly position: number }
   | { readonly _tag: "Not"; readonly position: number };
 
-const formatSchemaError = (error: unknown) => {
-  if (ParseResult.isParseError(error)) {
-    return ParseResult.TreeFormatter.formatErrorSync(error);
-  }
-  return String(error);
-};
 
 type FilterLibraryService = Context.Tag.Service<typeof FilterLibrary>;
 

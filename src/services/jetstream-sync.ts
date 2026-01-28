@@ -11,6 +11,7 @@ import {
   Stream
 } from "effect";
 import { Jetstream, JetstreamMessage } from "effect-jetstream";
+import { messageFromCause } from "./shared.js";
 import { FilterRuntime } from "./filter-runtime.js";
 import { PostParser } from "./post-parser.js";
 import { StoreCommitter } from "./store-commit.js";
@@ -78,15 +79,6 @@ type SyncProgressState = {
 
 const skippedOutcome: SyncOutcome = { _tag: "Skipped" };
 
-const messageFromCause = (fallback: string, cause: unknown) => {
-  if (typeof cause === "object" && cause !== null && "message" in cause) {
-    const message = (cause as { readonly message?: unknown }).message;
-    if (typeof message === "string" && message.length > 0) {
-      return message;
-    }
-  }
-  return fallback;
-};
 
 const toSyncError =
   (stage: SyncStage, fallback: string) => (cause: unknown) =>

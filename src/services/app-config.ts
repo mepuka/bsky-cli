@@ -1,6 +1,7 @@
 import { FileSystem } from "@effect/platform";
 import { Path } from "@effect/platform";
-import { Config, Context, Effect, Layer, Option, ParseResult, Schema } from "effect";
+import { Config, Context, Effect, Layer, Option, Schema } from "effect";
+import { formatSchemaError, pickDefined } from "./shared.js";
 import { AppConfig, OutputFormat } from "../domain/config.js";
 import { ConfigError } from "../domain/errors.js";
 
@@ -27,17 +28,7 @@ const defaultOutputFormat: OutputFormat = "ndjson";
 const defaultRootDirName = ".skygent";
 const configFileName = "config.json";
 
-const pickDefined = <T extends Record<string, unknown>>(input: T): Partial<T> =>
-  Object.fromEntries(
-    Object.entries(input).filter(([, value]) => value !== undefined)
-  ) as Partial<T>;
 
-const formatSchemaError = (error: unknown) => {
-  if (ParseResult.isParseError(error)) {
-    return ParseResult.TreeFormatter.formatErrorSync(error);
-  }
-  return String(error);
-};
 
 const resolveHomeDir = () =>
   process.env.HOME ?? process.env.USERPROFILE ?? process.env.HOMEPATH;

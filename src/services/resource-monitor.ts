@@ -1,4 +1,5 @@
 import { FileSystem, Path } from "@effect/platform";
+import { directorySize } from "./shared.js";
 import { Clock, Config, Context, Duration, Effect, Layer, Ref } from "effect";
 import { AppConfigService } from "./app-config.js";
 
@@ -43,33 +44,6 @@ export class ResourceMonitor extends Context.Tag("@skygent/ResourceMonitor")<
       const lastCheck = yield* Ref.make(0);
       const intervalMs = Duration.toMillis(interval);
 
-      const directorySize = (root: string) =>
-        Effect.gen(function* () {
-          const exists = yield* fs.exists(root).pipe(Effect.orElseSucceed(() => false));
-          if (!exists) {
-            return 0;
-          }
-          const entries = yield* fs
-            .readDirectory(root, { recursive: true })
-            .pipe(Effect.orElseSucceed(() => []));
-          if (entries.length === 0) {
-            return 0;
-          }
-          const sizes = yield* Effect.forEach(
-            entries,
-            (entry) =>
-              fs
-                .stat(path.join(root, entry))
-                .pipe(
-                  Effect.map((info) =>
-                    info.type === "File" ? Number(info.size) : 0
-                  ),
-                  Effect.orElseSucceed(() => 0)
-                ),
-            { concurrency: 10 }
-          );
-          return sizes.reduce((total, size) => total + size, 0);
-        });
 
       const rssUsage = () => {
         if (
@@ -93,7 +67,7 @@ export class ResourceMonitor extends Context.Tag("@skygent/ResourceMonitor")<
           const warnings: Array<ResourceWarning> = [];
 
           if (storeWarnBytes > 0) {
-            const total = yield* directorySize(config.storeRoot);
+            const total = yield* directorySize(fs, path, config.storeRoot);
             if (total >= storeWarnBytes) {
               warnings.push({
                 _tag: "StoreSize",

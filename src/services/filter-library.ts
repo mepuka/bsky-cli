@@ -1,6 +1,7 @@
 import { FileSystem, Path } from "@effect/platform";
+import { formatSchemaError } from "./shared.js";
 import type { PlatformError } from "@effect/platform/Error";
-import { Context, Effect, Layer, ParseResult, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { FilterExprSchema } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { FilterLibraryError, FilterNotFound } from "../domain/errors.js";
@@ -12,12 +13,6 @@ const filtersDirName = "filters";
 const ensureTrailingNewline = (value: string) =>
   value.endsWith("\n") ? value : `${value}\n`;
 
-const formatSchemaError = (error: unknown) => {
-  if (ParseResult.isParseError(error)) {
-    return ParseResult.TreeFormatter.formatErrorSync(error);
-  }
-  return String(error);
-};
 
 const toLibraryError = (
   message: string,

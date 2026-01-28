@@ -1,5 +1,5 @@
 import { Config, Context, Effect, Layer, Option } from "effect";
-import { ConfigError } from "../domain/errors.js";
+import { pickDefined, validatePositive, validateNonNegative } from "./shared.js";
 
 export type DerivationSettingsValue = {
   readonly checkpointEvery: number;
@@ -8,22 +8,7 @@ export type DerivationSettingsValue = {
 
 type DerivationSettingsOverridesValue = Partial<DerivationSettingsValue>;
 
-const pickDefined = <T extends Record<string, unknown>>(input: T): Partial<T> =>
-  Object.fromEntries(
-    Object.entries(input).filter(([, value]) => value !== undefined)
-  ) as Partial<T>;
 
-const validatePositive = (name: string, value: number) => {
-  if (!Number.isFinite(value) || value < 1) {
-    return ConfigError.make({ message: `${name} must be >= 1.` });
-  }
-};
-
-const validateNonNegative = (name: string, value: number) => {
-  if (!Number.isFinite(value) || value < 0) {
-    return ConfigError.make({ message: `${name} must be >= 0.` });
-  }
-};
 
 export class DerivationSettingsOverrides extends Context.Tag(
   "@skygent/DerivationSettingsOverrides"

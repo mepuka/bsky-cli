@@ -1,4 +1,5 @@
 import { AtpAgent } from "@atproto/api";
+import { messageFromCause } from "./shared.js";
 import type {
   AppBskyActorGetProfiles,
   AppBskyFeedDefs,
@@ -78,15 +79,6 @@ export interface NotificationsOptions {
 type FeedViewPost = AppBskyFeedDefs.FeedViewPost;
 type PostView = AppBskyFeedDefs.PostView;
 
-const messageFromCause = (fallback: string, cause: unknown) => {
-  if (typeof cause === "object" && cause !== null && "message" in cause) {
-    const message = (cause as { readonly message?: unknown }).message;
-    if (typeof message === "string" && message.length > 0) {
-      return message;
-    }
-  }
-  return fallback;
-};
 
 const toBskyError = (message: string) => (cause: unknown) =>
   BskyError.make({ message: messageFromCause(message, cause), cause });

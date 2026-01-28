@@ -1,4 +1,5 @@
 import { ParseResult } from "effect";
+import { safeParseJson, issueDetails } from "./shared.js";
 import { formatAgentError, type AgentErrorPayload } from "./errors.js";
 
 const validFilterTags = [
@@ -30,13 +31,6 @@ const validFilterTags = [
 
 const filterDocs = "docs/filters/README.md";
 
-const safeParseJson = (raw: string): unknown => {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-};
 
 const getTag = (raw: string): string | undefined => {
   const parsed = safeParseJson(raw);
@@ -61,14 +55,6 @@ const jsonParseError = (
   payload: Omit<AgentErrorPayload, "error">
 ) => formatAgentError({ error: "FilterJsonParseError", ...payload });
 
-const issueDetails = (
-  issues: ReadonlyArray<{ readonly path: ReadonlyArray<unknown>; readonly message: string }>
-) =>
-  issues.map((issue) => {
-    const path =
-      issue.path.length > 0 ? issue.path.map((entry) => String(entry)).join(".") : "value";
-    return `${path}: ${issue.message}`;
-  });
 
 export const formatFilterParseError = (error: ParseResult.ParseError, raw: string): string => {
   const issues = ParseResult.ArrayFormatter.formatErrorSync(error);

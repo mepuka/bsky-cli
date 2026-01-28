@@ -1,15 +1,12 @@
 import { Options } from "@effect/cli";
 import { Option, Redacted } from "effect";
+import { pickDefined } from "../services/shared.js";
 import { OutputFormat } from "../domain/config.js";
 import { AppConfig } from "../domain/config.js";
 import type { LogFormat } from "./logging.js";
 import type { SyncSettingsValue } from "../services/sync-settings.js";
 import type { CredentialsOverridesValue } from "../services/credential-store.js";
 
-const pickDefined = <T extends Record<string, unknown>>(input: T): Partial<T> =>
-  Object.fromEntries(
-    Object.entries(input).filter(([, value]) => value !== undefined)
-  ) as Partial<T>;
 
 export const configOptions = {
   service: Options.text("service").pipe(

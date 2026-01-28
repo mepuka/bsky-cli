@@ -1,4 +1,5 @@
 import { ParseResult } from "effect";
+import { safeParseJson, issueDetails } from "./shared.js";
 import { formatAgentError } from "./errors.js";
 
 const storeConfigExample = {
@@ -13,25 +14,10 @@ const storeConfigExample = {
   ]
 };
 
-const safeParseJson = (raw: string): unknown => {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-};
 
 const hasPath = (issue: { readonly path: ReadonlyArray<unknown> }, key: string) =>
   issue.path.length > 0 && issue.path[0] === key;
 
-const issueDetails = (
-  issues: ReadonlyArray<{ readonly path: ReadonlyArray<unknown>; readonly message: string }>
-) =>
-  issues.map((issue) => {
-    const path =
-      issue.path.length > 0 ? issue.path.map((entry) => String(entry)).join(".") : "value";
-    return `${path}: ${issue.message}`;
-  });
 
 export const formatStoreConfigParseError = (
   error: ParseResult.ParseError,

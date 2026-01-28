@@ -1,5 +1,5 @@
 import { Config, Context, Effect, Layer } from "effect";
-import { ConfigError } from "../domain/errors.js";
+import { pickDefined, validatePositive, validateNonNegative } from "./shared.js";
 
 export type SyncSettingsValue = {
   readonly checkpointEvery: number;
@@ -9,22 +9,7 @@ export type SyncSettingsValue = {
 
 type SyncSettingsOverridesValue = Partial<SyncSettingsValue>;
 
-const pickDefined = <T extends Record<string, unknown>>(input: T): Partial<T> =>
-  Object.fromEntries(
-    Object.entries(input).filter(([, value]) => value !== undefined)
-  ) as Partial<T>;
 
-const validatePositive = (name: string, value: number) => {
-  if (!Number.isFinite(value) || value < 1) {
-    return ConfigError.make({ message: `${name} must be >= 1.` });
-  }
-};
-
-const validateNonNegative = (name: string, value: number) => {
-  if (!Number.isFinite(value) || value < 0) {
-    return ConfigError.make({ message: `${name} must be >= 0.` });
-  }
-};
 
 export class SyncSettingsOverrides extends Context.Tag("@skygent/SyncSettingsOverrides")<
   SyncSettingsOverrides,

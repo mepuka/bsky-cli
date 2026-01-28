@@ -1,11 +1,11 @@
 import { FileSystem, Path } from "@effect/platform";
+import { formatSchemaError } from "./shared.js";
 import {
   Config,
   Context,
   Effect,
   Layer,
   Option,
-  ParseResult,
   Redacted,
   Schema
 } from "effect";
@@ -39,10 +39,6 @@ class CredentialsFile extends Schema.Class<CredentialsFile>("CredentialsFile")({
   ciphertext: Schema.String
 }) {}
 
-const formatSchemaError = (error: unknown) =>
-  ParseResult.isParseError(error)
-    ? ParseResult.TreeFormatter.formatErrorSync(error)
-    : String(error);
 
 const toCredentialError = (message: string) => (cause: unknown) =>
   CredentialError.make({ message, cause });
