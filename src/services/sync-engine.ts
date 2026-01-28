@@ -1,8 +1,7 @@
-import { Context, Duration, Effect, Layer, Option, Schedule, Schema, Stream } from "effect";
+import { Context, Duration, Effect, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
 import { FilterRuntime } from "./filter-runtime.js";
 import { PostParser } from "./post-parser.js";
-import { StoreIndex } from "./store-index.js";
-import { StoreWriter } from "./store-writer.js";
+import { StoreCommitter } from "./store-commit.js";
 import { BskyClient } from "./bsky-client.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { filterExprSignature } from "../domain/filter.js";
@@ -102,8 +101,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
       const client = yield* BskyClient;
       const parser = yield* PostParser;
       const runtime = yield* FilterRuntime;
-      const writer = yield* StoreWriter;
-      const index = yield* StoreIndex;
+      const committer = yield* StoreCommitter;
       const checkpoints = yield* SyncCheckpointStore;
       const reporter = yield* SyncReporter;
       const settings = yield* SyncSettings;
@@ -143,51 +141,31 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               Effect.gen(function* () {
                 const meta = yield* makeMeta(llmMeta);
                 const event = PostUpsert.make({ post, meta });
-                const record = yield* writer
-                  .append(target, event)
+                const stored = yield* committer
+                  .appendUpsertIfMissing(target, event)
                   .pipe(
                     Effect.mapError(
                       toSyncError("store", "Failed to append event")
                     )
                   );
-                yield* index
-                  .apply(target, record)
-                  .pipe(
-                    Effect.mapError(
-                      toSyncError("store", "Failed to update index")
-                    )
-                  );
-                return record.id;
+                return Option.map(stored, (record) => record.id);
               });
 
             const prepareRaw = (raw: RawPost): Effect.Effect<PreparedOutcome, SyncError> =>
               parser.parsePost(raw).pipe(
                 Effect.mapError(toSyncError("parse", "Failed to parse post")),
                 Effect.flatMap((post) =>
-                  index.hasUri(target, post.uri).pipe(
+                  predicate(post).pipe(
                     Effect.mapError(
-                      toSyncError("store", "Failed to check store index")
+                      toSyncError("filter", "Filter evaluation failed")
                     ),
-                    Effect.flatMap((exists) =>
-                      exists
-                        ? Effect.succeed(skippedPrepared)
-                        : predicate(post).pipe(
-                            Effect.mapError(
-                              toSyncError("filter", "Filter evaluation failed")
-                            ),
-                            Effect.map(({ ok, llm }) =>
-                              ok
-                                ? ({ _tag: "Store", post, llm } as const)
-                                : skippedPrepared
-                            )
-                          )
+                    Effect.map(({ ok, llm }) =>
+                      ok ? ({ _tag: "Store", post, llm } as const) : skippedPrepared
                     )
                   )
                 ),
                 Effect.catchAll((error) =>
-                  error.stage === "store"
-                    ? Effect.fail(error)
-                    : Effect.succeed({ _tag: "Error", error } as const)
+                  Effect.succeed({ _tag: "Error", error } as const)
                 )
               );
 
@@ -201,18 +179,11 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                   case "Error":
                     return { _tag: "Error", error: prepared.error } as const;
                   case "Store": {
-                    const exists = yield* index
-                      .hasUri(target, prepared.post.uri)
-                      .pipe(
-                        Effect.mapError(
-                          toSyncError("store", "Failed to check store index")
-                        )
-                      );
-                    if (exists) {
-                      return skippedOutcome;
-                    }
-                    const eventId = yield* storePost(prepared.post, prepared.llm);
-                    return { _tag: "Stored", eventId } as const;
+                    const stored = yield* storePost(prepared.post, prepared.llm);
+                    return Option.match(stored, {
+                      onNone: () => skippedOutcome,
+                      onSome: (eventId) => ({ _tag: "Stored", eventId } as const)
+                    });
                   }
                 }
               });
@@ -312,6 +283,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               lastReportAt: startTime,
               lastCheckpointAt: startTime
             };
+            const stateRef = yield* Ref.make(initialState);
 
             const state = yield* stream.pipe(
               Stream.mapError(toSyncError("source", "Source stream failed")),
@@ -392,16 +364,23 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                             settings.checkpointIntervalMs));
                     if (shouldCheckpoint) {
                       yield* saveCheckpoint(nextState, now);
-                      return { ...nextState, lastCheckpointAt: now };
+                      const updated = { ...nextState, lastCheckpointAt: now };
+                      yield* Ref.set(stateRef, updated);
+                      return updated;
                     }
 
+                    yield* Ref.set(stateRef, nextState);
                     return nextState;
                   })
               ),
-              Effect.withRequestBatching(true)
+              Effect.withRequestBatching(true),
+              Effect.ensuring(
+                Ref.get(stateRef).pipe(
+                  Effect.flatMap((state) => saveCheckpoint(state, Date.now())),
+                  Effect.catchAll(() => Effect.void)
+                )
+              )
             );
-
-            yield* saveCheckpoint(state, Date.now());
 
             return state.result;
           })

@@ -1,7 +1,7 @@
 import { Clock, Context, Effect, Layer, Option, ParseResult, Schema, Stream } from "effect";
 import { StoreEventLog } from "./store-event-log.js";
-import { StoreWriter } from "./store-writer.js";
 import { StoreIndex } from "./store-index.js";
+import { StoreCommitter } from "./store-commit.js";
 import { FilterRuntime } from "./filter-runtime.js";
 import { FilterCompiler } from "./filter-compiler.js";
 import { ViewCheckpointStore } from "./view-checkpoint-store.js";
@@ -45,8 +45,8 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
     DerivationEngine,
     Effect.gen(function* () {
       const eventLog = yield* StoreEventLog;
-      const writer = yield* StoreWriter;
       const index = yield* StoreIndex;
+      const committer = yield* StoreCommitter;
       const compiler = yield* FilterCompiler;
       const runtime = yield* FilterRuntime;
       const checkpoints = yield* ViewCheckpointStore;
@@ -159,8 +159,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
                         sourceStore: sourceRef.name
                       });
                       const derivedEvent = PostDelete.make({ ...event, meta: derivedMeta });
-                      const targetRecord = yield* writer.append(targetRef, derivedEvent);
-                      yield* index.apply(targetRef, targetRecord);
+                      yield* committer.appendDelete(targetRef, derivedEvent);
                       return {
                         processed: state.processed + 1,
                         matched: state.matched,
@@ -191,15 +190,26 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
                         sourceStore: sourceRef.name
                       });
                       const derivedEvent = PostUpsert.make({ post: event.post, meta: derivedMeta });
-                      const targetRecord = yield* writer.append(targetRef, derivedEvent);
-                      yield* index.apply(targetRef, targetRecord);
-                      return {
-                        processed: state.processed + 1,
-                        matched: state.matched + 1,
-                        skipped: state.skipped,
-                        deletes: state.deletes,
-                        lastSourceId: nextLast
-                      };
+                      const stored = yield* committer.appendUpsertIfMissing(
+                        targetRef,
+                        derivedEvent
+                      );
+                      return Option.match(stored, {
+                        onNone: () => ({
+                          processed: state.processed + 1,
+                          matched: state.matched,
+                          skipped: state.skipped + 1,
+                          deletes: state.deletes,
+                          lastSourceId: nextLast
+                        }),
+                        onSome: () => ({
+                          processed: state.processed + 1,
+                          matched: state.matched + 1,
+                          skipped: state.skipped,
+                          deletes: state.deletes,
+                          lastSourceId: nextLast
+                        })
+                      });
                     }
 
                     return {

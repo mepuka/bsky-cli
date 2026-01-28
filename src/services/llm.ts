@@ -28,6 +28,12 @@ import { ConfigError, FilterEvalError } from "../domain/errors.js";
 import { LlmDecisionMeta, LlmUsage } from "../domain/llm.js";
 import { LlmTelemetry } from "./llm-telemetry.js";
 
+const isFilterEvalError = (cause: unknown): cause is FilterEvalError =>
+  typeof cause === "object" &&
+  cause !== null &&
+  "_tag" in cause &&
+  (cause as { readonly _tag?: string })._tag === "FilterEvalError";
+
 const SINGLE_SYSTEM_PROMPT = `You are analyzing Bluesky posts (microblogging, <= 300 chars).
 
 Score how well the post matches the task prompt.
@@ -258,6 +264,7 @@ export interface LlmSettingsService {
   readonly systemPrompt: string;
   readonly batchSystemPrompt: string;
   readonly temperature: number;
+  readonly timeout: Duration.Duration;
 }
 
 export class LlmSettings extends Context.Tag("@skygent/LlmSettings")<
@@ -316,7 +323,10 @@ export class LlmSettings extends Context.Tag("@skygent/LlmSettings")<
         persistentCache,
         systemPrompt,
         batchSystemPrompt,
-        temperature
+        temperature,
+        timeout: yield* Config.duration("SKYGENT_LLM_TIMEOUT").pipe(
+          Config.withDefault(Duration.seconds(30))
+        )
       };
     })
   );
@@ -549,6 +559,19 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
       const idGenerator = yield* IdGenerator.IdGenerator;
       const plan = yield* LlmPlan;
       const telemetry = yield* LlmTelemetry;
+      const timeoutMs = Duration.toMillis(settings.timeout);
+      const timeoutError = FilterEvalError.make({
+        message: `LLM request timed out after ${timeoutMs}ms`
+      });
+      const withTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Number.isFinite(timeoutMs) && timeoutMs > 0
+          ? effect.pipe(
+              Effect.timeoutFail({
+                duration: settings.timeout,
+                onTimeout: () => timeoutError
+              })
+            )
+          : effect;
       const persistentStore = yield* Option.match(settings.persistentCache, {
         onNone: () => Effect.succeed(Option.none()),
         onSome: (config) =>
@@ -671,14 +694,16 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
 
       const decideOne = (request: LlmDecisionRequest) =>
         applyPlan(
-          LanguageModel.generateObject({
-            prompt: buildSinglePrompt(settings, request),
-            schema: SingleDecisionSchema,
-            objectName: "LlmDecision"
-          }).pipe(
-            Effect.withSpan("llm.single", {
-              attributes: { kind: "single" }
-            })
+          withTimeout(
+            LanguageModel.generateObject({
+              prompt: buildSinglePrompt(settings, request),
+              schema: SingleDecisionSchema,
+              objectName: "LlmDecision"
+            }).pipe(
+              Effect.withSpan("llm.single", {
+                attributes: { kind: "single" }
+              })
+            )
           ),
           plan
         ).pipe(
@@ -726,7 +751,7 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
             })
           ),
           Effect.mapError((cause) =>
-            cause._tag === "FilterEvalError"
+            isFilterEvalError(cause)
               ? cause
               : FilterEvalError.make({ message: "LLM decision failed", cause })
           )
@@ -738,19 +763,21 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
         items: ReadonlyArray<{ id: string; request: LlmDecisionRequest }>
       ) =>
         applyPlan(
-          LanguageModel.generateObject({
-            prompt: buildBatchPrompt(
-              settings,
-              prompt,
-              minConfidence,
-              items.map((item) => ({ id: item.id, text: item.request.text }))
-            ),
-            schema: BatchDecisionSchema,
-            objectName: "LlmDecisionBatch"
-          }).pipe(
-            Effect.withSpan("llm.batch", {
-              attributes: { kind: "batch", size: items.length }
-            })
+          withTimeout(
+            LanguageModel.generateObject({
+              prompt: buildBatchPrompt(
+                settings,
+                prompt,
+                minConfidence,
+                items.map((item) => ({ id: item.id, text: item.request.text }))
+              ),
+              schema: BatchDecisionSchema,
+              objectName: "LlmDecisionBatch"
+            }).pipe(
+              Effect.withSpan("llm.batch", {
+                attributes: { kind: "batch", size: items.length }
+              })
+            )
           ),
           plan
         ).pipe(
@@ -799,7 +826,7 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
             })
           ),
           Effect.mapError((cause) =>
-            cause._tag === "FilterEvalError"
+            isFilterEvalError(cause)
               ? cause
               : FilterEvalError.make({ message: "LLM batch decision failed", cause })
           )
@@ -1049,9 +1076,20 @@ export class LlmDecision extends Context.Tag("@skygent/LlmDecision")<
           decideBatchImpl(requests).pipe(
             Effect.matchEffect({
               onFailure: (error) =>
-                Effect.forEach(requests, (request) => Request.fail(request, error), {
-                  discard: true
-                }),
+                Effect.forEach(
+                  requests,
+                  (request) =>
+                    Request.fail(
+                      request,
+                      isFilterEvalError(error)
+                        ? error
+                        : FilterEvalError.make({
+                            message: "LLM batch decision failed",
+                            cause: error
+                          })
+                    ),
+                  { discard: true }
+                ),
               onSuccess: (results) =>
                 Effect.forEach(
                   requests,

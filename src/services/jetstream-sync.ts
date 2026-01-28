@@ -2,8 +2,7 @@ import { Chunk, Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } 
 import { Jetstream, JetstreamMessage } from "effect-jetstream";
 import { FilterRuntime } from "./filter-runtime.js";
 import { PostParser } from "./post-parser.js";
-import { StoreIndex } from "./store-index.js";
-import { StoreWriter } from "./store-writer.js";
+import { StoreCommitter } from "./store-commit.js";
 import { SyncCheckpointStore } from "./sync-checkpoint-store.js";
 import { SyncReporter } from "./sync-reporter.js";
 import { ProfileResolver } from "./profile-resolver.js";
@@ -119,8 +118,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
       const jetstream = yield* Jetstream.Jetstream;
       const parser = yield* PostParser;
       const runtime = yield* FilterRuntime;
-      const writer = yield* StoreWriter;
-      const index = yield* StoreIndex;
+      const committer = yield* StoreCommitter;
       const checkpoints = yield* SyncCheckpointStore;
       const reporter = yield* SyncReporter;
       const profiles = yield* ProfileResolver;
@@ -155,13 +153,34 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
         Effect.gen(function* () {
           const meta = yield* makeMeta(command, filterHash, llmMeta);
           const event = PostUpsert.make({ post, meta });
-          const record = yield* writer
-            .append(target, event)
-            .pipe(Effect.mapError(toSyncError("store", "Failed to append event")));
-          yield* index
-            .apply(target, record)
-            .pipe(Effect.mapError(toSyncError("store", "Failed to update index")));
-          return record.id;
+          return yield* committer
+            .appendUpsert(target, event)
+            .pipe(
+              Effect.mapError(
+                toSyncError("store", "Failed to append event")
+              ),
+              Effect.map((record) => record.id)
+            );
+        });
+
+      const storePostIfMissing = (
+        target: StoreRef,
+        command: string,
+        filterHash: string,
+        post: Post,
+        llmMeta: ReadonlyArray<LlmDecisionMeta>
+      ) =>
+        Effect.gen(function* () {
+          const meta = yield* makeMeta(command, filterHash, llmMeta);
+          const event = PostUpsert.make({ post, meta });
+          const stored = yield* committer
+            .appendUpsertIfMissing(target, event)
+            .pipe(
+              Effect.mapError(
+                toSyncError("store", "Failed to append event")
+              )
+            );
+          return Option.map(stored, (record) => record.id);
         });
 
       const storeDelete = (
@@ -174,13 +193,14 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
         Effect.gen(function* () {
           const meta = yield* makeMeta(command, filterHash, []);
           const event = PostDelete.make({ uri, cid, meta });
-          const record = yield* writer
-            .append(target, event)
-            .pipe(Effect.mapError(toSyncError("store", "Failed to append event")));
-          yield* index
-            .apply(target, record)
-            .pipe(Effect.mapError(toSyncError("store", "Failed to update index")));
-          return record.id;
+          return yield* committer
+            .appendDelete(target, event)
+            .pipe(
+              Effect.mapError(
+                toSyncError("store", "Failed to append event")
+              ),
+              Effect.map((record) => record.id)
+            );
         });
 
       const processStream = Effect.fn("JetstreamSyncEngine.processStream")(
@@ -215,6 +235,38 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
               lastEventId: initialLastEventId,
               lastCursor: initialCursor
             });
+
+            const saveCheckpointFromState = (state: SyncProgressState) => {
+              const cursorValue = Option.getOrUndefined(state.lastCursor);
+              const shouldSave =
+                cursorValue !== undefined || Option.isSome(activeCheckpoint);
+              if (!shouldSave) {
+                return Effect.void;
+              }
+              return Schema.decodeUnknown(Timestamp)(
+                new Date().toISOString()
+              ).pipe(
+                Effect.mapError(
+                  toSyncError("store", "Failed to create checkpoint timestamp")
+                ),
+                Effect.flatMap((updatedAt) => {
+                  const checkpoint = SyncCheckpoint.make({
+                    source: config.source,
+                    cursor: cursorValue,
+                    lastEventId: Option.getOrUndefined(state.lastEventId),
+                    filterHash,
+                    updatedAt
+                  });
+                  return checkpoints
+                    .save(config.store, checkpoint)
+                    .pipe(
+                      Effect.mapError(
+                        toSyncError("store", "Failed to save checkpoint")
+                      )
+                    );
+                })
+              );
+            };
 
             const baseStream = jetstream.stream.pipe(
               Stream.mapError(toSyncError("source", "Jetstream stream failed")),
@@ -322,31 +374,37 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                   );
                 case "Upsert":
                   return (prepared.checkExists
-                    ? index.hasUri(config.store, prepared.post.uri).pipe(
-                        Effect.mapError(
-                          toSyncError("store", "Failed to check store index")
+                    ? storePostIfMissing(
+                        config.store,
+                        config.command,
+                        filterHash,
+                        prepared.post,
+                        prepared.llm
+                      ).pipe(
+                        Effect.map((eventId) =>
+                          Option.match(eventId, {
+                            onNone: () => skippedOutcome,
+                            onSome: (value): SyncOutcome => ({
+                              _tag: "Stored",
+                              eventId: value
+                            })
+                          })
                         )
                       )
-                    : Effect.succeed(false)
-                  ).pipe(
-                    Effect.flatMap((exists) =>
-                      exists
-                        ? Effect.succeed(skippedOutcome)
-                        : storePost(
-                            config.store,
-                            config.command,
-                            filterHash,
-                            prepared.post,
-                            prepared.llm
-                          ).pipe(
-                            Effect.map(
-                              (eventId): SyncOutcome => ({
-                                _tag: "Stored",
-                                eventId
-                              })
-                            )
-                          )
-                    )
+                    : storePost(
+                        config.store,
+                        config.command,
+                        filterHash,
+                        prepared.post,
+                        prepared.llm
+                      ).pipe(
+                        Effect.map(
+                          (eventId): SyncOutcome => ({
+                            _tag: "Stored",
+                            eventId
+                          })
+                        )
+                      )
                   );
               }
             };
@@ -448,32 +506,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                   );
                 }
 
-                const cursorValue = Option.getOrUndefined(state.lastCursor);
-                const shouldSave =
-                  cursorValue !== undefined || Option.isSome(activeCheckpoint);
-                if (shouldSave) {
-                  const updatedAt = yield* Schema.decodeUnknown(Timestamp)(
-                    new Date().toISOString()
-                  ).pipe(
-                    Effect.mapError(
-                      toSyncError("store", "Failed to create checkpoint timestamp")
-                    )
-                  );
-                  const checkpoint = SyncCheckpoint.make({
-                    source: config.source,
-                    cursor: cursorValue,
-                    lastEventId: Option.getOrUndefined(state.lastEventId),
-                    filterHash,
-                    updatedAt
-                  });
-                  yield* checkpoints
-                    .save(config.store, checkpoint)
-                    .pipe(
-                      Effect.mapError(
-                        toSyncError("store", "Failed to save checkpoint")
-                      )
-                    );
-                }
+                yield* saveCheckpointFromState(state);
 
                 return SyncResult.make({
                   postsAdded: added,
@@ -487,7 +520,14 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
               Stream.mapEffect(processBatch)
             );
 
-            return stream;
+            return stream.pipe(
+              Stream.ensuring(
+                Ref.get(stateRef).pipe(
+                  Effect.flatMap(saveCheckpointFromState),
+                  Effect.catchAll(() => Effect.void)
+                )
+              )
+            );
           })
       );
 

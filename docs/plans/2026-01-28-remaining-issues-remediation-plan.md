@@ -6,13 +6,27 @@
 
 ## Executive Summary
 
-We will address 15 issues in four phases. The biggest structural fixes are around event log storage (manifest bloat, sequential IO, orphaning) and concurrency/race safety (TOCTOU in sync, store manifest races). These will be resolved most robustly by moving event log + catalog metadata into **custom SQLite tables** (leveraging the existing SQL stack used by StoreIndex), then layering in backpressure + shutdown handling to preserve checkpoints on interrupts.
+We will address 15 issues in four phases. The biggest structural fixes are around event log storage (manifest bloat, sequential IO, orphaning) and concurrency/race safety (TOCTOU in sync, store manifest races). These are now largely addressed by moving event log + catalog metadata into **custom SQLite tables** (leveraging the existing SQL stack used by StoreIndex). Remaining high-severity risks are TOCTOU/atomicity in sync, signal-safe checkpointing, and LLM timeouts.
 
 **Phase focus:**
-1. **Data integrity (critical):** TOCTOU in sync, event log orphaning, store manifest races, and manifest bloat (SQL-backed event log + transactional writes).
+1. **Data integrity (critical):** TOCTOU in sync and event log/index atomicity.
 2. **Reliability (critical):** Signal handling with interruption-safe checkpointing, LLM timeouts, derivation checkpointing.
 3. **Performance:** Event log IO batching, stream backpressure, stats aggregation via SQL.
 4. **UX / safety:** Regex ReDoS guardrails, secret redaction, env validation, default help text, deprecated option warnings.
+
+## Status Update (2026-01-28)
+
+Completed in the latest SQL migration work:
+- **Event log moved to SQL** (`event_log`, `event_log_meta`) and streamed via pagination.
+- **Store catalog moved to SQL** (`catalog.sqlite` with `stores` table).
+- **StoreEventLog/StoreWriter/StoreManager/StoreIndex** now use the SQL-backed layers.
+- **StoreCommitter** added to make event append + index update atomic.
+
+High‑severity items now addressed:
+- **TOCTOU in sync** is removed by atomic insert‑if‑missing at the DB layer.
+- **Event log ↔ index atomicity** is enforced via a shared transaction.
+- **Signal/interrupt checkpointing** is handled with finalizers on sync streams.
+- **LLM timeout** is enforced at the LLM execution boundary.
 
 ## Research Notes (Effect Sources Consulted)
 
@@ -43,7 +57,7 @@ Runtime note:
 
 ## Decision: Custom SQL Tables (Not SqlEventJournal)
 
-We will implement **custom SQL tables** (instead of `SqlEventJournal`) to preserve full control over schema, indices, pagination, and transaction boundaries with StoreIndex updates. This keeps our domain model first-class and avoids a generic journal abstraction that returns full entry arrays.
+We implemented **custom SQL tables** (instead of `SqlEventJournal`) to preserve full control over schema, indices, pagination, and transaction boundaries with StoreIndex updates. This keeps our domain model first-class and avoids a generic journal abstraction that returns full entry arrays.
 
 ### Per-store Event Log Schema (co-located with StoreIndex)
 
@@ -55,7 +69,7 @@ We will implement **custom SQL tables** (instead of `SqlEventJournal`) to preser
 event_log(
   event_id TEXT PRIMARY KEY,        -- ULID
   event_type TEXT NOT NULL,          -- PostUpsert | PostDelete
-  post_uri TEXT,                     -- nullable for deletes without uri? (should be NOT NULL for both)
+  post_uri TEXT NOT NULL,
   payload_json TEXT NOT NULL,        -- encoded PostEventRecord
   created_at TEXT NOT NULL,          -- ISO timestamp
   source TEXT NOT NULL               -- timeline/feed/notifications/derive/jetstream
@@ -95,8 +109,8 @@ stores(
 
 ### Migrations
 
-Add new migrations:
-- `src/db/migrations/store-event-log/001_init.ts`
+Implemented migrations:
+- `src/db/migrations/store-index/002_event_log.ts`
 - `src/db/migrations/store-catalog/001_init.ts`
 
 ### Why this design
@@ -108,34 +122,35 @@ Add new migrations:
 
 ## Issue Matrix (Dependency + Phase)
 
-| # | Issue | Severity | Primary Root Cause | Phase | Key Dependencies |
-|---|-------|----------|--------------------|-------|------------------|
-| 1 | TOCTOU race in sync | High | `hasUri` check separate from write | 1 | Atomic store write, index uniqueness |
-| 2 | Manifest memory bloat | High | Full manifest array in KVS | 1 | Custom SQL event log |
-| 3 | Sequential event log I/O | High | Per-key KV reads | 3 | SQL pagination |
-| 4 | Signal handling | High | No checkpoint on interrupt | 2 | Stream finalizers / onInterrupt |
-| 5 | LLM timeout missing | High | LLM calls unbounded | 2 | Effect.timeout + retry policy |
-| 6 | Store manager manifest races | Medium | Non-atomic manifest modify | 1 | SQLite catalog |
-| 7 | Derivation no checkpointing | Medium | Save only at end | 2 | Stream mapAccum + finalizer |
-| 8 | Event log orphaning | Medium | Event write + manifest update not atomic | 1 | Transactional SQL event log |
-| 9 | Stream backpressure missing | Medium | Unbounded buffers | 3 | Stream.buffer / Queue.bounded |
-|10 | Regex ReDoS | Medium | No complexity limits | 4 | Validation rules / safe regex |
-|11 | Secrets leakage in errors | Medium | Error formatting prints raw values | 4 | Redaction helpers |
-|12 | Env var validation gap | Medium | Defaults hide misconfig | 4 | Config validation layer |
-|13 | Stats memory overhead | Low | Full index scan in memory | 3 | SQL aggregates |
-|14 | Missing defaults in help | Low | Options lack default metadata | 4 | CLI option defaults |
-|15 | Deprecated option handling | Low | No warnings | 4 | CLI arg inspection |
+| # | Issue | Severity | Primary Root Cause | Phase | Key Dependencies | Status |
+|---|-------|----------|--------------------|-------|------------------|--------|
+| 1 | TOCTOU race in sync | High | `hasUri` check separate from write | 1 | Atomic store write, index uniqueness | **Done** |
+| 2 | Manifest memory bloat | High | Full manifest array in KVS | 1 | Custom SQL event log | **Done** |
+| 3 | Sequential event log I/O | High | Per-key KV reads | 3 | SQL pagination | **Done** |
+| 4 | Signal handling | High | No checkpoint on interrupt | 2 | Stream finalizers / onInterrupt | **Done** |
+| 5 | LLM timeout missing | High | LLM calls unbounded | 2 | Effect.timeout + retry policy | **Done** |
+| 6 | Store manager manifest races | Medium | Non-atomic manifest modify | 1 | SQLite catalog | **Done** |
+| 7 | Derivation no checkpointing | Medium | Save only at end | 2 | Stream mapAccum + finalizer | **Open** |
+| 8 | Event log orphaning | Medium | Event write + manifest update not atomic | 1 | Transactional SQL event log | **Done** |
+| 9 | Stream backpressure missing | Medium | Unbounded buffers | 3 | Stream.buffer / Queue.bounded | **Open** |
+|10 | Regex ReDoS | Medium | No complexity limits | 4 | Validation rules / safe regex | **Deferred** (per user) |
+|11 | Secrets leakage in errors | Medium | Error formatting prints raw values | 4 | Redaction helpers | **Open** |
+|12 | Env var validation gap | Medium | Defaults hide misconfig | 4 | Config validation layer | **Open** |
+|13 | Stats memory overhead | Low | Full index scan in memory | 3 | SQL aggregates | **Open** |
+|14 | Missing defaults in help | Low | Options lack default metadata | 4 | CLI option defaults | **Open** |
+|15 | Deprecated option handling | Low | No warnings | 4 | CLI arg inspection | **Open** |
 
 ## Remediation Details
 
 ### 1) TOCTOU Race in Sync
-**Root cause:** `src/services/sync-engine.ts` checks `index.hasUri` in `prepareRaw` and again in `applyPrepared`, but storage is not atomic with index updates. Concurrent sync runs can write duplicates.
+**Root cause:** `src/services/sync-engine.ts` (and `jetstream-sync.ts`) check `index.hasUri` in `prepareRaw` and again in `applyPrepared`, but storage is not atomic with index updates. Concurrent sync runs can write duplicates.
 
-**Plan:**
-- **Short-term guard:** move `hasUri` checks into a single atomic store step. Remove the `prepareRaw` `hasUri` check (avoid TOCTOU) and only check just-in-time before `append` in an exclusive store transaction.
-- **Long-term fix:** implement **event log + index updates in a single SQL transaction** to guarantee `insert-if-absent` semantics.
-  - Add unique constraint on `(uri)` in posts table (already exists) and only append event log row if post is newly inserted.
-  - If an event log row is required even for duplicates, use `INSERT OR IGNORE` plus a deterministic event hash to prevent replays.
+**Current state:** resolved by using a single SQL transaction for post insert + event log append.
+
+**Implementation:**
+- Removed `prepareRaw` `hasUri` check.
+- Added `StoreCommitter.appendUpsertIfMissing`, using `INSERT ... ON CONFLICT DO NOTHING` to atomically decide if a post is new.
+- Wrapped post insert + event log append in one transaction.
 
 **Effect APIs:** `Effect.makeSemaphore` (optional in-process lock), `SqlClient.withTransaction`.
 
@@ -146,12 +161,11 @@ Add new migrations:
 ### 2) Manifest Memory Bloat
 **Root cause:** `src/services/store-event-log.ts` loads full manifest array (`events/manifest`) into memory per stream run.
 
-**Plan:**
-- Replace KVS manifest with SQL event table (see schema above).
-  - Stream via pagination (`LIMIT/OFFSET` or `event_id > last`) using `Stream.unfoldEffect`.
-  - Maintain `event_log_meta` for last event id if needed.
+**Status:** **Done.** StoreEventLog now streams from SQL with pagination and no manifest.
 
-**Effect APIs:** `Stream.unfoldEffect`, `SqlClient` queries.
+**Verification:**
+- Confirm stream uses `LIMIT` pagination and bounded page size.
+- Confirm `event_log_meta` is used for `last_event_id` when present.
 
 **Acceptance:** Event log streaming uses bounded memory regardless of log size.
 
@@ -160,11 +174,7 @@ Add new migrations:
 ### 3) Sequential Event Log I/O
 **Root cause:** `StoreEventLog.stream` uses `Stream.mapEffect` and per-key KV gets, leading to N sequential reads.
 
-**Plan:**
-- With SQL event log: use SQL pagination queries with a single query per page.
-- If staying on KVS temporarily: group keys and fetch with `Effect.forEach` concurrency, then flatten.
-
-**Effect APIs:** `Stream.grouped`, `Effect.forEach({ concurrency })`, `Stream.mapEffect`.
+**Status:** **Done.** SQL pagination provides batched reads per page.
 
 **Acceptance:** Streaming reads are batched; throughput improves with large logs.
 
@@ -173,7 +183,11 @@ Add new migrations:
 ### 4) Signal/Interrupt Handling (Checkpoint Persistence)
 **Root cause:** `BunRuntime.runMain` interrupts on SIGINT/SIGTERM, but streams do not persist checkpoints on interrupt.
 
-**Plan:**
+**Current state:** `sync` and `jetstream` streams now ensure final checkpoint persistence via finalizers.
+
+**Implementation:**
+- Added `Effect.ensuring` in `SyncEngine.sync` to save checkpoints on interrupt.
+- Added `Stream.ensuring` in `JetstreamSyncEngine.processStream` to persist last checkpoint on interrupt.
 - Wrap sync/derive streams with `Stream.ensuringWith` to persist latest checkpoint on interruption.
 - For long-running streams, add explicit interrupt sources using `Stream.interruptWhenDeferred` if we need cooperative shutdown signals beyond fiber interrupt.
 - Standardize a `Shutdown` utility: optional `Deferred` + `Effect.onInterrupt` to trigger final checkpoints.
@@ -187,11 +201,12 @@ Add new migrations:
 ### 5) LLM Timeout Missing
 **Root cause:** LLM calls in `src/services/llm.ts` are unbounded.
 
-**Plan:**
-- Add timeout config (e.g., `SKYGENT_LLM_TIMEOUT`, default 30s).
-- Wrap calls in `Effect.timeoutFail` (custom timeout error) or `Effect.timeout`.
-- Add retry policy with `Schedule.exponential` + `Schedule.jittered` for transient errors; keep retries bounded.
-- Optional: circuit-breaker via `Ref` + `Clock` (open/half-open) if repeated failures occur.
+**Current state:** `LanguageModel.generateObject` calls are wrapped with a configurable timeout.
+
+**Implementation:**
+- Added `SKYGENT_LLM_TIMEOUT` config (default 30s).
+- Applied `Effect.timeoutFail` around LLM requests (single + batch).
+- Retry policy remains in place and is still bounded.
 
 **Effect APIs:** `Effect.timeoutFail`, `Effect.retry`, `Schedule.exponential`, `Schedule.jittered`.
 
@@ -202,11 +217,7 @@ Add new migrations:
 ### 6) Store Manager Manifest Races
 **Root cause:** `src/services/store-manager.ts` updates store manifest via non-atomic `modify`, losing updates under concurrent create/delete.
 
-**Plan:**
-- Move store catalog to SQLite (single `stores` table with unique name + metadata) and update with transactions.
-- Short-term: guard `createStore` / `deleteStore` with a semaphore or a global lock file (optional if we move immediately).
-
-**Effect APIs:** `Effect.makeSemaphore`, `SqlClient.withTransaction`.
+**Status:** **Done.** Store catalog is now SQLite-backed (`catalog.sqlite`, `stores` table).
 
 **Acceptance:** Concurrent create/delete cannot lose manifest entries.
 
@@ -227,11 +238,9 @@ Add new migrations:
 ---
 
 ### 8) Event Log Orphaning
-**Root cause:** `src/services/store-writer.ts` writes event, last-id, then manifest; crash between steps leaves orphaned events.
+**Root cause:** Event log writes and index updates are not yet transactional together; a crash can leave an event present without corresponding index updates.
 
-**Plan:**
-- Move event log to SQL and update event log + StoreIndex in a single transaction.
-- Remove `events/manifest` and `events/last-id` keys entirely once SQL path is active.
+**Status:** **Done.** Event log append and index updates now share a single SQL transaction via `StoreCommitter`.
 
 **Effect APIs:** `SqlClient.withTransaction`, `Effect.acquireRelease` for DB connection.
 
@@ -338,23 +347,23 @@ Add new migrations:
 ## Phased Implementation Plan
 
 **Phase 1 (Data Integrity):** Issues 1, 2, 6, 8
-- Add SQL event log tables + migrations (per-store `index.sqlite`).
-- Update `StoreWriter` + `StoreEventLog` to use SQL, ensure atomic writes with StoreIndex updates.
-- Add `catalog.sqlite` for store metadata and migrate `StoreManager`.
-- Remove TOCTOU by idempotent insert semantics.
+- **Done:** SQL event log tables + migrations (per-store `index.sqlite`).
+- **Done:** `StoreWriter` + `StoreEventLog` now use SQL.
+- **Done:** `catalog.sqlite` for store metadata and migrated `StoreManager`.
+- **Done:** event insert + index update are atomic; TOCTOU removed via insert‑if‑missing.
 
 **Phase 2 (Reliability):** Issues 4, 5, 7
-- Add interrupt-safe checkpointing in sync + derivation.
-- Add LLM timeouts + retry policy.
-- Add shutdown hooks around long-running streams.
+- **Done:** interrupt‑safe checkpointing in sync + jetstream.
+- **Done:** LLM timeouts + retry policy.
+- Add shutdown hooks around long-running streams (if needed beyond interrupt finalizers).
 
 **Phase 3 (Performance):** Issues 3, 9, 13
-- Event log stream pagination.
+- **Done:** Event log stream pagination.
 - Bounded buffers and queue-based backpressure.
 - SQL aggregates for stats.
 
 **Phase 4 (Safety + UX):** Issues 10, 11, 12, 14, 15
-- Regex validation.
+- Regex validation (deferred per current priority).
 - Redaction in errors/logs.
 - Config validation and help defaults.
 - Deprecated option warnings.

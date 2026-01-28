@@ -14,6 +14,7 @@ import { StoreIndex } from "../services/store-index.js";
 import { StoreDb } from "../services/store-db.js";
 import { StoreManager } from "../services/store-manager.js";
 import { StoreWriter } from "../services/store-writer.js";
+import { StoreCommitter } from "../services/store-commit.js";
 import { SyncEngine } from "../services/sync-engine.js";
 import { SyncCheckpointStore } from "../services/sync-checkpoint-store.js";
 import { SyncReporter } from "../services/sync-reporter.js";
@@ -52,6 +53,10 @@ const storageLayer = Layer.unwrapEffect(
 ).pipe(Layer.provide(appConfigLayer));
 const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
 const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+const committerLayer = StoreCommitter.layer.pipe(
+  Layer.provideMerge(storeDbLayer),
+  Layer.provideMerge(writerLayer)
+);
 const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
 const indexLayer = StoreIndex.layer.pipe(
   Layer.provideMerge(storeDbLayer),
@@ -98,7 +103,7 @@ const runtimeLayer = FilterRuntime.layer.pipe(
 );
 const syncSettingsLayer = SyncSettings.layer;
 const syncLayer = SyncEngine.layer.pipe(
-  Layer.provideMerge(writerLayer),
+  Layer.provideMerge(committerLayer),
   Layer.provideMerge(indexLayer),
   Layer.provideMerge(checkpointLayer),
   Layer.provideMerge(runtimeLayer),
@@ -123,7 +128,7 @@ const compilerLayer = FilterCompiler.layer;
 const postParserLayer = PostParser.layer;
 const derivationEngineLayer = DerivationEngine.layer.pipe(
   Layer.provideMerge(eventLogLayer),
-  Layer.provideMerge(writerLayer),
+  Layer.provideMerge(committerLayer),
   Layer.provideMerge(indexLayer),
   Layer.provideMerge(compilerLayer),
   Layer.provideMerge(runtimeLayer),
@@ -161,6 +166,7 @@ export const CliLive = Layer.mergeAll(
   CliOutput.layer,
   resourceMonitorLayer,
   managerLayer,
+  committerLayer,
   indexLayer,
   eventLogLayer,
   cleanerLayer,

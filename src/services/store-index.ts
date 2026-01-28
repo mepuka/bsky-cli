@@ -10,6 +10,7 @@ import { Post } from "../domain/post.js";
 import type { StoreRef } from "../domain/store.js";
 import { StoreDb } from "./store-db.js";
 import { StoreEventLog } from "./store-event-log.js";
+import { deletePost, upsertPost } from "./store-index-sql.js";
 
 const indexName = "primary";
 const entryPageSize = 500;
@@ -34,9 +35,6 @@ const toStoreIndexError = (message: string) => (cause: unknown) =>
   cause instanceof StoreIndexError
     ? cause
     : StoreIndexError.make({ message, cause });
-
-const encodePostJson = (post: Post) =>
-  Schema.encode(Schema.parseJson(Post))(post);
 
 const decodePostJson = (raw: string) =>
   Schema.decodeUnknown(Schema.parseJson(Post))(raw).pipe(
@@ -66,40 +64,12 @@ const toIso = (value: Date | string) =>
 const applyUpsert = (
   sql: SqlClient.SqlClient,
   event: Extract<PostEvent, { _tag: "PostUpsert" }>
-) =>
-  sql.withTransaction(
-    Effect.gen(function* () {
-      const createdAt = toIso(event.post.createdAt);
-      const createdDate = createdAt.slice(0, 10);
-      const postJson = yield* encodePostJson(event.post).pipe(
-        Effect.mapError(toStoreIndexError("StoreIndex.post encode failed"))
-      );
-
-      yield* sql`INSERT INTO posts (uri, created_at, created_date, author, post_json)
-        VALUES (${event.post.uri}, ${createdAt}, ${createdDate}, ${event.post.author}, ${postJson})
-        ON CONFLICT(uri) DO UPDATE SET
-          created_at = excluded.created_at,
-          created_date = excluded.created_date,
-          author = excluded.author,
-          post_json = excluded.post_json`;
-
-      yield* sql`DELETE FROM post_hashtag WHERE uri = ${event.post.uri}`;
-
-      const tags = Array.from(new Set(event.post.hashtags));
-      if (tags.length > 0) {
-        const rows = tags.map((tag) => ({ uri: event.post.uri, tag }));
-        yield* sql`INSERT INTO post_hashtag ${sql.insert(rows)}`;
-      }
-    })
-  );
+) => upsertPost(sql, event.post);
 
 const applyDelete = (
   sql: SqlClient.SqlClient,
   event: Extract<PostEvent, { _tag: "PostDelete" }>
-) =>
-  sql.withTransaction(
-    sql`DELETE FROM posts WHERE uri = ${event.uri}`.pipe(Effect.asVoid)
-  );
+) => deletePost(sql, event.uri);
 
 export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
   StoreIndex,
@@ -231,7 +201,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
                 lastId: Option.none<PostEventRecord["id"]>()
               },
               (state, record) =>
-                applyWithClient(client, record).pipe(
+                client.withTransaction(applyWithClient(client, record)).pipe(
                   Effect.as({
                     count: state.count + 1,
                     lastId: Option.some(record.id)
@@ -280,7 +250,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
       const apply = Effect.fn("StoreIndex.apply")(
         (store: StoreRef, record: PostEventRecord) =>
           withClient(store, "StoreIndex.apply failed", (client) =>
-            applyWithClient(client, record)
+            client.withTransaction(applyWithClient(client, record))
           )
       );
 

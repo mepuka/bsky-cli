@@ -11,6 +11,7 @@ import { PostParser } from "../../src/services/post-parser.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
 import { StoreIndex } from "../../src/services/store-index.js";
 import { StoreWriter } from "../../src/services/store-writer.js";
+import { StoreCommitter } from "../../src/services/store-commit.js";
 import { StoreDb } from "../../src/services/store-db.js";
 import { SyncCheckpointStore } from "../../src/services/sync-checkpoint-store.js";
 import { SyncReporter } from "../../src/services/sync-reporter.js";
@@ -166,6 +167,10 @@ const makeTestLayer = (
     Layer.provideMerge(eventLogLayer)
   );
   const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+  const committerLayer = StoreCommitter.layer.pipe(
+    Layer.provideMerge(storeDbLayer),
+    Layer.provideMerge(writerLayer)
+  );
   const checkpointLayer = SyncCheckpointStore.layer.pipe(
     Layer.provideMerge(storageLayer)
   );
@@ -175,7 +180,7 @@ const makeTestLayer = (
     Layer.provideMerge(profileLayer),
     Layer.provideMerge(PostParser.layer),
     Layer.provideMerge(filterRuntimeLayer),
-    Layer.provideMerge(writerLayer),
+    Layer.provideMerge(committerLayer),
     Layer.provideMerge(indexLayer),
     Layer.provideMerge(eventLogLayer),
     Layer.provideMerge(checkpointLayer),

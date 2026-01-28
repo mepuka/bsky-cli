@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Random, Ref, Schema } from "effect";
+import type * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import { StoreIoError } from "../domain/errors.js";
 import { PostEvent, PostEventRecord } from "../domain/events.js";
@@ -74,6 +75,10 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
       store: StoreRef,
       event: PostEvent
     ) => Effect.Effect<PostEventRecord, StoreIoError>;
+    readonly appendWithClient: (
+      client: SqlClient.SqlClient,
+      event: PostEvent
+    ) => Effect.Effect<PostEventRecord, unknown>;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -119,8 +124,8 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
         }).pipe(Effect.orDie)
       );
 
-      const append = Effect.fn("StoreWriter.append")(
-        (store: StoreRef, event: PostEvent) =>
+      const appendWithClient = Effect.fn("StoreWriter.appendWithClient")(
+        (client: SqlClient.SqlClient, event: PostEvent) =>
           Effect.gen(function* () {
             const id = yield* generateEventId();
             const record = PostEventRecord.make({
@@ -130,7 +135,7 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
             });
             const payloadJson = yield* Schema.encode(
               Schema.parseJson(PostEventRecord)
-            )(record).pipe(Effect.mapError(toStoreIoError(store.root)));
+            )(record);
             const postUri =
               record.event._tag === "PostUpsert"
                 ? record.event.post.uri
@@ -140,40 +145,45 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
                 ? record.event.meta.createdAt.toISOString()
                 : new Date(record.event.meta.createdAt).toISOString();
 
-            yield* storeDb.withClient(store, (client) => {
-              const insertEvent = SqlSchema.void({
-                Request: eventLogInsertRow,
-                execute: (row) =>
-                  client`INSERT INTO event_log ${client.insert(row)}`
-              });
-              const upsertMeta = SqlSchema.void({
-                Request: eventLogMetaRow,
-                execute: (row) =>
-                  client`INSERT INTO event_log_meta (key, value)
-                    VALUES (${row.key}, ${row.value})
-                    ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-              });
+            const insertEvent = SqlSchema.void({
+              Request: eventLogInsertRow,
+              execute: (row) =>
+                client`INSERT INTO event_log ${client.insert(row)}`
+            });
+            const upsertMeta = SqlSchema.void({
+              Request: eventLogMetaRow,
+              execute: (row) =>
+                client`INSERT INTO event_log_meta (key, value)
+                  VALUES (${row.key}, ${row.value})
+                  ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+            });
 
-              return Effect.gen(function* () {
-                yield* insertEvent({
-                  event_id: record.id,
-                  event_type: record.event._tag,
-                  post_uri: postUri,
-                  payload_json: payloadJson,
-                  created_at: createdAt,
-                  source: record.event.meta.source
-                });
-                yield* upsertMeta({
-                  key: eventLogMetaKey,
-                  value: record.id
-                });
-              }).pipe(client.withTransaction);
+            yield* insertEvent({
+              event_id: record.id,
+              event_type: record.event._tag,
+              post_uri: postUri,
+              payload_json: payloadJson,
+              created_at: createdAt,
+              source: record.event.meta.source
+            });
+            yield* upsertMeta({
+              key: eventLogMetaKey,
+              value: record.id
             });
             return record;
-          }).pipe(Effect.mapError(toStoreIoError(store.root)))
+          })
       );
 
-      return StoreWriter.of({ append });
+      const append = Effect.fn("StoreWriter.append")(
+        (store: StoreRef, event: PostEvent) =>
+          storeDb
+            .withClient(store, (client) =>
+              appendWithClient(client, event).pipe(client.withTransaction)
+            )
+            .pipe(Effect.mapError(toStoreIoError(store.root)))
+      );
+
+      return StoreWriter.of({ append, appendWithClient });
     })
   );
 }

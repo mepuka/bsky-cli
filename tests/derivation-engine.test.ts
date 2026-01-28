@@ -8,6 +8,7 @@ import { StoreEventLog } from "../src/services/store-event-log.js";
 import { StoreWriter } from "../src/services/store-writer.js";
 import { StoreIndex } from "../src/services/store-index.js";
 import { StoreDb } from "../src/services/store-db.js";
+import { StoreCommitter } from "../src/services/store-commit.js";
 import { FilterRuntime } from "../src/services/filter-runtime.js";
 import { FilterCompiler } from "../src/services/filter-compiler.js";
 import { ViewCheckpointStore } from "../src/services/view-checkpoint-store.js";
@@ -75,8 +76,14 @@ const buildTestLayer = (storeRoot: string) => {
     Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(eventLogLayer)
   );
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+  const committerLayer = StoreCommitter.layer.pipe(
+    Layer.provideMerge(storeDbLayer),
+    Layer.provideMerge(writerLayer)
+  );
   const otherStorage = Layer.mergeAll(
-    StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer)),
+    writerLayer,
+    committerLayer,
     ViewCheckpointStore.layer,
     LineageStore.layer
   ).pipe(Layer.provideMerge(storageLayer));
