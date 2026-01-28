@@ -1,4 +1,4 @@
-import { Args, Command, Options } from "@effect/cli";
+import { Command, Options } from "@effect/cli";
 import { Effect, Layer, Option, Stream } from "effect";
 import { Jetstream } from "effect-jetstream";
 import { filterExprSignature } from "../domain/filter.js";
@@ -15,6 +15,7 @@ import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { StoreLock } from "../services/store-lock.js";
 import { makeWatchCommandBody } from "./sync-factory.js";
 import {
+  feedUriArg,
   storeNameOption,
   filterOption,
   filterJsonOption,
@@ -52,10 +53,6 @@ const timelineCommand = Command.make(
       ["Tip: add --quiet to suppress progress logs."]
     )
   )
-);
-
-const feedUriArg = Args.text({ name: "uri" }).pipe(
-  Args.withDescription("Bluesky feed URI (at://...)")
 );
 
 const feedCommand = Command.make(

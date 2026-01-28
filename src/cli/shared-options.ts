@@ -1,4 +1,4 @@
-import { Options } from "@effect/cli";
+import { Args, Options } from "@effect/cli";
 import { Effect, Option } from "effect";
 import { StoreName } from "../domain/primitives.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
@@ -36,6 +36,11 @@ export const strictOption = Options.boolean("strict").pipe(
 export const maxErrorsOption = Options.integer("max-errors").pipe(
   Options.withDescription("Stop after exceeding N errors (default: unlimited)"),
   Options.optional
+);
+
+/** Positional arg for feed URI */
+export const feedUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withDescription("Bluesky feed URI (at://...)")
 );
 
 /** Validate --max-errors value is non-negative */

@@ -1,12 +1,4 @@
-import { ParseResult } from "effect";
-
-/** Format a Schema parse error (or arbitrary unknown) as a readable string. */
-export const formatSchemaError = (error: unknown) => {
-  if (ParseResult.isParseError(error)) {
-    return ParseResult.TreeFormatter.formatErrorSync(error);
-  }
-  return String(error);
-};
+export { formatSchemaError } from "../services/shared.js";
 
 /** Safely parse JSON, returning `undefined` on failure. */
 export const safeParseJson = (raw: string): unknown => {
