@@ -51,6 +51,7 @@ const testLayers = (storeRoot: string) => {
     Layer.provideMerge(appConfigLayer),
     Layer.provideMerge(managerLayer),
     Layer.provideMerge(indexLayer),
+    Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(lineageLayer),
     Layer.provideMerge(derivationValidatorLayer),
     Layer.provideMerge(eventLogLayer),

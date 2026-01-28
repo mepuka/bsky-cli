@@ -38,7 +38,7 @@ const filterJsonOption = Options.text("filter-json").pipe(
 );
 
 const modeOption = Options.choice("mode", ["event-time", "derive-time"]).pipe(
-  Options.withDescription("Filter evaluation mode"),
+  Options.withDescription("Filter evaluation mode (default: event-time)"),
   Options.withDefault("event-time" as const)
 );
 

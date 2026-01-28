@@ -43,7 +43,10 @@ const formatOption = Options.choice("format", [
   "ndjson",
   "markdown",
   "table"
-]).pipe(Options.optional, Options.withDescription("Output format"));
+]).pipe(
+  Options.optional,
+  Options.withDescription("Output format (default: config output format)")
+);
 const fieldsOption = Options.text("fields").pipe(
   Options.withDescription(
     "Comma-separated fields to include (supports dot notation and presets: @minimal, @social, @full)"

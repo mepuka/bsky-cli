@@ -22,25 +22,8 @@ const parseDurationText = (value: string) =>
     )
   );
 
-const parseDurationMillis = (value: number) =>
-  value < 0
-    ? Effect.fail(
-        CliInputError.make({
-          message: "Interval must be non-negative.",
-          cause: value
-        })
-      )
-    : Effect.succeed(Duration.millis(value));
-
-export const parseInterval = (
-  interval: Option.Option<string>,
-  intervalMs: Option.Option<number>
-) =>
+export const parseInterval = (interval: Option.Option<string>) =>
   Option.match(interval, {
     onSome: parseDurationText,
-    onNone: () =>
-      Option.match(intervalMs, {
-        onSome: parseDurationMillis,
-        onNone: () => Effect.succeed(Duration.seconds(30))
-      })
+    onNone: () => Effect.succeed(Duration.seconds(30))
   });

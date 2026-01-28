@@ -1,17 +1,18 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Context, Effect, Layer, Option, Stream } from "effect";
+import { Context, Effect, Layer, Option } from "effect";
 import { AppConfigService } from "./app-config.js";
 import { StoreManager } from "./store-manager.js";
 import { StoreIndex } from "./store-index.js";
+import { StoreDb } from "./store-db.js";
 import { LineageStore } from "./lineage-store.js";
 import { DerivationValidator } from "./derivation-validator.js";
 import { StoreEventLog } from "./store-event-log.js";
 import { SyncCheckpointStore } from "./sync-checkpoint-store.js";
 import { DataSource } from "../domain/sync.js";
-import { StoreName, type Handle, type Hashtag } from "../domain/primitives.js";
+import { StoreName, type StorePath } from "../domain/primitives.js";
 import { StoreRef } from "../domain/store.js";
 import type { StoreLineage } from "../domain/derivation.js";
-import type { StoreIndexError, StoreIoError } from "../domain/errors.js";
+import { StoreIoError, type StoreIndexError } from "../domain/errors.js";
 
 type StoreStatsResult = {
   readonly store: string;
@@ -44,36 +45,20 @@ type StoreSummaryResult = {
   readonly stores: ReadonlyArray<StoreSummaryEntry>;
 };
 
-type StatsState = {
-  posts: number;
-  authorCounts: Map<string, number>;
-  hashtagCounts: Map<string, number>;
-  dateMin?: string;
-  dateMax?: string;
-};
-
 const TOP_LIMIT = 5;
 
-const updateCount = (map: Map<string, number>, key: string) => {
-  map.set(key, (map.get(key) ?? 0) + 1);
-};
+const parseCount = (value: unknown) =>
+  typeof value === "number" ? value : Number(value ?? 0);
 
-const compareDate = (value: string, direction: "min" | "max", current?: string) => {
-  if (!current) return value;
-  return direction === "min"
-    ? value < current
-      ? value
-      : current
-    : value > current
-      ? value
-      : current;
+const toStoreIoError = (path: StorePath) => (cause: unknown) => {
+  if (typeof cause === "object" && cause !== null) {
+    const tagged = cause as { _tag?: string };
+    if (tagged._tag === "StoreIoError") {
+      return tagged as StoreIoError;
+    }
+  }
+  return StoreIoError.make({ path, cause });
 };
-
-const topKeys = (map: Map<string, number>) =>
-  [...map.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, TOP_LIMIT)
-    .map(([key]) => key);
 
 const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes}B`;
@@ -198,6 +183,7 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
       const validator = yield* DerivationValidator;
       const eventLog = yield* StoreEventLog;
       const checkpoints = yield* SyncCheckpointStore;
+      const storeDb = yield* StoreDb;
       const config = yield* AppConfigService;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -217,53 +203,57 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
               ? yield* resolveSyncStatus(store, eventLog, checkpoints)
               : undefined;
 
-          const initial: StatsState = {
-            posts: 0,
-            authorCounts: new Map<string, number>(),
-            hashtagCounts: new Map<string, number>()
-          };
+          const aggregate = yield* storeDb
+            .withClient(store, (client) =>
+              Effect.gen(function* () {
+                const rows = yield* client`SELECT
+                    COUNT(*) as posts,
+                    COUNT(DISTINCT author) as authors,
+                    MIN(created_date) as first,
+                    MAX(created_date) as last
+                  FROM posts`;
+                const row = rows[0] ?? {};
 
-          const state = yield* index
-            .entries(store)
-            .pipe(
-              Stream.runFoldEffect(initial, (state, entry) =>
-                Effect.gen(function* () {
-                  state.posts += 1;
-                  state.dateMin = compareDate(entry.createdDate, "min", state.dateMin);
-                  state.dateMax = compareDate(entry.createdDate, "max", state.dateMax);
+                const topAuthorRows = yield* client`SELECT author, COUNT(*) as count
+                  FROM posts
+                  WHERE author IS NOT NULL
+                  GROUP BY author
+                  ORDER BY count DESC
+                  LIMIT ${TOP_LIMIT}`;
+                const topHashtagRows = yield* client`SELECT tag, COUNT(*) as count
+                  FROM post_hashtag
+                  GROUP BY tag
+                  ORDER BY count DESC
+                  LIMIT ${TOP_LIMIT}`;
 
-                  let author = entry.author;
-                  if (!author) {
-                    const postOption = yield* index.getPost(store, entry.uri);
-                    if (Option.isSome(postOption)) {
-                      author = postOption.value.author as Handle;
-                    }
-                  }
-                  if (author) {
-                    updateCount(state.authorCounts, String(author));
-                  }
-
-                  for (const tag of entry.hashtags) {
-                    updateCount(state.hashtagCounts, String(tag as Hashtag));
-                  }
-
-                  return state;
-                })
-              )
-            );
+                return {
+                  posts: parseCount(row.posts),
+                  authors: parseCount(row.authors),
+                  first: typeof row.first === "string" ? row.first : undefined,
+                  last: typeof row.last === "string" ? row.last : undefined,
+                  topAuthors: topAuthorRows
+                    .map((entry) => entry.author)
+                    .filter((value): value is string => typeof value === "string"),
+                  hashtags: topHashtagRows
+                    .map((entry) => entry.tag)
+                    .filter((value): value is string => typeof value === "string")
+                };
+              })
+            )
+            .pipe(Effect.mapError(toStoreIoError(store.root)));
 
           const sizeBytes = yield* storeSize(store);
           const dateRange =
-            state.dateMin && state.dateMax
-              ? { first: state.dateMin, last: state.dateMax }
+            aggregate.first && aggregate.last
+              ? { first: aggregate.first, last: aggregate.last }
               : undefined;
 
           return {
             store: store.name,
-            posts: state.posts,
-            authors: state.authorCounts.size,
-            hashtags: topKeys(state.hashtagCounts),
-            topAuthors: topKeys(state.authorCounts),
+            posts: aggregate.posts,
+            authors: aggregate.authors,
+            hashtags: aggregate.hashtags,
+            topAuthors: aggregate.topAuthors,
             derived: isDerived(lineage),
             status,
             sizeBytes,

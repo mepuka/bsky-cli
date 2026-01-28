@@ -44,7 +44,7 @@ const filterNameOption = Options.text("filter").pipe(
   Options.optional
 );
 const treeFormatOption = Options.choice("format", ["tree", "table", "json"]).pipe(
-  Options.withDescription("Output format for store tree"),
+  Options.withDescription("Output format for store tree (default: tree)"),
   Options.optional
 );
 const treeAnsiOption = Options.boolean("ansi").pipe(

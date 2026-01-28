@@ -49,7 +49,7 @@ const sampleSizeOption = Options.integer("sample-size").pipe(
   Options.optional
 );
 const describeFormatOption = Options.choice("format", ["text", "json"]).pipe(
-  Options.withDescription("Output format for filter descriptions"),
+  Options.withDescription("Output format for filter descriptions (default: text)"),
   Options.optional
 );
 

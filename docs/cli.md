@@ -88,12 +88,12 @@ Notes:
 
 Repeated polling + streaming NDJSON results to stdout.
 
-- `watch timeline --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--interval-ms <ms>] [--quiet]`
-- `watch feed <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--interval-ms <ms>] [--quiet]`
-- `watch notifications --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--interval-ms <ms>] [--quiet]`
+- `watch timeline --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
+- `watch feed <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
+- `watch notifications --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
 - `watch jetstream --store <name> [--filter <dsl>] [--filter-json <json>] [--endpoint <url>] [--collections <csv>] [--dids <csv>] [--cursor <micros>] [--compress] [--max-message-size <bytes>] [--strict] [--max-errors <n>] [--quiet]`
 
-`--interval` accepts strings like "30 seconds" or "500 millis". Default is 30 seconds. `--interval-ms` is deprecated.
+`--interval` accepts strings like "30 seconds" or "500 millis". Default is 30 seconds.
 Watch commands also acquire an exclusive lock per store; concurrent watch/sync commands against the same store will fail with a "store busy" error.
 
 ### query

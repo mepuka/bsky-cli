@@ -32,11 +32,9 @@ const filterJsonOption = Options.text("filter-json").pipe(
   Options.optional
 );
 const intervalOption = Options.text("interval").pipe(
-  Options.withDescription("Polling interval (e.g. \"30 seconds\", \"500 millis\")"),
-  Options.optional
-);
-const intervalMsOption = Options.integer("interval-ms").pipe(
-  Options.withDescription("Polling interval in milliseconds (deprecated)"),
+  Options.withDescription(
+    "Polling interval (e.g. \"30 seconds\", \"500 millis\") (default: 30 seconds)"
+  ),
   Options.optional
 );
 const quietOption = Options.boolean("quiet").pipe(
@@ -76,10 +74,9 @@ const timelineCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
-    intervalMs: intervalMsOption,
     quiet: quietOption
   },
-  ({ store, filter, filterJson, interval, intervalMs, quiet }) =>
+  ({ store, filter, filterJson, interval, quiet }) =>
     Effect.gen(function* () {
       const storeLock = yield* StoreLock;
       const sync = yield* SyncEngine;
@@ -87,7 +84,7 @@ const timelineCommand = Command.make(
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter, filterJson);
-      const parsedInterval = yield* parseInterval(interval, intervalMs);
+      const parsedInterval = yield* parseInterval(interval);
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
@@ -134,10 +131,9 @@ const feedCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
-    intervalMs: intervalMsOption,
     quiet: quietOption
   },
-  ({ uri, store, filter, filterJson, interval, intervalMs, quiet }) =>
+  ({ uri, store, filter, filterJson, interval, quiet }) =>
     Effect.gen(function* () {
       const storeLock = yield* StoreLock;
       const sync = yield* SyncEngine;
@@ -145,7 +141,7 @@ const feedCommand = Command.make(
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter, filterJson);
-      const parsedInterval = yield* parseInterval(interval, intervalMs);
+      const parsedInterval = yield* parseInterval(interval);
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
@@ -186,10 +182,9 @@ const notificationsCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
-    intervalMs: intervalMsOption,
     quiet: quietOption
   },
-  ({ store, filter, filterJson, interval, intervalMs, quiet }) =>
+  ({ store, filter, filterJson, interval, quiet }) =>
     Effect.gen(function* () {
       const storeLock = yield* StoreLock;
       const sync = yield* SyncEngine;
@@ -197,7 +192,7 @@ const notificationsCommand = Command.make(
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilter(filter, filterJson);
-      const parsedInterval = yield* parseInterval(interval, intervalMs);
+      const parsedInterval = yield* parseInterval(interval);
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
