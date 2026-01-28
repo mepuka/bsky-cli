@@ -1,4 +1,5 @@
-const hashtagRegex = /#[a-zA-Z0-9_]+/g;
+const hashtagRegex =
+  /#[\p{L}\p{M}\p{Pc}\p{Po}\p{Pd}\p{S}\p{Extended_Pictographic}][\p{L}\p{M}\p{N}\p{Pc}\p{Po}\p{Pd}\p{S}\p{Extended_Pictographic}]*/gu;
 const mentionRegex = /@([a-z0-9][a-z0-9.-]{1,63})/gi;
 const urlRegex = /https?:\/\/[^\s)]+/g;
 

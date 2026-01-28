@@ -6,8 +6,12 @@ export const Handle = Schema.String.pipe(
 );
 export type Handle = typeof Handle.Type;
 
+// Bluesky's lexicon only requires: maxLength 640 bytes, maxGraphemes 64
+// The extraction regex is stricter, but facets can contain anything
+// We accept whatever Bluesky sends to avoid losing posts
+// Require at least one non-whitespace character after #
 export const Hashtag = Schema.String.pipe(
-  Schema.pattern(/^#[a-zA-Z0-9_]+$/),
+  Schema.pattern(/^#\S.*$/u),
   Schema.brand("Hashtag")
 );
 export type Hashtag = typeof Hashtag.Type;

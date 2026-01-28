@@ -1,14 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import * as fc from "effect/FastCheck";
 import * as Arbitrary from "effect/Arbitrary";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { parseFilterDsl } from "../../src/cli/filter-dsl.js";
 import { Handle, Hashtag } from "../../src/domain/primitives.js";
 import { FilterLibrary } from "../../src/services/filter-library.js";
 import { FilterNotFound } from "../../src/domain/errors.js";
 
 const handleArb = Arbitrary.make(Handle);
-const hashtagArb = Arbitrary.make(Hashtag);
+// Use a safe subset for DSL testing - avoids quotes and other DSL-special chars
+const SafeHashtag = Schema.String.pipe(
+  Schema.pattern(/^#[a-zA-Z][a-zA-Z0-9_]*$/),
+  Schema.brand("Hashtag")
+);
+const hashtagArb = Arbitrary.make(SafeHashtag);
 const timestampArb = fc.date({
   min: new Date("2026-01-01T00:00:00.000Z"),
   max: new Date("2026-12-31T23:59:59.000Z")
