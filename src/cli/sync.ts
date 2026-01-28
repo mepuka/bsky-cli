@@ -2,11 +2,9 @@ import { Args, Command, Options } from "@effect/cli";
 import { Duration, Effect, Layer, Option } from "effect";
 import { Jetstream } from "effect-jetstream";
 import { filterExprSignature } from "../domain/filter.js";
-import { StoreName } from "../domain/primitives.js";
 import { DataSource, SyncResult } from "../domain/sync.js";
 import { SyncEngine } from "../services/sync-engine.js";
 import { JetstreamSyncEngine } from "../services/jetstream-sync.js";
-import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJson } from "./output.js";
 import { storeOptions } from "./store.js";
@@ -18,22 +16,16 @@ import { StoreLock } from "../services/store-lock.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { CliInputError } from "./errors.js";
+import {
+  storeNameOption,
+  filterOption,
+  filterJsonOption,
+  quietOption,
+  strictOption,
+  maxErrorsOption,
+  parseMaxErrors
+} from "./shared-options.js";
 
-const storeNameOption = Options.text("store").pipe(
-  Options.withSchema(StoreName),
-  Options.withDescription("Store name to write into")
-);
-const filterOption = Options.text("filter").pipe(
-  Options.withDescription(filterDslDescription()),
-  Options.optional
-);
-const filterJsonOption = Options.text("filter-json").pipe(
-  Options.withDescription(filterJsonDescription()),
-  Options.optional
-);
-const quietOption = Options.boolean("quiet").pipe(
-  Options.withDescription("Suppress progress output")
-);
 const limitOption = Options.integer("limit").pipe(
   Options.withDescription("Maximum number of Jetstream events to process"),
   Options.optional
@@ -42,18 +34,6 @@ const durationOption = Options.text("duration").pipe(
   Options.withDescription("Stop after a duration (e.g. \"2 minutes\")"),
   Options.optional
 );
-const strictOption = Options.boolean("strict").pipe(
-  Options.withDescription("Stop on first error and do not advance the checkpoint")
-);
-const maxErrorsOption = Options.integer("max-errors").pipe(
-  Options.withDescription("Stop after exceeding N errors (default: unlimited)"),
-  Options.optional
-);
-
-const parseFilter = (
-  filter: Option.Option<string>,
-  filterJson: Option.Option<string>
-) => parseFilterExpr(filter, filterJson);
 
 const parseLimit = (limit: Option.Option<number>) =>
   Option.match(limit, {
@@ -94,20 +74,6 @@ const parseDuration = (value: Option.Option<string>) =>
       )
   });
 
-const parseMaxErrors = (maxErrors: Option.Option<number>) =>
-  Option.match(maxErrors, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (value) =>
-      value < 0
-        ? Effect.fail(
-            CliInputError.make({
-              message: "max-errors must be a non-negative integer.",
-              cause: value
-            })
-          )
-        : Effect.succeed(Option.some(value))
-  });
-
 const timelineCommand = Command.make(
   "timeline",
   { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption },
@@ -119,7 +85,7 @@ const timelineCommand = Command.make(
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
       const storeRef = yield* storeOptions.loadStoreRef(store);
-      const expr = yield* parseFilter(filter, filterJson);
+      const expr = yield* parseFilterExpr(filter, filterJson);
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
@@ -169,7 +135,7 @@ const feedCommand = Command.make(
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
       const storeRef = yield* storeOptions.loadStoreRef(store);
-      const expr = yield* parseFilter(filter, filterJson);
+      const expr = yield* parseFilterExpr(filter, filterJson);
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
@@ -214,7 +180,7 @@ const notificationsCommand = Command.make(
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
       const storeRef = yield* storeOptions.loadStoreRef(store);
-      const expr = yield* parseFilter(filter, filterJson);
+      const expr = yield* parseFilterExpr(filter, filterJson);
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
@@ -286,7 +252,7 @@ const jetstreamCommand = Command.make(
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
       const storeRef = yield* storeOptions.loadStoreRef(store);
-      const expr = yield* parseFilter(filter, filterJson);
+      const expr = yield* parseFilterExpr(filter, filterJson);
       const filterHash = filterExprSignature(expr);
       const selection = yield* buildJetstreamSelection(
         {

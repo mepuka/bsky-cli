@@ -12,27 +12,19 @@ import { FilterRuntime } from "../services/filter-runtime.js";
 import { PostParser } from "../services/post-parser.js";
 import { StoreIndex } from "../services/store-index.js";
 import { parseFilterExpr } from "./filter-input.js";
-import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { decodeJson } from "./parse.js";
 import { writeJson, writeText } from "./output.js";
 import { CliInputError, CliJsonError } from "./errors.js";
 import { storeOptions } from "./store.js";
 import { describeFilter, renderFilterDescription } from "../domain/filter-describe.js";
 import { withExamples } from "./help.js";
+import { filterOption, filterJsonOption } from "./shared-options.js";
 
 const filterNameArg = Args.text({ name: "name" }).pipe(
   Args.withSchema(StoreName),
   Args.withDescription("Filter name")
 );
 
-const filterOption = Options.text("filter").pipe(
-  Options.withDescription(filterDslDescription()),
-  Options.optional
-);
-const filterJsonOption = Options.text("filter-json").pipe(
-  Options.withDescription(filterJsonDescription()),
-  Options.optional
-);
 const postJsonOption = Options.text("post-json").pipe(
   Options.withDescription("Raw post JSON (app.bsky.feed.getPosts result)."),
   Options.optional

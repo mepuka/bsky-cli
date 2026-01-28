@@ -7,7 +7,7 @@ import { DerivationEngine } from "../services/derivation-engine.js";
 import { StoreManager } from "../services/store-manager.js";
 import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
 import { OutputManager } from "../services/output-manager.js";
-import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
+import { filterJsonDescription } from "./filter-help.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { writeJson } from "./output.js";
 import { storeOptions } from "./store.js";
@@ -16,6 +16,7 @@ import { logInfo } from "./logging.js";
 import type { FilterEvaluationMode } from "../domain/derivation.js";
 import { CliPreferences } from "./preferences.js";
 import { withExamples } from "./help.js";
+import { filterOption } from "./shared-options.js";
 
 const sourceArg = Args.text({ name: "source" }).pipe(
   Args.withSchema(StoreName),
@@ -26,10 +27,6 @@ const targetArg = Args.text({ name: "target" }).pipe(
   Args.withDescription("Target (derived) store name")
 );
 
-const filterOption = Options.text("filter").pipe(
-  Options.withDescription(filterDslDescription()),
-  Options.optional
-);
 const filterJsonOption = Options.text("filter-json").pipe(
   Options.withDescription(
     filterJsonDescription("EventTime mode supports pure filters only.")

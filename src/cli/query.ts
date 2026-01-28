@@ -8,7 +8,6 @@ import { FilterRuntime } from "../services/filter-runtime.js";
 import { AppConfigService } from "../services/app-config.js";
 import { StoreIndex } from "../services/store-index.js";
 import { renderPostsMarkdown, renderPostsTable } from "./format.js";
-import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { parseRange } from "./range.js";
@@ -17,6 +16,7 @@ import { CliPreferences } from "./preferences.js";
 import { projectFields, resolveFieldSelectors } from "./query-fields.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
+import { filterOption, filterJsonOption } from "./shared-options.js";
 
 const storeNameArg = Args.text({ name: "store" }).pipe(
   Args.withSchema(StoreName),
@@ -24,14 +24,6 @@ const storeNameArg = Args.text({ name: "store" }).pipe(
 );
 const rangeOption = Options.text("range").pipe(
   Options.withDescription("ISO range as <start>..<end>"),
-  Options.optional
-);
-const filterOption = Options.text("filter").pipe(
-  Options.withDescription(filterDslDescription()),
-  Options.optional
-);
-const filterJsonOption = Options.text("filter-json").pipe(
-  Options.withDescription(filterJsonDescription()),
   Options.optional
 );
 const limitOption = Options.integer("limit").pipe(
@@ -53,11 +45,6 @@ const fieldsOption = Options.text("fields").pipe(
   ),
   Options.optional
 );
-
-const parseFilter = (
-  filter: Option.Option<string>,
-  filterJson: Option.Option<string>
-) => parseOptionalFilterExpr(filter, filterJson);
 
 const parseRangeOption = (range: Option.Option<string>) =>
   Option.match(range, {
@@ -85,7 +72,7 @@ export const queryCommand = Command.make(
       const preferences = yield* CliPreferences;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const parsedRange = yield* parseRangeOption(range);
-      const parsedFilter = yield* parseFilter(filter, filterJson);
+      const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
       const expr = Option.getOrElse(parsedFilter, () => all());
       const outputFormat = Option.getOrElse(format, () => appConfig.outputFormat);
       const compact = preferences.compact;
