@@ -43,6 +43,7 @@ describe("BskyClient", () => {
     const posts = await Effect.runPromise(program);
     expect(posts.length).toBe(2);
     expect(String(posts[0]?.author)).toBe("alice.bsky");
+    expect(String(posts[0]?.authorProfile?.handle)).toBe("alice.bsky");
   });
 
   test("fetches feed and notifications", async () => {

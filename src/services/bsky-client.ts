@@ -542,11 +542,13 @@ const withCursor = <T extends Record<string, unknown>>(
 const toRawPost = (post: PostView, feed?: FeedContext) =>
   Effect.gen(function* () {
     const embed = yield* mapEmbedView(post.embed);
+    const authorProfile = yield* decodeProfileBasic(post.author);
     const raw = {
       uri: post.uri,
       cid: post.cid,
       author: post.author.handle,
       authorDid: post.author.did,
+      authorProfile,
       record: post.record,
       indexedAt: post.indexedAt,
       labels: post.labels,
