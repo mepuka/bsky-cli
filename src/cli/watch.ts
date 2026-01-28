@@ -2,11 +2,9 @@ import { Args, Command, Options } from "@effect/cli";
 import { Effect, Layer, Option, Stream } from "effect";
 import { Jetstream } from "effect-jetstream";
 import { filterExprSignature } from "../domain/filter.js";
-import { DataSource, WatchConfig } from "../domain/sync.js";
-import { SyncEngine } from "../services/sync-engine.js";
+import { DataSource } from "../domain/sync.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { JetstreamSyncEngine } from "../services/jetstream-sync.js";
-import { parseInterval } from "./interval.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJsonStream } from "./output.js";
 import { storeOptions } from "./store.js";
@@ -15,6 +13,7 @@ import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { StoreLock } from "../services/store-lock.js";
+import { makeWatchCommandBody } from "./sync-factory.js";
 import {
   storeNameOption,
   filterOption,
@@ -41,36 +40,7 @@ const timelineCommand = Command.make(
     interval: intervalOption,
     quiet: quietOption
   },
-  ({ store, filter, filterJson, interval, quiet }) =>
-    Effect.gen(function* () {
-      const storeLock = yield* StoreLock;
-      const sync = yield* SyncEngine;
-      const monitor = yield* ResourceMonitor;
-      const output = yield* CliOutput;
-      const storeRef = yield* storeOptions.loadStoreRef(store);
-      const expr = yield* parseFilterExpr(filter, filterJson);
-      const parsedInterval = yield* parseInterval(interval);
-      return yield* storeLock.withStoreLock(
-        storeRef,
-        Effect.gen(function* () {
-          yield* logInfo("Starting watch", { source: "timeline", store: storeRef.name });
-          const stream = sync
-            .watch(
-              WatchConfig.make({
-                source: DataSource.timeline(),
-                store: storeRef,
-                filter: expr,
-                interval: parsedInterval
-              })
-            )
-            .pipe(
-              Stream.map((event) => event.result),
-              Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-            );
-          yield* writeJsonStream(stream);
-        })
-      );
-    })
+  makeWatchCommandBody("timeline", () => DataSource.timeline())
 ).pipe(
   Command.withDescription(
     withExamples(
@@ -98,36 +68,7 @@ const feedCommand = Command.make(
     interval: intervalOption,
     quiet: quietOption
   },
-  ({ uri, store, filter, filterJson, interval, quiet }) =>
-    Effect.gen(function* () {
-      const storeLock = yield* StoreLock;
-      const sync = yield* SyncEngine;
-      const monitor = yield* ResourceMonitor;
-      const output = yield* CliOutput;
-      const storeRef = yield* storeOptions.loadStoreRef(store);
-      const expr = yield* parseFilterExpr(filter, filterJson);
-      const parsedInterval = yield* parseInterval(interval);
-      return yield* storeLock.withStoreLock(
-        storeRef,
-        Effect.gen(function* () {
-          yield* logInfo("Starting watch", { source: "feed", uri, store: storeRef.name });
-          const stream = sync
-            .watch(
-              WatchConfig.make({
-                source: DataSource.feed(uri),
-                store: storeRef,
-                filter: expr,
-                interval: parsedInterval
-              })
-            )
-            .pipe(
-              Stream.map((event) => event.result),
-              Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-            );
-          yield* writeJsonStream(stream);
-        })
-      );
-    })
+  ({ uri, ...rest }) => makeWatchCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
 ).pipe(
   Command.withDescription(
     withExamples(
@@ -149,36 +90,7 @@ const notificationsCommand = Command.make(
     interval: intervalOption,
     quiet: quietOption
   },
-  ({ store, filter, filterJson, interval, quiet }) =>
-    Effect.gen(function* () {
-      const storeLock = yield* StoreLock;
-      const sync = yield* SyncEngine;
-      const monitor = yield* ResourceMonitor;
-      const output = yield* CliOutput;
-      const storeRef = yield* storeOptions.loadStoreRef(store);
-      const expr = yield* parseFilterExpr(filter, filterJson);
-      const parsedInterval = yield* parseInterval(interval);
-      return yield* storeLock.withStoreLock(
-        storeRef,
-        Effect.gen(function* () {
-          yield* logInfo("Starting watch", { source: "notifications", store: storeRef.name });
-          const stream = sync
-            .watch(
-              WatchConfig.make({
-                source: DataSource.notifications(),
-                store: storeRef,
-                filter: expr,
-                interval: parsedInterval
-              })
-            )
-            .pipe(
-              Stream.map((event) => event.result),
-              Stream.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-            );
-          yield* writeJsonStream(stream);
-        })
-      );
-    })
+  makeWatchCommandBody("notifications", () => DataSource.notifications())
 ).pipe(
   Command.withDescription(
     withExamples(
