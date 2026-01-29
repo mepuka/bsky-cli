@@ -187,9 +187,11 @@ const buildPushdown = (expr: FilterExpr | undefined): PushdownExpr => {
     case "HasVideo":
       return { _tag: "HasVideo" };
     case "Language":
-      return expr.langs.length === 0
-        ? pushdownFalse
-        : { _tag: "Language", langs: Array.from(new Set(expr.langs)) };
+      if (expr.langs.length === 0) {
+        return pushdownFalse;
+      }
+      const langs = normalizeLangs(expr.langs);
+      return langs.length === 0 ? pushdownFalse : { _tag: "Language", langs };
     case "Engagement":
       return {
         _tag: "Engagement",
@@ -209,6 +211,13 @@ const buildPushdown = (expr: FilterExpr | undefined): PushdownExpr => {
 };
 
 const isAscii = (value: string) => /^[\x00-\x7F]*$/.test(value);
+
+const normalizeLangs = (langs: ReadonlyArray<string>) =>
+  Array.from(
+    new Set(
+      langs.map((lang) => lang.trim().toLowerCase()).filter((lang) => lang.length > 0)
+    )
+  );
 
 const pushdownToSql = (
   sql: SqlClient.SqlClient,
@@ -255,7 +264,16 @@ const pushdownToSql = (
     case "Language":
       return expr.langs.length === 0
         ? sql`1=0`
-        : sql`p.lang IN ${sql.in(expr.langs)}`;
+        : sql`(
+            EXISTS (
+              SELECT 1 FROM post_lang l
+              WHERE l.uri = p.uri AND l.lang IN ${sql.in(expr.langs)}
+            )
+            OR (
+              p.lang IS NOT NULL
+              AND lower(p.lang) IN ${sql.in(expr.langs)}
+            )
+          )`;
     case "Engagement": {
       const clauses: Array<Fragment> = [];
       if (expr.minLikes !== undefined) {
@@ -592,6 +610,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
           client.withTransaction(
             Effect.gen(function* () {
               yield* client`DELETE FROM post_hashtag`;
+              yield* client`DELETE FROM post_lang`;
               yield* client`DELETE FROM posts`;
               yield* client`DELETE FROM index_checkpoints`;
             })

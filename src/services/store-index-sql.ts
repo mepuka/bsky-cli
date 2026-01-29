@@ -69,6 +69,15 @@ const hasVideo = (post: Post) => {
 const hasMedia = (post: Post) =>
   hasImages(post) || hasVideo(post) || hasExternalLink(post);
 
+const normalizeLangs = (langs: ReadonlyArray<string> | undefined) =>
+  Array.from(
+    new Set(
+      (langs ?? [])
+        .map((lang) => lang.trim().toLowerCase())
+        .filter((lang) => lang.length > 0)
+    )
+  );
+
 const isRepost = (post: Post) => {
   const reason = post.feed?.reason;
   if (!reason || typeof reason !== "object") {
@@ -93,7 +102,8 @@ export const upsertPost = (
     const createdAt = toIso(post.createdAt);
     const createdDate = createdAt.slice(0, 10);
     const postJson = yield* encodePostJson(post);
-    const lang = post.langs?.[0];
+    const normalizedLangs = normalizeLangs(post.langs);
+    const lang = normalizedLangs[0];
     const isReply = Boolean(post.reply);
     const quote = isQuote(post);
     const repost = isRepost(post);
@@ -173,6 +183,12 @@ export const upsertPost = (
       const rows = tags.map((tag) => ({ uri: post.uri, tag }));
       yield* sql`INSERT INTO post_hashtag ${sql.insert(rows)}`;
     }
+
+    yield* sql`DELETE FROM post_lang WHERE uri = ${post.uri}`;
+    if (normalizedLangs.length > 0) {
+      const rows = normalizedLangs.map((lang) => ({ uri: post.uri, lang }));
+      yield* sql`INSERT INTO post_lang ${sql.insert(rows)}`;
+    }
   });
 
 export const insertPostIfMissing = (
@@ -183,7 +199,8 @@ export const insertPostIfMissing = (
     const createdAt = toIso(post.createdAt);
     const createdDate = createdAt.slice(0, 10);
     const postJson = yield* encodePostJson(post);
-    const lang = post.langs?.[0];
+    const normalizedLangs = normalizeLangs(post.langs);
+    const lang = normalizedLangs[0];
     const isReply = Boolean(post.reply);
     const quote = isQuote(post);
     const repost = isRepost(post);
@@ -248,6 +265,11 @@ export const insertPostIfMissing = (
     if (tags.length > 0) {
       const tagRows = tags.map((tag) => ({ uri: post.uri, tag }));
       yield* sql`INSERT INTO post_hashtag ${sql.insert(tagRows)}`;
+    }
+
+    if (normalizedLangs.length > 0) {
+      const langRows = normalizedLangs.map((lang) => ({ uri: post.uri, lang }));
+      yield* sql`INSERT INTO post_lang ${sql.insert(langRows)}`;
     }
 
     return true;
