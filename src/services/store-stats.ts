@@ -1,3 +1,41 @@
+/**
+ * Store Statistics Service
+ *
+ * Calculates and reports statistics for data stores.
+ * Provides detailed metrics including post counts, author counts, date ranges,
+ * top hashtags/authors, and store status (source vs derived, stale vs current).
+ *
+ * This service is used by the `skygent store stats` command to display
+ * information about stores to users. It aggregates data from multiple sources:
+ * - SQLite database for post/author counts and top items
+ * - Store lineage for derivation information
+ * - Store index for counts
+ * - Checkpoint store for sync status
+ *
+ * @module services/store-stats
+ * @example
+ * ```ts
+ * import { Effect } from "effect";
+ * import { StoreStats } from "./services/store-stats.js";
+ * import { StoreRef } from "./domain/store.js";
+ *
+ * const program = Effect.gen(function* () {
+ *   const stats = yield* StoreStats;
+ *
+ *   // Get detailed stats for a specific store
+ *   const storeStats = yield* stats.stats(StoreRef.make({
+ *     name: "my-store",
+ *     root: "my-store"
+ *   }));
+ *   console.log(`Posts: ${storeStats.posts}, Authors: ${storeStats.authors}`);
+ *
+ *   // Get summary of all stores
+ *   const summary = yield* stats.summary();
+ *   console.log(`Total stores: ${summary.total}, Total posts: ${summary.totalPosts}`);
+ * });
+ * ```
+ */
+
 import { FileSystem, Path } from "@effect/platform";
 import { directorySize } from "./shared.js";
 import { Context, Effect, Layer, Option } from "effect";
@@ -15,42 +53,87 @@ import { StoreRef } from "../domain/store.js";
 import type { StoreLineage } from "../domain/derivation.js";
 import { StoreIoError, type StoreIndexError } from "../domain/errors.js";
 
+/**
+ * Detailed statistics for a single store.
+ * Includes post counts, author counts, date ranges, top items, and status.
+ */
 type StoreStatsResult = {
+  /** Store name */
   readonly store: string;
+  /** Total number of posts in the store */
   readonly posts: number;
+  /** Number of unique authors in the store */
   readonly authors: number;
+  /** Date range of posts (first and last post dates) */
   readonly dateRange?: { readonly first: string; readonly last: string };
+  /** Top hashtags in the store (up to TOP_LIMIT) */
   readonly hashtags: ReadonlyArray<string>;
+  /** Top authors by post count (up to TOP_LIMIT) */
   readonly topAuthors: ReadonlyArray<string>;
+  /** Whether this is a derived store (vs source store) */
   readonly derived: boolean;
+  /** Store status: source (not derived), ready (derived and current), stale (derived and outdated), or unknown */
   readonly status: "source" | "ready" | "stale" | "unknown";
+  /** Sync status for source stores: current, stale, unknown, or empty */
   readonly syncStatus?: "current" | "stale" | "unknown" | "empty";
+  /** Total size of the store directory in bytes */
   readonly sizeBytes: number;
 };
 
+/**
+ * Summary entry for a single store in the overall summary.
+ */
 type StoreSummaryEntry = {
+  /** Store name */
   readonly name: string;
+  /** Number of posts in the store */
   readonly posts: number;
+  /** Store status */
   readonly status: "source" | "ready" | "stale" | "unknown";
+  /** Source store name (for single-source derived stores) */
   readonly source?: string;
+  /** Source store names (for multi-source derived stores) */
   readonly sources?: ReadonlyArray<string>;
 };
 
+/**
+ * Summary statistics across all stores.
+ */
 type StoreSummaryResult = {
+  /** Total number of stores */
   readonly total: number;
+  /** Number of source stores */
   readonly sources: number;
+  /** Number of derived stores */
   readonly derived: number;
+  /** Total posts across all stores */
   readonly totalPosts: number;
+  /** Total size of all stores in bytes */
   readonly totalSizeBytes: number;
+  /** Human-readable total size (e.g., "1.5MB") */
   readonly totalSize: string;
+  /** Individual store summaries */
   readonly stores: ReadonlyArray<StoreSummaryEntry>;
 };
 
+/** Number of top items (hashtags/authors) to include in stats */
 const TOP_LIMIT = 5;
 
+/**
+ * Parses a count value from database results.
+ * Handles null/undefined by returning 0.
+ * @param value - The value to parse as a count
+ * @returns The parsed number
+ */
 const parseCount = (value: unknown) =>
   typeof value === "number" ? value : Number(value ?? 0);
 
+/**
+ * Converts an unknown error to a StoreIoError.
+ * Preserves existing StoreIoError instances.
+ * @param path - Store path for the error context
+ * @returns A function that converts causes to StoreIoError
+ */
 const toStoreIoError = (path: StorePath) => (cause: unknown) => {
   if (typeof cause === "object" && cause !== null) {
     const tagged = cause as { _tag?: string };
@@ -61,6 +144,17 @@ const toStoreIoError = (path: StorePath) => (cause: unknown) => {
   return StoreIoError.make({ path, cause });
 };
 
+/**
+ * Formats a byte count as a human-readable string.
+ * Uses appropriate units (B, KB, MB, GB, TB) and rounds to reasonable precision.
+ * @param bytes - Number of bytes to format
+ * @returns Human-readable size string (e.g., "1.5MB", "1024B")
+ * @example
+ * ```ts
+ * formatBytes(1024) // "1KB"
+ * formatBytes(1536000) // "1.5MB"
+ * ```
+ */
 const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes}B`;
   const units = ["KB", "MB", "GB", "TB"];
@@ -75,10 +169,19 @@ const formatBytes = (bytes: number) => {
   return `${rounded}${unit}`;
 };
 
-
+/**
+ * Checks if a store is derived based on its lineage.
+ * @param lineage - Optional store lineage information
+ * @returns True if the store is derived from other stores
+ */
 const isDerived = (lineage: Option.Option<StoreLineage>) =>
   Option.isSome(lineage) && lineage.value.isDerived;
 
+/**
+ * Extracts source store names from lineage information.
+ * @param lineage - Optional store lineage information
+ * @returns Array of source store names, empty if no lineage or not derived
+ */
 const lineageSources = (lineage: Option.Option<StoreLineage>) =>
   Option.match(lineage, {
     onNone: () => [] as ReadonlyArray<string>,
@@ -89,6 +192,18 @@ type DerivationValidatorService = Context.Tag.Service<typeof DerivationValidator
 type StoreEventLogService = Context.Tag.Service<typeof StoreEventLog>;
 type SyncCheckpointStoreService = Context.Tag.Service<typeof SyncCheckpointStore>;
 
+/**
+ * Resolves the derivation status of a store.
+ * - "source": Not a derived store
+ * - "ready": Derived and all sources are current
+ * - "stale": Derived and at least one source is stale
+ * - "unknown": Derived but no source information available
+ *
+ * @param store - Name of the store to check
+ * @param lineage - Optional lineage information for the store
+ * @param validator - DerivationValidator service for checking staleness
+ * @returns An Effect that resolves to the derivation status
+ */
 const resolveDerivedStatus = (
   store: StoreName,
   lineage: Option.Option<StoreLineage>,
@@ -110,6 +225,18 @@ const resolveDerivedStatus = (
     return staleFlags.some(Boolean) ? ("stale" as const) : ("ready" as const);
   });
 
+/**
+ * Resolves the sync status of a source store.
+ * - "current": Last event ID matches the latest checkpoint
+ * - "stale": Checkpoints exist but don't match current event ID
+ * - "unknown": No checkpoints available
+ * - "empty": No events in the event log
+ *
+ * @param storeRef - Reference to the store to check
+ * @param eventLog - StoreEventLog service for accessing event log
+ * @param checkpoints - SyncCheckpointStore service for accessing checkpoints
+ * @returns An Effect that resolves to the sync status
+ */
 const resolveSyncStatus = (
   storeRef: StoreRef,
   eventLog: StoreEventLogService,
@@ -141,15 +268,90 @@ const resolveSyncStatus = (
       : ("stale" as const);
   });
 
+/**
+ * Effect Context Tag for the Store Statistics service.
+ * Calculates detailed statistics and summaries for data stores.
+ *
+ * This service provides:
+ * - Per-store statistics (posts, authors, date ranges, top hashtags/authors, status)
+ * - Overall summary across all stores
+ * - Derivation status tracking (stale vs current derived stores)
+ * - Sync status for source stores
+ * - Store size calculations
+ *
+ * @example
+ * ```ts
+ * // Use in an Effect program
+ * const program = Effect.gen(function* () {
+ *   const storeStats = yield* StoreStats;
+ *
+ *   // Get stats for a specific store
+ *   const stats = yield* storeStats.stats(StoreRef.make({
+ *     name: "tech-posts",
+ *     root: "tech-posts"
+ *   }));
+ *   console.log(`Store has ${stats.posts} posts from ${stats.authors} authors`);
+ *   console.log(`Status: ${stats.status}, Sync: ${stats.syncStatus}`);
+ *   console.log(`Top hashtags: ${stats.hashtags.join(", ")}`);
+ *
+ *   // Get summary of all stores
+ *   const summary = yield* storeStats.summary();
+ *   console.log(`Total: ${summary.total} stores, ${summary.totalPosts} posts`);
+ * });
+ *
+ * // Provide the layer
+ * const runnable = program.pipe(Effect.provide(StoreStats.layer));
+ * ```
+ */
 export class StoreStats extends Context.Tag("@skygent/StoreStats")<
   StoreStats,
   {
+    /**
+     * Calculates detailed statistics for a single store.
+     * Includes post counts, author counts, date ranges, top hashtags/authors,
+     * derivation status, sync status, and store size.
+     *
+     * @param store - Reference to the store to analyze
+     * @returns An Effect that resolves to detailed store statistics
+     * @throws {StoreIndexError} If accessing store index fails
+     * @throws {StoreIoError} If database operations fail
+     * @example
+     * ```ts
+     * const stats = yield* storeStats.stats(StoreRef.make({ name: "my-store", root: "my-store" }));
+     * console.log(`${stats.posts} posts, ${stats.authors} authors`);
+     * console.log(`Derived: ${stats.derived}, Status: ${stats.status}`);
+     * ```
+     */
     readonly stats: (
       store: StoreRef
     ) => Effect.Effect<StoreStatsResult, StoreIndexError | StoreIoError>;
+
+    /**
+     * Calculates a summary across all stores.
+     * Provides aggregate statistics including total counts, sizes, and per-store summaries.
+     *
+     * @returns An Effect that resolves to a summary of all stores
+     * @throws {StoreIndexError} If accessing store index fails
+     * @throws {StoreIoError} If database operations fail
+     * @example
+     * ```ts
+     * const summary = yield* storeStats.summary();
+     * console.log(`${summary.total} stores (${summary.sources} source, ${summary.derived} derived)`);
+     * console.log(`${summary.totalPosts} total posts, ${summary.totalSize} storage used`);
+     * ```
+     */
     readonly summary: () => Effect.Effect<StoreSummaryResult, StoreIndexError | StoreIoError>;
   }
 >() {
+  /**
+   * Production layer that provides the StoreStats service.
+   * Requires multiple services to be provided: StoreIndex, StoreManager,
+   * LineageStore, DerivationValidator, StoreEventLog, SyncCheckpointStore,
+   * StoreDb, AppConfigService, FileSystem, and Path.
+   *
+   * The implementation queries SQLite databases for statistics and aggregates
+   * information from various sources to provide comprehensive store metrics.
+   */
   static readonly layer = Layer.effect(
     StoreStats,
     Effect.gen(function* () {
@@ -164,11 +366,21 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
 
+      /**
+       * Calculates the total size of a store directory in bytes.
+       * Returns 0 if size calculation fails.
+       * @param store - Store reference to measure
+       * @returns An Effect that resolves to the size in bytes
+       */
       const storeSize = (store: StoreRef) => {
         const storePath = path.join(config.storeRoot, store.root);
         return directorySize(fs, path, storePath).pipe(Effect.orElseSucceed(() => 0));
       };
 
+      /**
+       * Computes detailed statistics for a store.
+       * Aggregates data from lineage, checkpoints, event log, and SQLite database.
+       */
       const computeStats = Effect.fn("StoreStats.stats")((store: StoreRef) =>
         Effect.gen(function* () {
           const lineage = yield* lineageStore.get(store.name);
@@ -178,11 +390,14 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
               ? yield* resolveSyncStatus(store, eventLog, checkpoints)
               : undefined;
 
+          // Ensure store is indexed before querying
           yield* index.count(store);
 
+          // Query SQLite for post statistics, author counts, date ranges, and top items
           const aggregate = yield* storeDb
             .withClient(store, (client) =>
               Effect.gen(function* () {
+                // Get basic counts and date range
                 const rows = yield* client`SELECT
                     COUNT(*) as posts,
                     COUNT(DISTINCT author) as authors,
@@ -191,12 +406,15 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
                   FROM posts`;
                 const row = rows[0] ?? {};
 
+                // Get top authors by post count
                 const topAuthorRows = yield* client`SELECT author, COUNT(*) as count
                   FROM posts
                   WHERE author IS NOT NULL
                   GROUP BY author
                   ORDER BY count DESC
                   LIMIT ${TOP_LIMIT}`;
+
+                // Get top hashtags by usage
                 const topHashtagRows = yield* client`SELECT tag, COUNT(*) as count
                   FROM post_hashtag
                   GROUP BY tag
@@ -240,9 +458,16 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
         })
       );
 
+      /**
+       * Computes a summary across all stores.
+       * Aggregates per-store information into overall statistics.
+       */
       const summary = Effect.fn("StoreStats.summary")(() =>
         Effect.gen(function* () {
+          // Get list of all stores
           const stores = yield* manager.listStores();
+
+          // Compute summary for each store in parallel
           const summaries = yield* Effect.forEach(
             stores,
             (storeMeta) =>
@@ -256,6 +481,7 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
                 const sources = lineageSources(lineage);
                 const posts = yield* index.count(storeRef);
 
+                // Build summary entry with conditional source info
                 const entry: StoreSummaryEntry = {
                   name: storeRef.name,
                   posts,
@@ -271,6 +497,7 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
             { discard: false }
           );
 
+          // Aggregate totals
           const total = summaries.length;
           const derivedCount = summaries.filter((entry) => entry.derived).length;
           const sourcesCount = total - derivedCount;
