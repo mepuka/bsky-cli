@@ -1,6 +1,4 @@
 import * as Doc from "@effect/printer/Doc";
-import * as Ansi from "@effect/printer-ansi/Ansi";
-import * as AnsiDoc from "@effect/printer-ansi/AnsiDoc";
 import { Chunk, Context, Effect, Option } from "effect";
 import { StoreIndex } from "../services/store-index.js";
 import { StoreManager } from "../services/store-manager.js";
@@ -14,6 +12,10 @@ import { formatFilterExpr } from "../domain/filter-describe.js";
 import type { StoreName } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
 import type { StoreLineage } from "../domain/derivation.js";
+import type { Annotation } from "./doc/annotation.js";
+import { renderPlain, renderAnsi } from "./doc/render.js";
+import { ann, label, field } from "./doc/primitives.js";
+import { renderTree } from "./doc/tree.js";
 
 export type StoreTreeFormat = "tree" | "table" | "json";
 
@@ -221,125 +223,89 @@ const buildMaps = (data: StoreTreeData) => {
   return { storeMap, edgeMap };
 };
 
-const renderDoc = (doc: Doc.Doc<never>, options?: StoreTreeRenderOptions) =>
-  options?.width
-    ? Doc.render(doc, { style: "pretty", options: { lineWidth: options.width } })
-    : Doc.render(doc, { style: "pretty" });
+type SDoc = Doc.Doc<Annotation>;
 
-const renderAnsiDoc = (doc: AnsiDoc.AnsiDoc, options?: StoreTreeRenderOptions) =>
-  options?.width
-    ? AnsiDoc.render(doc, { style: "pretty", options: { lineWidth: options.width } })
-    : AnsiDoc.render(doc, { style: "pretty" });
+const statusAnnotation: Record<StoreTreeNode["status"], Annotation> = {
+  source: "status:source",
+  ready: "status:ready",
+  stale: "status:stale",
+  unknown: "status:unknown"
+};
+
+const syncAnnotation = (status: StoreTreeNode["syncStatus"]): Annotation => {
+  switch (status) {
+    case "current": return "sync:current";
+    case "stale": return "sync:stale";
+    case "empty": return "sync:empty";
+    default: return "sync:unknown";
+  }
+};
+
+const buildStoreTreeDoc = (data: StoreTreeData): SDoc => {
+  const { storeMap, edgeMap } = buildMaps(data);
+
+  return renderTree<StoreName, StoreTreeEdge>(data.roots, {
+    children: (name) =>
+      (edgeMap.get(name) ?? []).map((e) => ({ node: e.target, edge: e })),
+
+    renderNode: (name, { isRoot, edge }) => {
+      const info = storeMap.get(name);
+      const derived = info?.derived ?? false;
+      const parts: SDoc[] = [];
+
+      if (edge) {
+        const sourceInfo = storeMap.get(edge.source);
+        const edgeParts = [
+          `filter:${formatFilterExpr(edge.filter)}`,
+          `mode:${formatMode(edge.mode)}`
+        ];
+        const match = formatMatchRate(sourceInfo, info);
+        if (match !== "-") edgeParts.push(`match:${match}`);
+        parts.push(ann("dim", Doc.text(`[${edgeParts.join(" | ")}] ->`)));
+      }
+
+      const nameAnn: Annotation = isRoot ? "storeName:root"
+        : derived ? "storeName:derived"
+        : "storeName";
+      parts.push(ann(nameAnn, Doc.text(name)));
+      parts.push(ann(derived ? "storeName:derived" : "storeName", Doc.text(`(${derived ? "derived" : "source"})`)));
+
+      return Doc.hsep(parts);
+    },
+
+    details: (name, { edge }) => {
+      const info = storeMap.get(name);
+      if (!info) return [];
+      const lines: SDoc[] = [];
+      const derived = info.derived;
+
+      let postsVal = formatCount(info.posts);
+      if (edge) {
+        const sourceInfo = storeMap.get(edge.source);
+        const match = formatMatchRate(sourceInfo, info);
+        if (match !== "-") postsVal += ` (${match} match)`;
+      }
+      lines.push(field("Posts", postsVal));
+
+      if (derived) {
+        lines.push(Doc.hsep([label("Status:"), ann(statusAnnotation[info.status], Doc.text(statusLabel(info.status)))]));
+      } else {
+        lines.push(Doc.hsep([label("Sync:"), ann(syncAnnotation(info.syncStatus), Doc.text(syncLabel(info.syncStatus)))]));
+        if (info.lastSync) lines.push(field("Last sync", info.lastSync));
+      }
+
+      if (edge?.derivedAt) lines.push(field("Derived at", edge.derivedAt));
+      return lines;
+    },
+
+    key: (name) => name,
+  });
+};
 
 export const renderStoreTree = (
   data: StoreTreeData,
   options?: StoreTreeRenderOptions
-): string => {
-  const { storeMap, edgeMap } = buildMaps(data);
-  const docs: Array<Doc.Doc<never>> = [];
-
-  const edgeLabel = (edge: StoreTreeEdge, target: StoreTreeNode | undefined) => {
-    const sourceInfo = storeMap.get(edge.source);
-    const parts = [
-      `filter:${formatFilterExpr(edge.filter)}`,
-      `mode:${formatMode(edge.mode)}`
-    ];
-    const match = formatMatchRate(sourceInfo, target);
-    if (match !== "-") {
-      parts.push(`match:${match}`);
-    }
-    return `[${parts.join(" | ")}] ->`;
-  };
-
-  const renderNode = (
-    name: StoreName,
-    prefix: string,
-    isLast: boolean,
-    edge?: StoreTreeEdge,
-    path: ReadonlyArray<StoreName> = [],
-    isRoot = false
-  ) => {
-    const info = storeMap.get(name);
-    const derived = info?.derived ?? false;
-    const arrowLabel = edge ? edgeLabel(edge, info) : "";
-    const arrowDoc =
-      arrowLabel.length === 0
-        ? null
-        : options?.width
-          ? Doc.reflow(arrowLabel)
-          : Doc.text(arrowLabel);
-    const labelDoc = Doc.hsep(
-      [
-        arrowDoc,
-        Doc.text(name),
-        Doc.text(`(${derived ? "derived" : "source"})`)
-      ].filter((value): value is Doc.Doc<never> => value !== null)
-    );
-    const connector = isRoot ? "" : isLast ? "`-- " : "|-- ";
-    docs.push(Doc.cat(Doc.text(`${prefix}${connector}`), labelDoc));
-
-    if (path.includes(name)) {
-      const loopPrefix = prefix + (prefix.length === 0 ? "" : isLast ? "    " : "|   ");
-      docs.push(Doc.text(`${loopPrefix}|-- (cycle detected)`));
-      return;
-    }
-
-    const nextPrefix = prefix + (isRoot ? "" : isLast ? "    " : "|   ");
-    const details: string[] = [];
-
-    if (info) {
-      let postsLine = `Posts: ${formatCount(info.posts)}`;
-      if (edge) {
-        const sourceInfo = storeMap.get(edge.source);
-        const match = formatMatchRate(sourceInfo, info);
-        if (match !== "-") {
-          postsLine += ` (${match} match)`;
-        }
-      }
-      details.push(postsLine);
-      if (derived) {
-        details.push(`Status: ${statusLabel(info.status)}`);
-      } else {
-        details.push(`Sync: ${syncLabel(info.syncStatus)}`);
-        if (info.lastSync) {
-          details.push(`Last sync: ${info.lastSync}`);
-        }
-      }
-    }
-
-    if (edge?.derivedAt) {
-      details.push(`Derived at: ${edge.derivedAt}`);
-    }
-
-    const children = edgeMap.get(name) ?? [];
-    const items = [
-      ...details.map((detail) => ({ type: "detail" as const, detail })),
-      ...children.map((child) => ({ type: "child" as const, child }))
-    ];
-
-    const nextPath = [...path, name];
-    items.forEach((item, index) => {
-      const lastItem = index === items.length - 1;
-      if (item.type === "detail") {
-        const line = `${nextPrefix}${lastItem ? "`-- " : "|-- "}${item.detail}`;
-        docs.push(
-          options?.width ? Doc.reflow(line) : Doc.text(line)
-        );
-      } else {
-        renderNode(item.child.target, nextPrefix, lastItem, item.child, nextPath);
-      }
-    });
-  };
-
-  data.roots.forEach((root, index) => {
-    renderNode(root, "", index === data.roots.length - 1, undefined, [], true);
-    if (index < data.roots.length - 1) {
-      docs.push(Doc.text(""));
-    }
-  });
-
-  return renderDoc(Doc.vsep(docs), options);
-};
+): string => renderPlain(buildStoreTreeDoc(data), options?.width);
 
 const renderTable = (
   headers: ReadonlyArray<string>,
@@ -426,165 +392,10 @@ export const renderStoreTreeTable = (data: StoreTreeData): string => {
   return sections.join("\n\n");
 };
 
-const ansiNameStyle = (derived: boolean, isRoot: boolean) => {
-  const base = derived ? Ansi.magenta : Ansi.cyan;
-  return isRoot ? Ansi.combine(base, Ansi.bold) : base;
-};
-
-const ansiStatusStyle = (status: StoreTreeNode["status"]) => {
-  switch (status) {
-    case "ready":
-      return Ansi.green;
-    case "stale":
-      return Ansi.red;
-    case "unknown":
-      return Ansi.yellow;
-    default:
-      return Ansi.cyan;
-  }
-};
-
-const ansiSyncStyle = (status: StoreTreeNode["syncStatus"]) => {
-  switch (status) {
-    case "current":
-      return Ansi.green;
-    case "stale":
-      return Ansi.yellow;
-    case "empty":
-      return Ansi.blackBright;
-    default:
-      return Ansi.yellow;
-  }
-};
-
 export const renderStoreTreeAnsi = (
   data: StoreTreeData,
   options?: StoreTreeRenderOptions
-): string => {
-  const { storeMap, edgeMap } = buildMaps(data);
-  const docs: Array<AnsiDoc.AnsiDoc> = [];
-
-  const edgeLabel = (edge: StoreTreeEdge, target: StoreTreeNode | undefined) => {
-    const sourceInfo = storeMap.get(edge.source);
-    const parts = [
-      `filter:${formatFilterExpr(edge.filter)}`,
-      `mode:${formatMode(edge.mode)}`
-    ];
-    const match = formatMatchRate(sourceInfo, target);
-    if (match !== "-") {
-      parts.push(`match:${match}`);
-    }
-    return `[${parts.join(" | ")}] ->`;
-  };
-
-  const renderNode = (
-    name: StoreName,
-    prefix: string,
-    isLast: boolean,
-    edge?: StoreTreeEdge,
-    path: ReadonlyArray<StoreName> = [],
-    isRoot = false
-  ) => {
-    const info = storeMap.get(name);
-    const derived = info?.derived ?? false;
-    const connector = isRoot ? "" : isLast ? "`-- " : "|-- ";
-    const arrowLabel = edge ? edgeLabel(edge, info) : "";
-    const arrowDoc =
-      arrowLabel.length === 0
-        ? null
-        : AnsiDoc.annotate(
-            options?.width ? AnsiDoc.reflow(arrowLabel) : AnsiDoc.text(arrowLabel),
-            Ansi.blackBright
-          );
-    const nameDoc = AnsiDoc.annotate(
-      AnsiDoc.text(name),
-      ansiNameStyle(derived, isRoot)
-    );
-    const kindDoc = AnsiDoc.annotate(
-      AnsiDoc.text(`(${derived ? "derived" : "source"})`),
-      derived ? Ansi.magenta : Ansi.cyan
-    );
-    const labelDoc = AnsiDoc.hsep(
-      [arrowDoc, nameDoc, kindDoc].filter(
-        (value): value is AnsiDoc.AnsiDoc => value !== null
-      )
-    );
-    docs.push(AnsiDoc.cat(AnsiDoc.text(`${prefix}${connector}`), labelDoc));
-
-    if (path.includes(name)) {
-      const loopPrefix = prefix + (prefix.length === 0 ? "" : isLast ? "    " : "|   ");
-      docs.push(
-        AnsiDoc.annotate(
-          AnsiDoc.text(`${loopPrefix}|-- (cycle detected)`),
-          Ansi.yellow
-        )
-      );
-      return;
-    }
-
-    const nextPrefix = prefix + (isRoot ? "" : isLast ? "    " : "|   ");
-    const details: Array<{ text: string; style?: Ansi.Ansi }> = [];
-
-    if (info) {
-      let postsLine = `Posts: ${formatCount(info.posts)}`;
-      if (edge) {
-        const sourceInfo = storeMap.get(edge.source);
-        const match = formatMatchRate(sourceInfo, info);
-        if (match !== "-") {
-          postsLine += ` (${match} match)`;
-        }
-      }
-      details.push({ text: postsLine });
-      if (derived) {
-        details.push({
-          text: `Status: ${statusLabel(info.status)}`,
-          style: ansiStatusStyle(info.status)
-        });
-      } else {
-        details.push({
-          text: `Sync: ${syncLabel(info.syncStatus)}`,
-          style: ansiSyncStyle(info.syncStatus)
-        });
-        if (info.lastSync) {
-          details.push({ text: `Last sync: ${info.lastSync}` });
-        }
-      }
-    }
-
-    if (edge?.derivedAt) {
-      details.push({ text: `Derived at: ${edge.derivedAt}` });
-    }
-
-    const children = edgeMap.get(name) ?? [];
-    const items = [
-      ...details.map((detail) => ({ type: "detail" as const, detail })),
-      ...children.map((child) => ({ type: "child" as const, child }))
-    ];
-
-    const nextPath = [...path, name];
-    items.forEach((item, index) => {
-      const lastItem = index === items.length - 1;
-      if (item.type === "detail") {
-        const line = `${nextPrefix}${lastItem ? "`-- " : "|-- "}${item.detail.text}`;
-        const textDoc = options?.width ? AnsiDoc.reflow(line) : AnsiDoc.text(line);
-        docs.push(
-          item.detail.style ? AnsiDoc.annotate(textDoc, item.detail.style) : textDoc
-        );
-      } else {
-        renderNode(item.child.target, nextPrefix, lastItem, item.child, nextPath);
-      }
-    });
-  };
-
-  data.roots.forEach((root, index) => {
-    renderNode(root, "", index === data.roots.length - 1, undefined, [], true);
-    if (index < data.roots.length - 1) {
-      docs.push(AnsiDoc.text(""));
-    }
-  });
-
-  return renderAnsiDoc(AnsiDoc.vsep(docs), options);
-};
+): string => renderAnsi(buildStoreTreeDoc(data), options?.width);
 
 export const renderStoreTreeJson = (data: StoreTreeData) => ({
   roots: data.roots,

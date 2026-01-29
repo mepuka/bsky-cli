@@ -3,9 +3,9 @@ import { Post } from "./post.js";
 const headers = ["Created At", "Author", "Text", "URI"];
 const textLimit = 80;
 
-const normalizeWhitespace = (text: string) => text.replace(/\s+/g, " ").trim();
+export const normalizeWhitespace = (text: string) => text.replace(/\s+/g, " ").trim();
 
-const truncate = (text: string, max: number) => {
+export const truncate = (text: string, max: number) => {
   if (text.length <= max) return text;
   if (max <= 3) return text.slice(0, max);
   return `${text.slice(0, max - 3)}...`;
