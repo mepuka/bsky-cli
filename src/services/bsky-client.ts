@@ -28,7 +28,8 @@ import type {
   AppBskyGraphGetRelationships,
   AppBskyNotificationListNotifications,
   AppBskyUnspeccedGetPopularFeedGenerators,
-  AppBskyUnspeccedGetTrendingTopics
+  AppBskyUnspeccedGetTrendingTopics,
+  ComAtprotoIdentityResolveIdentity
 } from "@atproto/api";
 import {
   Chunk,
@@ -75,6 +76,7 @@ import {
   FeedReasonRepost,
   FeedReasonUnknown,
   FeedReplyRef,
+  IdentityInfo,
   Label,
   ListItemView,
   ListView,
@@ -344,6 +346,19 @@ const decodeProfileView = (input: unknown) =>
       status: author.status,
       debug: author.debug
     }).pipe(Effect.mapError(toBskyError("Invalid profile payload")));
+  });
+
+const decodeIdentityInfo = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return yield* BskyError.make({ message: "Invalid identity payload" });
+    }
+    const info = input as Record<string, unknown>;
+    return yield* Schema.decodeUnknown(IdentityInfo)({
+      did: info.did,
+      handle: info.handle,
+      didDoc: info.didDoc
+    }).pipe(Effect.mapError(toBskyError("Invalid identity payload")));
   });
 
 const decodeFeedGeneratorView = (input: unknown) =>
@@ -976,7 +991,10 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       uri: string,
       opts?: EngagementOptions
     ) => Effect.Effect<{ readonly uri: string; readonly cid?: string; readonly posts: ReadonlyArray<RawPost>; readonly cursor?: string }, BskyError>;
-    readonly resolveHandle: (handle: string) => Effect.Effect<string, BskyError>;
+    readonly resolveHandle: (handle: string) => Effect.Effect<Did, BskyError>;
+    readonly resolveIdentity: (
+      identifier: string
+    ) => Effect.Effect<IdentityInfo, BskyError>;
     readonly getProfiles: (
       actors: ReadonlyArray<string>
     ) => Effect.Effect<ReadonlyArray<ProfileBasic>, BskyError>;
@@ -1600,6 +1618,21 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           return yield* decodeDid(response.data.did, "Invalid DID from resolveHandle");
         });
 
+      const resolveIdentity = (identifier: string) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<ComAtprotoIdentityResolveIdentity.Response>(() =>
+                agent.com.atproto.identity.resolveIdentity({ identifier })
+              )
+            )
+          ).pipe(
+            Effect.mapError(toBskyError("Failed to resolve identity", "resolveIdentity"))
+          );
+          return yield* decodeIdentityInfo(response.data);
+        });
+
       const getProfiles = (actors: ReadonlyArray<string>) =>
         Effect.gen(function* () {
           const uniqueActors = Array.from(new Set(actors));
@@ -1831,6 +1864,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
         getRepostedBy,
         getQuotes,
         resolveHandle,
+        resolveIdentity,
         getProfiles,
         searchActors,
         searchFeedGenerators,

@@ -3,6 +3,7 @@ import {
   Context,
   Duration,
   Effect,
+  Either,
   Layer,
   Option,
   Request,
@@ -11,6 +12,7 @@ import {
 import { BskyError } from "../domain/errors.js";
 import { Handle } from "../domain/primitives.js";
 import { BskyClient } from "./bsky-client.js";
+import { IdentityResolver } from "./identity-resolver.js";
 
 type CacheConfig = {
   readonly capacity: number;
@@ -35,6 +37,7 @@ export class ProfileResolver extends Context.Tag("@skygent/ProfileResolver")<
     ProfileResolver,
     Effect.gen(function* () {
       const client = yield* BskyClient;
+      const identities = yield* IdentityResolver;
 
       const batchSizeRaw = yield* Config.integer(
         "SKYGENT_PROFILE_BATCH_SIZE"
@@ -46,6 +49,9 @@ export class ProfileResolver extends Context.Tag("@skygent/ProfileResolver")<
       ).pipe(Config.withDefault(5000));
       const cacheTtl = yield* Config.duration("SKYGENT_PROFILE_CACHE_TTL").pipe(
         Config.withDefault(Duration.hours(6))
+      );
+      const strict = yield* Config.boolean("SKYGENT_IDENTITY_STRICT").pipe(
+        Config.withDefault(false)
       );
 
       const cacheConfig =
@@ -62,10 +68,71 @@ export class ProfileResolver extends Context.Tag("@skygent/ProfileResolver")<
         (requests: ReadonlyArray<ProfileHandleRequest>) =>
           Effect.gen(function* () {
             const dids = Array.from(new Set(requests.map((request) => request.did)));
-            const profiles = yield* client.getProfiles(dids);
-            return new Map(
-              profiles.map((profile) => [String(profile.did), profile.handle])
+            if (dids.length === 0) {
+              return new Map<string, Either.Either<Handle, BskyError>>();
+            }
+
+            const cached = yield* Effect.forEach(
+              dids,
+              (did) =>
+                identities
+                  .lookupHandle(did)
+                  .pipe(Effect.either, Effect.map((result) => [did, result] as const)),
+              { concurrency: "unbounded" }
             );
+
+            const results = new Map<string, Either.Either<Handle, BskyError>>();
+            const misses: Array<string> = [];
+
+            for (const [did, result] of cached) {
+              if (Either.isLeft(result)) {
+                results.set(did, Either.left(result.left));
+                continue;
+              }
+              if (Option.isSome(result.right)) {
+                results.set(did, Either.right(result.right.value));
+                continue;
+              }
+              misses.push(did);
+            }
+
+            if (misses.length === 0) {
+              return results;
+            }
+
+            if (strict) {
+              const resolved = yield* Effect.forEach(
+                misses,
+                (did) =>
+                  identities
+                    .resolveHandle(did)
+                    .pipe(Effect.either, Effect.map((value) => [did, value] as const)),
+                { concurrency: "unbounded" }
+              );
+              for (const [did, value] of resolved) {
+                results.set(did, value);
+              }
+              return results;
+            }
+
+            const profiles = yield* client.getProfiles(misses);
+            for (const profile of profiles) {
+              results.set(String(profile.did), Either.right(profile.handle));
+            }
+
+            yield* Effect.forEach(
+              profiles,
+              (profile) =>
+                identities.cacheProfile({
+                  did: profile.did,
+                  handle: profile.handle,
+                  source: "getProfiles",
+                  verified: false
+                }),
+              { discard: true, concurrency: "unbounded" }
+            );
+
+            return results;
           })
       );
 
@@ -81,16 +148,20 @@ export class ProfileResolver extends Context.Tag("@skygent/ProfileResolver")<
                 Effect.forEach(
                   requests,
                   (request) => {
-                    const handle = profileMap.get(request.did);
-                    return handle
-                      ? Request.succeed(request, handle)
-                      : Request.fail(
-                          request,
-                          BskyError.make({
-                            message: `Profile not found for DID ${request.did}`,
-                            cause: request.did
-                          })
-                        );
+                    const result = profileMap.get(request.did);
+                    if (!result) {
+                      return Request.fail(
+                        request,
+                        BskyError.make({
+                          message: `Profile not found for DID ${request.did}`,
+                          cause: request.did
+                        })
+                      );
+                    }
+                    return Either.match(result, {
+                      onLeft: (error) => Request.fail(request, error),
+                      onRight: (handle) => Request.succeed(request, handle)
+                    });
                   },
                   { discard: true }
                 )

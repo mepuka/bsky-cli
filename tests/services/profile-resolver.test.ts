@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Schema, Stream } from "effect";
+import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { BskyClient } from "../../src/services/bsky-client.js";
 import { ProfileResolver } from "../../src/services/profile-resolver.js";
 import { BskyError } from "../../src/domain/errors.js";
 import { ProfileBasic } from "../../src/domain/bsky.js";
+import { makeBskyClient } from "../support/bsky-client.js";
+import { IdentityResolver } from "../../src/services/identity-resolver.js";
 
 const makeProfile = (did: string, handle: string) =>
   Schema.decodeUnknownSync(ProfileBasic)({ did, handle });
@@ -18,7 +21,7 @@ describe("ProfileResolver", () => {
     const calls: Array<ReadonlyArray<string>> = [];
     const bskyLayer = Layer.succeed(
       BskyClient,
-      BskyClient.of({
+      makeBskyClient({
         getTimeline: () => Stream.empty,
         getNotifications: () => Stream.empty,
         getFeed: () => Stream.empty,
@@ -42,8 +45,19 @@ describe("ProfileResolver", () => {
       ).pipe(Effect.withRequestBatching(true));
     });
 
+    const identityLayer = IdentityResolver.layer.pipe(
+      Layer.provide(bskyLayer),
+      Layer.provide(KeyValueStore.layerMemory)
+    );
     const results = await Effect.runPromise(
-      program.pipe(Effect.provide(ProfileResolver.layer.pipe(Layer.provide(bskyLayer))))
+      program.pipe(
+        Effect.provide(
+          ProfileResolver.layer.pipe(
+            Layer.provide(bskyLayer),
+            Layer.provide(identityLayer)
+          )
+        )
+      )
     );
 
     expect(calls.length).toBe(1);
@@ -55,7 +69,7 @@ describe("ProfileResolver", () => {
     const calls: Array<ReadonlyArray<string>> = [];
     const bskyLayer = Layer.succeed(
       BskyClient,
-      BskyClient.of({
+      makeBskyClient({
         getTimeline: () => Stream.empty,
         getNotifications: () => Stream.empty,
         getFeed: () => Stream.empty,
@@ -76,8 +90,19 @@ describe("ProfileResolver", () => {
       return { first, second };
     });
 
+    const identityLayer = IdentityResolver.layer.pipe(
+      Layer.provide(bskyLayer),
+      Layer.provide(KeyValueStore.layerMemory)
+    );
     const outcome = await Effect.runPromise(
-      program.pipe(Effect.provide(ProfileResolver.layer.pipe(Layer.provide(bskyLayer))))
+      program.pipe(
+        Effect.provide(
+          ProfileResolver.layer.pipe(
+            Layer.provide(bskyLayer),
+            Layer.provide(identityLayer)
+          )
+        )
+      )
     );
 
     expect(calls.length).toBe(1);

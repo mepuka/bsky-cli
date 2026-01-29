@@ -1,6 +1,7 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Option, Stream } from "effect";
 import { BskyClient } from "../services/bsky-client.js";
+import { IdentityResolver } from "../services/identity-resolver.js";
 import type { ListItemView, ListView, ProfileView, RelationshipView } from "../domain/bsky.js";
 import { decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
@@ -250,13 +251,14 @@ const relationshipsCommand = Command.make(
   ({ actor, others, format }) =>
     Effect.gen(function* () {
       const client = yield* BskyClient;
+      const identities = yield* IdentityResolver;
       const resolveDid = (value: string) =>
         Effect.gen(function* () {
           const decoded = yield* decodeActor(value);
           const actorValue = String(decoded);
           return actorValue.startsWith("did:")
             ? actorValue
-            : yield* client.resolveHandle(actorValue);
+            : yield* identities.resolveDid(actorValue);
         });
       const resolvedActor = yield* resolveDid(actor);
       const parsedOthers = others

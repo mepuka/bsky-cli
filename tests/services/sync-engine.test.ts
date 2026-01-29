@@ -22,6 +22,7 @@ import { all, none } from "../../src/domain/filter.js";
 import { RawPost } from "../../src/domain/raw.js";
 import { StoreRef } from "../../src/domain/store.js";
 import { DataSource, SyncCheckpoint } from "../../src/domain/sync.js";
+import { makeBskyClient } from "../support/bsky-client.js";
 
 const sampleRaw = Schema.decodeUnknownSync(RawPost)({
   uri: "at://did:plc:example/app.bsky.feed.post/1",
@@ -39,7 +40,7 @@ const sampleStore = Schema.decodeUnknownSync(StoreRef)({
 
 const bskyLayer = Layer.succeed(
   BskyClient,
-  BskyClient.of({
+  makeBskyClient({
     getTimeline: () => Stream.fromIterable([sampleRaw]),
     getNotifications: () => Stream.empty,
     getFeed: () => Stream.empty,
@@ -215,7 +216,7 @@ describe("SyncEngine", () => {
 
     const cursorBskyLayer = Layer.succeed(
       BskyClient,
-      BskyClient.of({
+      makeBskyClient({
         getTimeline: () => Stream.fromIterable([page1Post, page2Post]),
         getNotifications: () => Stream.empty,
         getFeed: () => Stream.empty,
@@ -294,7 +295,7 @@ describe("SyncEngine", () => {
 
     const cursorBskyLayer = Layer.succeed(
       BskyClient,
-      BskyClient.of({
+      makeBskyClient({
         getTimeline: () => Stream.fromIterable([page1Post]),
         getNotifications: () => Stream.empty,
         getFeed: () => Stream.empty,
