@@ -18,6 +18,7 @@ import { StoreCommitter } from "./store-commit.js";
 import { SyncCheckpointStore } from "./sync-checkpoint-store.js";
 import { SyncReporter } from "./sync-reporter.js";
 import { ProfileResolver } from "./profile-resolver.js";
+import { StoreIndex } from "./store-index.js";
 import { EventMeta, PostDelete, PostUpsert } from "../domain/events.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { filterExprSignature } from "../domain/filter.js";
@@ -120,6 +121,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
       const parser = yield* PostParser;
       const runtime = yield* FilterRuntime;
       const committer = yield* StoreCommitter;
+      const index = yield* StoreIndex;
       const checkpoints = yield* SyncCheckpointStore;
       const reporter = yield* SyncReporter;
       const profiles = yield* ProfileResolver;
@@ -355,17 +357,32 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                     ? Effect.fail(prepared.error)
                     : Effect.succeed({ _tag: "Error", error: prepared.error } as const);
                 case "Delete":
-                  return storeDelete(
-                    config.store,
-                    config.command,
-                    filterHash,
-                    prepared.uri,
-                    prepared.cid
-                  ).pipe(
-                    Effect.map(
-                      (eventId): SyncOutcome => ({ _tag: "Stored", eventId, kind: "delete" })
-                    )
-                  );
+                  return index
+                    .hasUri(config.store, prepared.uri)
+                    .pipe(
+                      Effect.mapError(
+                        toSyncError("store", "Failed to check existing post")
+                      ),
+                      Effect.flatMap((exists) =>
+                        exists
+                          ? storeDelete(
+                              config.store,
+                              config.command,
+                              filterHash,
+                              prepared.uri,
+                              prepared.cid
+                            ).pipe(
+                              Effect.map(
+                                (eventId): SyncOutcome => ({
+                                  _tag: "Stored",
+                                  eventId,
+                                  kind: "delete"
+                                })
+                              )
+                            )
+                          : Effect.succeed(skippedOutcome)
+                      )
+                    );
                 case "Upsert":
                   return (prepared.checkExists
                     ? storePostIfMissing(

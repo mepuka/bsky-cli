@@ -88,6 +88,7 @@ type PushdownExpr =
   | { readonly _tag: "HasMedia" }
   | { readonly _tag: "HasImages" }
   | { readonly _tag: "HasVideo" }
+  | { readonly _tag: "Language"; readonly langs: ReadonlyArray<string> }
   | { readonly _tag: "Engagement"; readonly minLikes?: number; readonly minReposts?: number; readonly minReplies?: number }
   | { readonly _tag: "Contains"; readonly text: string; readonly caseSensitive: boolean };
 
@@ -185,6 +186,10 @@ const buildPushdown = (expr: FilterExpr | undefined): PushdownExpr => {
       return { _tag: "HasImages" };
     case "HasVideo":
       return { _tag: "HasVideo" };
+    case "Language":
+      return expr.langs.length === 0
+        ? pushdownFalse
+        : { _tag: "Language", langs: Array.from(new Set(expr.langs)) };
     case "Engagement":
       return {
         _tag: "Engagement",
@@ -247,6 +252,10 @@ const pushdownToSql = (
       return sql`p.has_images = 1`;
     case "HasVideo":
       return sql`p.has_video = 1`;
+    case "Language":
+      return expr.langs.length === 0
+        ? sql`1=0`
+        : sql`p.lang IN ${sql.in(expr.langs)}`;
     case "Engagement": {
       const clauses: Array<Fragment> = [];
       if (expr.minLikes !== undefined) {

@@ -278,6 +278,79 @@ describe("JetstreamSyncEngine", () => {
     }
   });
 
+  test("skips delete when post was never stored", async () => {
+    const filter = all();
+    const source = DataSource.jetstream() as Extract<DataSource, { _tag: "Jetstream" }>;
+
+    const program = Effect.gen(function* () {
+      const engine = yield* JetstreamSyncEngine;
+      const index = yield* StoreIndex;
+      const result = yield* engine.sync({
+        source,
+        store: sampleStore,
+        filter,
+        command: "sync jetstream",
+        limit: 1
+      });
+      const count = yield* index.count(sampleStore);
+      return { result, count };
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = makeTestLayer(tempDir, Stream.fromIterable([commitDelete]));
+    try {
+      const outcome = await Effect.runPromise(
+        program.pipe(Effect.provide(layer))
+      );
+
+      expect(outcome.result.postsAdded).toBe(0);
+      expect(outcome.result.postsDeleted).toBe(0);
+      expect(outcome.result.postsSkipped).toBe(1);
+      expect(outcome.result.errors).toEqual([]);
+      expect(outcome.count).toBe(0);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("skips delete when filter excludes prior create", async () => {
+    const filter = none();
+    const source = DataSource.jetstream() as Extract<DataSource, { _tag: "Jetstream" }>;
+
+    const program = Effect.gen(function* () {
+      const engine = yield* JetstreamSyncEngine;
+      const index = yield* StoreIndex;
+      const result = yield* engine.sync({
+        source,
+        store: sampleStore,
+        filter,
+        command: "sync jetstream",
+        limit: 2
+      });
+      const count = yield* index.count(sampleStore);
+      return { result, count };
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = makeTestLayer(
+      tempDir,
+      Stream.fromIterable([commitCreate, commitDelete])
+    );
+    try {
+      const outcome = await Effect.runPromise(
+        program.pipe(Effect.provide(layer))
+      );
+
+      expect(outcome.result.postsAdded).toBe(0);
+      expect(outcome.result.postsDeleted).toBe(0);
+      expect(outcome.result.postsSkipped).toBe(2);
+      expect(outcome.result.errors).toEqual([]);
+      expect(outcome.count).toBe(0);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
   test("deduplicates repeated commit create events", async () => {
     const filter = all();
     const source = DataSource.jetstream() as Extract<DataSource, { _tag: "Jetstream" }>;

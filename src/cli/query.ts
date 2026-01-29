@@ -71,6 +71,8 @@ const fieldsOption = Options.text("fields").pipe(
   Options.optional
 );
 
+const DEFAULT_FILTER_SCAN_LIMIT = 5000;
+
 const parseRangeOption = (range: Option.Option<string>) =>
   Option.match(range, {
     onNone: () => Effect.succeed(Option.none()),
@@ -149,10 +151,21 @@ export const queryCommand = Command.make(
       const hasFilter = Option.isSome(parsedFilter);
       const userLimit = Option.getOrUndefined(limit);
       const userScanLimit = Option.getOrUndefined(scanLimit);
+      const defaultScanLimit =
+        hasFilter && userScanLimit === undefined
+          ? Math.max(userLimit !== undefined ? userLimit * 50 : 0, DEFAULT_FILTER_SCAN_LIMIT)
+          : undefined;
       const resolvedScanLimit =
         hasFilter
-          ? userScanLimit
+          ? userScanLimit ?? defaultScanLimit
           : userScanLimit ?? userLimit;
+      if (defaultScanLimit !== undefined) {
+        yield* output
+          .writeStderr(
+            `Warning: applying default --scan-limit ${defaultScanLimit} for filtered query. Results may be incomplete; set --scan-limit to override.`
+          )
+          .pipe(Effect.catchAll(() => Effect.void));
+      }
 
       if (
         hasFilter &&
@@ -238,6 +251,21 @@ export const queryCommand = Command.make(
 
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(stream.pipe(Stream.map(project)));
+        return;
+      }
+      if (outputFormat === "json") {
+        const writeChunk = (value: string) =>
+          Stream.fromIterable([value]).pipe(Stream.run(output.stdout));
+        let isFirst = true;
+        yield* writeChunk("[");
+        yield* Stream.runForEach(stream.pipe(Stream.map(project)), (post) => {
+          const json = JSON.stringify(post);
+          const prefix = isFirst ? "" : ",\n";
+          isFirst = false;
+          return writeChunk(`${prefix}${json}`);
+        });
+        const suffix = isFirst ? "]\n" : "\n]\n";
+        yield* writeChunk(suffix);
         return;
       }
 
