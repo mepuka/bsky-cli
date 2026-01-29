@@ -178,6 +178,12 @@ export class ProfileView extends Schema.Class<ProfileView>("ProfileView")({
   debug: Schema.optional(Schema.Unknown)
 }) {}
 
+export class IdentityInfo extends Schema.Class<IdentityInfo>("IdentityInfo")({
+  did: Did,
+  handle: Handle,
+  didDoc: Schema.Unknown
+}) {}
+
 export class EmbedRecordView extends Schema.TaggedClass<EmbedRecordView>()(
   "RecordView",
   {
