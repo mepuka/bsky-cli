@@ -21,6 +21,7 @@ import { projectFields, resolveFieldSelectors } from "./query-fields.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { filterOption, filterJsonOption } from "./shared-options.js";
+import { filterByFlags } from "../typeclass/chunk.js";
 
 const storeNameArg = Args.text({ name: "store" }).pipe(
   Args.withSchema(StoreName),
@@ -70,6 +71,9 @@ const fieldsOption = Options.text("fields").pipe(
   ),
   Options.optional
 );
+const progressOption = Options.boolean("progress").pipe(
+  Options.withDescription("Show progress for filtered queries")
+);
 
 const DEFAULT_FILTER_SCAN_LIMIT = 5000;
 
@@ -94,9 +98,10 @@ export const queryCommand = Command.make(
     format: formatOption,
     ansi: ansiOption,
     width: widthOption,
-    fields: fieldsOption
+    fields: fieldsOption,
+    progress: progressOption
   },
-  ({ store, range, filter, filterJson, limit, scanLimit, sort, newestFirst, format, ansi, width, fields }) =>
+  ({ store, range, filter, filterJson, limit, scanLimit, sort, newestFirst, format, ansi, width, fields, progress }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
@@ -186,9 +191,8 @@ export const queryCommand = Command.make(
         order
       });
 
-      const predicate = yield* runtime.evaluate(expr);
       const baseStream = index.query(storeRef, query);
-      const progressEnabled = hasFilter;
+      const progressEnabled = hasFilter && progress;
       let startTime = 0;
       let progressRef: Ref.Ref<{ scanned: number; matched: number; lastReportAt: number }> | undefined;
       if (progressEnabled) {
@@ -206,43 +210,49 @@ export const queryCommand = Command.make(
                 .pipe(Effect.catchAll(() => Effect.void))
           : undefined;
 
-      const onScanned =
+      const onBatch =
         progressEnabled && progressRef && reportProgress
-          ? Effect.gen(function* () {
-              const now = yield* Clock.currentTimeMillis;
-              const state = yield* Ref.get(progressRef);
-              const scanned = state.scanned + 1;
-              const shouldReport =
-                scanned % 1000 === 0 || now - state.lastReportAt >= 1000;
-              if (shouldReport) {
-                yield* reportProgress(scanned, state.matched, now);
-              }
-              yield* Ref.set(progressRef, {
-                scanned,
-                matched: state.matched,
-                lastReportAt: shouldReport ? now : state.lastReportAt
-              });
-            })
-          : Effect.void;
+          ? (scannedDelta: number, matchedDelta: number) =>
+              Effect.gen(function* () {
+                const now = yield* Clock.currentTimeMillis;
+                const state = yield* Ref.get(progressRef);
+                const scanned = state.scanned + scannedDelta;
+                const matched = state.matched + matchedDelta;
+                const shouldReport =
+                  scanned % 1000 === 0 || now - state.lastReportAt >= 1000;
+                if (shouldReport) {
+                  yield* reportProgress(scanned, matched, now);
+                }
+                yield* Ref.set(progressRef, {
+                  scanned,
+                  matched,
+                  lastReportAt: shouldReport ? now : state.lastReportAt
+                });
+              })
+          : (_scanned: number, _matched: number) => Effect.void;
 
-      const onMatched =
-        progressEnabled && progressRef
-          ? Ref.update(progressRef, (state) => ({
-              ...state,
-              matched: state.matched + 1
-            }))
-          : Effect.void;
+      const evaluateBatch = hasFilter ? yield* runtime.evaluateBatch(expr) : undefined;
 
-      const filtered = progressEnabled
+      const filtered = hasFilter && evaluateBatch
         ? baseStream.pipe(
-            Stream.tap(() => onScanned),
-            Stream.filterEffect((post) =>
-              predicate(post).pipe(
-                Effect.tap((ok) => (ok ? onMatched : Effect.void))
+            Stream.grouped(50),
+            Stream.mapEffect((batch) =>
+              evaluateBatch(batch).pipe(
+                Effect.map((flags) => {
+                  const matched = filterByFlags(batch, flags);
+                  return {
+                    matched,
+                    scanned: Chunk.size(batch),
+                    matchedCount: Chunk.size(matched)
+                  };
+                }),
+                Effect.tap(({ scanned, matchedCount }) => onBatch(scanned, matchedCount)),
+                Effect.map(({ matched }) => matched)
               )
-            )
+            ),
+            Stream.mapConcat((chunk) => Chunk.toReadonlyArray(chunk))
           )
-        : baseStream.pipe(Stream.filterEffect((post) => predicate(post)));
+        : baseStream;
 
       const stream = Option.match(limit, {
         onNone: () => filtered,
@@ -299,9 +309,6 @@ export const queryCommand = Command.make(
       const projectedPosts = Option.isSome(selectorsOption) ? posts.map(project) : posts;
 
       switch (outputFormat) {
-        case "json":
-          yield* writeJson(projectedPosts);
-          return;
         case "markdown":
           yield* writeText(renderPostsMarkdown(posts));
           return;

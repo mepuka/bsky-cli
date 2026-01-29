@@ -16,7 +16,7 @@ import { decodeJson } from "./parse.js";
 import { writeJson, writeText } from "./output.js";
 import { CliInputError, CliJsonError } from "./errors.js";
 import { storeOptions } from "./store.js";
-import { describeFilter } from "../domain/filter-describe.js";
+import { describeFilter, formatFilterExpr } from "../domain/filter-describe.js";
 import { renderFilterDescriptionDoc } from "./doc/filter.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
 import { withExamples } from "./help.js";
@@ -45,6 +45,10 @@ const sampleSizeOption = Options.integer("sample-size").pipe(
 );
 const describeFormatOption = Options.choice("format", ["text", "json"]).pipe(
   Options.withDescription("Output format for filter descriptions (default: text)"),
+  Options.optional
+);
+const testFormatOption = Options.choice("format", ["text", "json"]).pipe(
+  Options.withDescription("Output format for filter tests (default: text)"),
   Options.optional
 );
 const describeAnsiOption = Options.boolean("ansi").pipe(
@@ -237,9 +241,10 @@ export const filterTest = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     postJson: postJsonOption,
-    postUri: postUriOption
+    postUri: postUriOption,
+    format: testFormatOption
   },
-  ({ filter, filterJson, postJson, postUri }) =>
+  ({ filter, filterJson, postJson, postUri, format }) =>
     Effect.gen(function* () {
       yield* requireFilterExpr(filter, filterJson);
       const expr = yield* parseFilterExpr(filter, filterJson);
@@ -247,11 +252,23 @@ export const filterTest = Command.make(
       const predicate = yield* runtime.evaluate(expr);
       const post = yield* loadPost(postJson, postUri);
       const ok = yield* predicate(post);
-      yield* writeJson({
-        ok,
-        post: { uri: post.uri, author: post.author },
-        filter: expr
-      });
+      const outputFormat = Option.getOrElse(format, () => "text" as const);
+      if (outputFormat === "json") {
+        yield* writeJson({
+          ok,
+          post: { uri: post.uri, author: post.author },
+          filter: expr,
+          filterText: formatFilterExpr(expr)
+        });
+        return;
+      }
+      const author = post.author ? ` by ${post.author}` : "";
+      const lines = [
+        `Match: ${ok ? "yes" : "no"}`,
+        `Post: ${post.uri}${author}`,
+        `Filter: ${formatFilterExpr(expr)}`
+      ];
+      yield* writeText(lines.join("\n"));
     })
 ).pipe(
   Command.withDescription(
@@ -308,7 +325,7 @@ export const filterBenchmark = Command.make(
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const limit = Option.getOrElse(sampleSize, () => 1000);
       const evaluateBatch = yield* runtime.evaluateBatch(expr);
-      const query = StoreQuery.make({ scanLimit: limit });
+      const query = StoreQuery.make({ scanLimit: limit, order: "desc" });
       const stream = index.query(storeRef, query);
       const start = yield* Clock.currentTimeMillis;
       const result = yield* stream.pipe(

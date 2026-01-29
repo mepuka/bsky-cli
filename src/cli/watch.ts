@@ -27,6 +27,7 @@ import {
   postFilterJsonOption,
   authorFilterOption,
   includePinsOption,
+  decodeActor,
   quietOption,
   refreshOption,
   strictOption,
@@ -157,13 +158,14 @@ const authorCommand = Command.make(
   },
   ({ actor, filter, includePins, postFilter, postFilterJson, interval, store, quiet, refresh, wait }) =>
     Effect.gen(function* () {
+      const resolvedActor = yield* decodeActor(actor);
       const apiFilter = Option.getOrUndefined(filter);
-      const source = DataSource.author(actor, {
+      const source = DataSource.author(resolvedActor, {
         ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
         ...(includePins ? { includePins: true } : {})
       });
       const run = makeWatchCommandBody("author", () => source, {
-        actor,
+        actor: resolvedActor,
         ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
         ...(includePins ? { includePins: true } : {})
       });

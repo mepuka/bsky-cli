@@ -165,8 +165,7 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
       const path = yield* Path.Path;
 
       const storeSize = (store: StoreRef) => {
-        const kvRoot = path.join(config.storeRoot, "kv");
-        const storePath = path.join(kvRoot, store.root);
+        const storePath = path.join(config.storeRoot, store.root);
         return directorySize(fs, path, storePath).pipe(Effect.orElseSucceed(() => 0));
       };
 

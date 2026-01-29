@@ -254,6 +254,13 @@ export const storeMaterialize = Command.make(
       const configOption = yield* manager.getConfig(name);
       const config = Option.getOrElse(configOption, () => defaultStoreConfig);
 
+      if (config.filters.length === 0) {
+        return yield* CliInputError.make({
+          message: `Store "${name}" has no configured filters to materialize. Update the store config to add filters.`,
+          cause: { store: name }
+        });
+      }
+
       const selected = yield* Option.match(filter, {
         onNone: () => Effect.succeed(config.filters),
         onSome: (filterName) => {

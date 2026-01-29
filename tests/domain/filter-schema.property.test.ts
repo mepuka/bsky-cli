@@ -17,7 +17,9 @@ import { Handle, Hashtag, Timestamp } from "../../src/domain/primitives.js";
 
 const handleArb = Arbitrary.make(Handle);
 const hashtagArb = Arbitrary.make(Hashtag);
-const timestampArb = Arbitrary.make(Timestamp);
+const timestampArb = Arbitrary.make(Timestamp).filter((value) =>
+  Number.isFinite(value.getTime())
+);
 const languageArb = fc.constantFrom("en", "es", "fr", "de", "ja");
 
 const regexPatternArb = fc.string({ minLength: 1, maxLength: 20 });

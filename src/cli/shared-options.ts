@@ -1,8 +1,9 @@
 import { Args, Options } from "@effect/cli";
-import { Effect, Option } from "effect";
-import { StoreName } from "../domain/primitives.js";
+import { Effect, Option, Schema } from "effect";
+import { Did, Handle, StoreName } from "../domain/primitives.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { CliInputError } from "./errors.js";
+import { formatSchemaError } from "./shared.js";
 
 /** --store option with StoreName schema validation */
 export const storeNameOption = Options.text("store").pipe(
@@ -113,3 +114,24 @@ export const parseMaxErrors = (maxErrors: Option.Option<number>) =>
           )
         : Effect.succeed(Option.some(value))
   });
+
+export const decodeActor = (actor: string) => {
+  if (actor.startsWith("did:")) {
+    return Schema.decodeUnknown(Did)(actor).pipe(
+      Effect.mapError((error) =>
+        CliInputError.make({
+          message: `Invalid DID: ${formatSchemaError(error)}`,
+          cause: { actor }
+        })
+      )
+    );
+  }
+  return Schema.decodeUnknown(Handle)(actor).pipe(
+    Effect.mapError((error) =>
+      CliInputError.make({
+        message: `Invalid handle: ${formatSchemaError(error)}`,
+        cause: { actor }
+      })
+    )
+  );
+};

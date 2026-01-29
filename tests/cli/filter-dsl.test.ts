@@ -145,4 +145,43 @@ describe("filter DSL", () => {
       minReplies: 5
     });
   });
+
+  test("parses regex with spaces", async () => {
+    const result = await Effect.runPromise(
+      parseFilterDsl("regex:/red card|yellow card/i").pipe(
+        Effect.provide(emptyLibraryLayer)
+      )
+    );
+
+    expect(result).toMatchObject({
+      _tag: "Regex",
+      patterns: ["red card|yellow card"],
+      flags: "i"
+    });
+  });
+
+  test("parses regex with parentheses", async () => {
+    const result = await Effect.runPromise(
+      parseFilterDsl(String.raw`regex:/\b(Saka|Rice)\b/i`).pipe(
+        Effect.provide(emptyLibraryLayer)
+      )
+    );
+
+    expect(result).toMatchObject({
+      _tag: "Regex",
+      patterns: [String.raw`\b(Saka|Rice)\b`],
+      flags: "i"
+    });
+  });
+
+  test("parses regex with quantifier comma", async () => {
+    const result = await Effect.runPromise(
+      parseFilterDsl("regex:/a{1,3}/").pipe(Effect.provide(emptyLibraryLayer))
+    );
+
+    expect(result).toMatchObject({
+      _tag: "Regex",
+      patterns: ["a{1,3}"]
+    });
+  });
 });

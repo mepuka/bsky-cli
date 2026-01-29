@@ -40,6 +40,7 @@ const isWhitespace = (char: string) => /\s/.test(char);
 const tokenize = (input: string): Effect.Effect<ReadonlyArray<Token>, CliInputError> =>
   Effect.suspend(() => {
     const tokens: Array<Token> = [];
+    let pendingRegexValue = false;
     let index = 0;
     const length = input.length;
 
@@ -47,17 +48,21 @@ const tokenize = (input: string): Effect.Effect<ReadonlyArray<Token>, CliInputEr
       const upper = value.toUpperCase();
       if (upper === "AND") {
         tokens.push({ _tag: "And", position });
+        pendingRegexValue = false;
         return;
       }
       if (upper === "OR") {
         tokens.push({ _tag: "Or", position });
+        pendingRegexValue = false;
         return;
       }
       if (upper === "NOT") {
         tokens.push({ _tag: "Not", position });
+        pendingRegexValue = false;
         return;
       }
       tokens.push({ _tag: "Word", value, position });
+      pendingRegexValue = value.toLowerCase() === "regex:";
     };
 
     while (index < length) {
@@ -69,6 +74,10 @@ const tokenize = (input: string): Effect.Effect<ReadonlyArray<Token>, CliInputEr
         index += 1;
         continue;
       }
+
+      const regexValueExpected = pendingRegexValue;
+      pendingRegexValue = false;
+
       if (char === "(") {
         tokens.push({ _tag: "LParen", position: index });
         index += 1;
@@ -106,13 +115,21 @@ const tokenize = (input: string): Effect.Effect<ReadonlyArray<Token>, CliInputEr
       let inQuotes = false;
       let quoteChar: string | null = null;
       let quoteStart = -1;
+      const hasRegexPrefix =
+        input.slice(start, start + 6).toLowerCase() === "regex:";
+      let inRegexLiteral = regexValueExpected && input[start] === "/";
+      let regexLiteralStartIndex = inRegexLiteral ? start : -1;
 
       while (index < length) {
         const current = input[index];
         if (current === undefined) {
           break;
         }
-        if ((current === "\"" || current === "'") && input[index - 1] !== "\\") {
+        if (
+          !inRegexLiteral &&
+          (current === "\"" || current === "'") &&
+          input[index - 1] !== "\\"
+        ) {
           if (!inQuotes) {
             inQuotes = true;
             quoteChar = current;
@@ -126,7 +143,27 @@ const tokenize = (input: string): Effect.Effect<ReadonlyArray<Token>, CliInputEr
           index += 1;
           continue;
         }
-        if (!inQuotes && (isWhitespace(current) || current === "(" || current === ")")) {
+        if (!inQuotes) {
+          if (
+            (hasRegexPrefix || inRegexLiteral) &&
+            current === "/" &&
+            input[index - 1] !== "\\"
+          ) {
+            if (!inRegexLiteral) {
+              if (hasRegexPrefix && index >= start + 6) {
+                inRegexLiteral = true;
+                regexLiteralStartIndex = index;
+              }
+            } else if (index !== regexLiteralStartIndex) {
+              inRegexLiteral = false;
+            }
+          }
+        }
+        if (
+          !inQuotes &&
+          !inRegexLiteral &&
+          (isWhitespace(current) || current === "(" || current === ")")
+        ) {
           break;
         }
         word += current;
@@ -217,9 +254,67 @@ const splitOptionSegments = (
   return segments;
 };
 
-const parseValueOptions = (input: string, raw: string, position: number) =>
+const splitRegexOptionSegments = (
+  raw: string,
+  position: number
+): Array<{ readonly text: string; readonly position: number }> => {
+  const segments: Array<{ readonly text: string; readonly position: number }> = [];
+  let start = 0;
+  let inQuotes = false;
+  let quoteChar: string | null = null;
+  let inRegex = false;
+
+  const pushSegment = (end: number) => {
+    const slice = raw.slice(start, end);
+    const trimmed = slice.trim();
+    const leading = slice.length - slice.trimStart().length;
+    segments.push({
+      text: trimmed,
+      position: position + start + leading
+    });
+  };
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (!inRegex && (char === "\"" || char === "'")) {
+      if (!inQuotes) {
+        inQuotes = true;
+        quoteChar = char;
+      } else if (quoteChar === char) {
+        inQuotes = false;
+        quoteChar = null;
+      }
+      continue;
+    }
+    if (!inQuotes && char === "/") {
+      inRegex = !inRegex;
+      continue;
+    }
+    if (char === "," && !inQuotes && !inRegex) {
+      pushSegment(index);
+      start = index + 1;
+    }
+  }
+
+  pushSegment(raw.length);
+  return segments;
+};
+
+const parseValueOptions = (
+  input: string,
+  raw: string,
+  position: number,
+  mode: "default" | "regex" = "default"
+) =>
   Effect.suspend(() => {
-    const segments = splitOptionSegments(raw, position);
+    const segments =
+      mode === "regex"
+        ? splitRegexOptionSegments(raw, position)
+        : splitOptionSegments(raw, position);
     if (segments.length === 0) {
       return Effect.succeed({ value: "", valuePosition: position, options: new Map() });
     }
@@ -773,8 +868,9 @@ class Parser {
         return { _tag: "Language", langs: items };
       }
 
+      const optionMode = key === "regex" ? "regex" : "default";
       const { value: baseValueRaw, valuePosition: basePosition, options } =
-        yield* parseValueOptions(self.input, rawValue, valuePosition);
+        yield* parseValueOptions(self.input, rawValue, valuePosition, optionMode);
       const baseValue = stripQuotes(baseValueRaw);
 
       switch (key) {
