@@ -112,10 +112,9 @@ type PostView = AppBskyFeedDefs.PostView;
 type ThreadViewPost = AppBskyFeedDefs.ThreadViewPost;
 
 
-const formatBskyErrorMessage = (fallback: string, cause: unknown) => {
-  const base = messageFromCause(fallback, cause);
+const extractBskyErrorDetails = (cause: unknown) => {
   if (!cause || typeof cause !== "object") {
-    return base;
+    return {} as const;
   }
   const record = cause as {
     status?: unknown;
@@ -137,15 +136,46 @@ const formatBskyErrorMessage = (fallback: string, cause: unknown) => {
       : typeof (record.error as { message?: unknown })?.message === "string"
         ? (record.error as { message: string }).message
         : undefined;
-  const details = [
-    ...(typeof status === "number" ? [`status ${status}`] : []),
-    ...(error && error !== base ? [error] : [])
-  ];
-  return details.length > 0 ? `${base} (${details.join(", ")})` : base;
+  const detail =
+    typeof record.message === "string"
+      ? record.message
+      : typeof (record.error as { message?: unknown })?.message === "string"
+        ? (record.error as { message: string }).message
+        : undefined;
+  return {
+    ...(status !== undefined ? { status } : {}),
+    ...(error !== undefined ? { error } : {}),
+    ...(detail !== undefined ? { detail } : {})
+  } as const;
 };
 
-const toBskyError = (message: string) => (cause: unknown) =>
-  BskyError.make({ message: formatBskyErrorMessage(message, cause), cause });
+const formatBskyErrorMessage = (
+  fallback: string,
+  cause: unknown,
+  details: ReturnType<typeof extractBskyErrorDetails>
+) => {
+  const base = messageFromCause(fallback, cause);
+  const detailParts = [
+    ...(typeof details.status === "number" ? [`status ${details.status}`] : []),
+    ...(details.error && details.error !== base ? [details.error] : []),
+    ...(details.detail &&
+    details.detail !== base &&
+    details.detail !== details.error
+      ? [details.detail]
+      : [])
+  ];
+  return detailParts.length > 0 ? `${base} (${detailParts.join(", ")})` : base;
+};
+
+const toBskyError = (message: string, operation?: string) => (cause: unknown) => {
+  const details = extractBskyErrorDetails(cause);
+  return BskyError.make({
+    message: formatBskyErrorMessage(message, cause, details),
+    cause,
+    operation,
+    ...details
+  });
+};
 
 const isRetryableCause = (cause: unknown) => {
   if (!cause || typeof cause !== "object") return false;
@@ -842,7 +872,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           }
           const creds = yield* credentials
             .get()
-            .pipe(Effect.mapError(toBskyError("Failed to load credentials")));
+            .pipe(Effect.mapError(toBskyError("Failed to load credentials", "loadCredentials")));
           if (Option.isNone(creds)) {
             if (required) {
               return yield* BskyError.make({
@@ -862,7 +892,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                 })
               )
             )
-          ).pipe(Effect.mapError(toBskyError("Bluesky login failed")));
+          ).pipe(Effect.mapError(toBskyError("Bluesky login failed", "login")));
         });
 
       const paginate = <A>(
@@ -887,7 +917,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                   agent.app.bsky.feed.getTimeline(params)
                 )
               )
-            ).pipe(Effect.mapError(toBskyError("Failed to fetch timeline")));
+            ).pipe(Effect.mapError(toBskyError("Failed to fetch timeline", "getTimeline")));
             const posts = yield* toRawPostsFromFeed(response.data.feed);
             const nextCursor = response.data.cursor;
             const tagged = posts.map((p) => new RawPost({ ...p, _pageCursor: nextCursor }));
@@ -916,7 +946,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                   agent.app.bsky.feed.getFeed(params)
                 )
               )
-            ).pipe(Effect.mapError(toBskyError("Failed to fetch feed")));
+            ).pipe(Effect.mapError(toBskyError("Failed to fetch feed", "getFeed")));
             const posts = yield* toRawPostsFromFeed(response.data.feed);
             const nextCursor = response.data.cursor;
             const tagged = posts.map((p) => new RawPost({ ...p, _pageCursor: nextCursor }));
@@ -951,7 +981,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                   agent.app.bsky.feed.getAuthorFeed(params)
                 )
               )
-            ).pipe(Effect.mapError(toBskyError("Failed to fetch author feed")));
+            ).pipe(Effect.mapError(toBskyError("Failed to fetch author feed", "getAuthorFeed")));
             const posts = yield* toRawPostsFromFeed(response.data.feed);
             const nextCursor = response.data.cursor;
             const tagged = posts.map((p) => new RawPost({ ...p, _pageCursor: nextCursor }));
@@ -975,7 +1005,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                 agent.app.bsky.feed.getPosts({ uris: [uri] })
               )
             )
-          ).pipe(Effect.mapError(toBskyError("Failed to fetch post")));
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch post", "getPosts")));
           const postView = response.data.posts[0];
           if (!postView) {
             return yield* BskyError.make({
@@ -1002,7 +1032,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                 agent.app.bsky.feed.getPostThread(params)
               )
             )
-          ).pipe(Effect.mapError(toBskyError("Failed to fetch post thread")));
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch post thread", "getPostThread")));
 
           if (!AppBskyFeedDefs.isThreadViewPost(response.data.thread)) {
             return [] as ReadonlyArray<RawPost>;
@@ -1029,7 +1059,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                   )
                 )
               ).pipe(
-                Effect.mapError(toBskyError("Failed to fetch profiles")),
+                Effect.mapError(toBskyError("Failed to fetch profiles", "getProfiles")),
                 Effect.flatMap((response) =>
                   Effect.forEach(response.data.profiles, decodeProfileBasic, {
                     concurrency: "unbounded"
@@ -1054,7 +1084,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                   })
                 )
               )
-            ).pipe(Effect.mapError(toBskyError("Failed to search actors")));
+            ).pipe(Effect.mapError(toBskyError("Failed to search actors", "searchActorsTypeahead")));
             const actors = yield* Effect.forEach(
               response.data.actors,
               decodeProfileView,
@@ -1073,7 +1103,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                 agent.app.bsky.actor.searchActors(params)
               )
             )
-          ).pipe(Effect.mapError(toBskyError("Failed to search actors")));
+          ).pipe(Effect.mapError(toBskyError("Failed to search actors", "searchActors")));
           const actors = yield* Effect.forEach(
             response.data.actors,
             decodeProfileView,
@@ -1096,7 +1126,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                 agent.app.bsky.unspecced.getPopularFeedGenerators(params)
               )
             )
-          ).pipe(Effect.mapError(toBskyError("Failed to search feed generators")));
+          ).pipe(Effect.mapError(toBskyError("Failed to search feed generators", "searchFeedGenerators")));
           const feeds = yield* Effect.forEach(
             response.data.feeds,
             decodeFeedGeneratorView,
@@ -1117,7 +1147,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
                   agent.app.bsky.notification.listNotifications(params)
                 )
               )
-            ).pipe(Effect.mapError(toBskyError("Failed to fetch notifications")));
+            ).pipe(Effect.mapError(toBskyError("Failed to fetch notifications", "listNotifications")));
 
               const posts = yield* Effect.forEach(
                 response.data.notifications,
@@ -1169,7 +1199,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
               })
             )
           )
-        ).pipe(Effect.mapError(toBskyError("Failed to fetch trending topics")));
+        ).pipe(Effect.mapError(toBskyError("Failed to fetch trending topics", "getTrendingTopics")));
 
         const topics = [
           ...response.data.topics,

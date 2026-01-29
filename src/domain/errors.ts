@@ -13,7 +13,14 @@ export class FilterEvalError extends Schema.TaggedError<FilterEvalError>()(
 
 export class BskyError extends Schema.TaggedError<BskyError>()(
   "BskyError",
-  { message: Schema.String, cause: Schema.optional(Schema.Unknown) }
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+    operation: Schema.optional(Schema.String),
+    status: Schema.optional(Schema.Number),
+    error: Schema.optional(Schema.String),
+    detail: Schema.optional(Schema.String)
+  }
 ) {}
 
 export class ConfigError extends Schema.TaggedError<ConfigError>()(

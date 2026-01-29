@@ -12,7 +12,7 @@ import {
 import { logErrorEvent } from "./src/cli/logging.js";
 import { CliOutput } from "./src/cli/output.js";
 import { exitCodeFor, exitCodeFromExit } from "./src/cli/exit-codes.js";
-import { StoreLockError, StoreNotFound } from "./src/domain/errors.js";
+import { BskyError, StoreLockError, StoreNotFound } from "./src/domain/errors.js";
 
 const cli = Command.run(app, {
   name: "skygent",
@@ -89,6 +89,18 @@ const errorDetails = (
   }
   if (error instanceof StoreNotFound) {
     return { error: { _tag: "StoreNotFound", name: error.name } };
+  }
+  if (error instanceof BskyError) {
+    return {
+      error: {
+        _tag: "BskyError",
+        message: error.message,
+        ...(error.operation ? { operation: error.operation } : {}),
+        ...(typeof error.status === "number" ? { status: error.status } : {}),
+        ...(error.error ? { error: error.error } : {}),
+        ...(error.detail ? { detail: error.detail } : {})
+      }
+    };
   }
   if (error instanceof CliJsonError || error instanceof CliInputError) {
     return undefined;
