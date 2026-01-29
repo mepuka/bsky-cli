@@ -1,3 +1,18 @@
+/**
+ * Profile Resolver Service
+ *
+ * Resolves Bluesky profiles to get handles from DIDs with batching support.
+ * Uses Effect's RequestResolver for automatic batching of concurrent requests,
+ * reducing API calls by grouping multiple profile lookups together.
+ *
+ * Features:
+ * - Automatic batching of profile requests (up to 25 per batch)
+ * - Two-level caching: identity resolver cache + request-level cache
+ * - Fallback strategies: strict mode uses identity resolver, normal mode uses getProfiles API
+ *
+ * @module services/profile-resolver
+ */
+
 import {
   Config,
   Context,
@@ -14,22 +29,43 @@ import { Handle } from "../domain/primitives.js";
 import { BskyClient } from "./bsky-client.js";
 import { IdentityResolver } from "./identity-resolver.js";
 
+/**
+ * Configuration for the request cache.
+ */
 type CacheConfig = {
   readonly capacity: number;
   readonly timeToLive: Duration.Duration;
 };
 
+/**
+ * Request class for batching profile handle lookups.
+ * Used with Effect's RequestResolver for automatic batching.
+ */
 export class ProfileHandleRequest extends Request.TaggedClass("ProfileHandle")<
   Handle,
   BskyError,
   {
+    /** The DID to resolve to a handle */
     readonly did: string;
   }
 > {}
 
+/**
+ * Service for resolving profile handles from DIDs with batching support.
+ *
+ * This service batches concurrent handle lookups to minimize API calls.
+ * First checks the identity resolver cache, then fetches from the network
+ * in batches if needed.
+ */
 export class ProfileResolver extends Context.Tag("@skygent/ProfileResolver")<
   ProfileResolver,
   {
+    /**
+     * Resolves a handle for a DID, with automatic batching and caching.
+     *
+     * @param did - The DID to resolve to a handle
+     * @returns Effect resolving to Handle, or BskyError on resolution failure
+     */
     readonly handleForDid: (did: string) => Effect.Effect<Handle, BskyError>;
   }
 >() {

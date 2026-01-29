@@ -1,3 +1,16 @@
+/**
+ * View Checkpoint Store Service
+ *
+ * Manages checkpoints for store derivation (view) operations. Tracks the last
+ * processed event from a source store to enable incremental derivation.
+ *
+ * Unlike sync checkpoints which track data sources, view checkpoints track
+ * the processing progress when deriving one store from another, allowing
+ * incremental updates rather than full re-derivation.
+ *
+ * @module services/view-checkpoint-store
+ */
+
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import type { PlatformError } from "@effect/platform/Error";
 import { Context, Effect, Layer, Option, Schema } from "effect";
@@ -5,9 +18,21 @@ import { DerivationCheckpoint } from "../domain/derivation.js";
 import { StoreName, StorePath } from "../domain/primitives.js";
 import { StoreIoError } from "../domain/errors.js";
 
+/**
+ * Generates the storage key for a view derivation checkpoint.
+ * @param viewName - The name of the derived store (view)
+ * @param sourceName - The name of the source store
+ * @returns The storage key string
+ */
 const checkpointKey = (viewName: StoreName, sourceName: StoreName) =>
   `stores/${viewName}/checkpoints/derivation/${sourceName}`;
 
+/**
+ * Converts an error to a StoreIoError with context for the checkpoint path.
+ * @param viewName - The name of the derived store
+ * @param sourceName - The name of the source store
+ * @returns A function that creates StoreIoError from any cause
+ */
 const toStoreIoError = (viewName: StoreName, sourceName: StoreName) => (cause: unknown) => {
   const path = Schema.decodeUnknownSync(StorePath)(
     `stores/${viewName}/checkpoints/derivation/${sourceName}`
@@ -15,16 +40,45 @@ const toStoreIoError = (viewName: StoreName, sourceName: StoreName) => (cause: u
   return StoreIoError.make({ path, cause });
 };
 
+/**
+ * Service for managing derivation (view) checkpoints.
+ *
+ * This service tracks the processing progress when deriving one store from
+ * another, storing checkpoints that record which events from the source store
+ * have been processed. This enables efficient incremental derivation.
+ */
 export class ViewCheckpointStore extends Context.Tag("@skygent/ViewCheckpointStore")<
   ViewCheckpointStore,
   {
+    /**
+     * Loads the derivation checkpoint for a view and its source store.
+     *
+     * @param viewName - The name of the derived store
+     * @param sourceName - The name of the source store
+     * @returns Effect resolving to Option of DerivationCheckpoint, or StoreIoError on failure
+     */
     readonly load: (
       viewName: StoreName,
       sourceName: StoreName
     ) => Effect.Effect<Option.Option<DerivationCheckpoint>, StoreIoError>;
+
+    /**
+     * Saves a derivation checkpoint.
+     *
+     * @param checkpoint - The checkpoint data to persist
+     * @returns Effect resolving to void, or StoreIoError on failure
+     */
     readonly save: (
       checkpoint: DerivationCheckpoint
     ) => Effect.Effect<void, StoreIoError>;
+
+    /**
+     * Removes a derivation checkpoint.
+     *
+     * @param viewName - The name of the derived store
+     * @param sourceName - The name of the source store
+     * @returns Effect resolving to void, or StoreIoError on failure
+     */
     readonly remove: (
       viewName: StoreName,
       sourceName: StoreName

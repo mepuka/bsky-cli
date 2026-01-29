@@ -1,3 +1,22 @@
+/**
+ * Identity Resolver Service
+ *
+ * Resolves Bluesky handles to DIDs (Decentralized Identifiers) and vice versa.
+ * Provides identity resolution with multiple caching layers for performance:
+ * - Persistent key-value store cache for long-term caching
+ * - In-memory request cache for short-term deduplication
+ *
+ * Supports various resolution strategies:
+ * - Direct handle resolution via resolveHandle API
+ * - Identity resolution via resolveIdentity API (with verification)
+ * - Profile-based resolution for handles from DIDs
+ *
+ * Handles edge cases like deactivated DIDs, invalid handles, and not-found errors
+ * with appropriate caching to avoid repeated failed requests.
+ *
+ * @module services/identity-resolver
+ */
+
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import {
   Cache,
@@ -112,16 +131,64 @@ const entryStatusError = (
   });
 };
 
+/**
+ * Service for resolving Bluesky identities (handles <-> DIDs).
+ *
+ * Provides bidirectional resolution between handles and DIDs with comprehensive
+ * caching. Lookup methods check cache only, while resolve methods will fetch
+ * from the network if not cached.
+ */
 export class IdentityResolver extends Context.Tag("@skygent/IdentityResolver")<
   IdentityResolver,
   {
+    /**
+     * Looks up a DID from cache by handle (cache-only, no network request).
+     *
+     * @param handle - The handle to look up (e.g., "alice.bsky.social")
+     * @returns Effect resolving to Option of DID, or BskyError on cache failure
+     */
     readonly lookupDid: (handle: string) => Effect.Effect<Option.Option<Did>, BskyError>;
+
+    /**
+     * Looks up a handle from cache by DID (cache-only, no network request).
+     *
+     * @param did - The DID to look up (e.g., "did:plc:...")
+     * @returns Effect resolving to Option of Handle, or BskyError on cache failure
+     */
     readonly lookupHandle: (did: string) => Effect.Effect<Option.Option<Handle>, BskyError>;
+
+    /**
+     * Resolves a handle to a DID, fetching from network if not cached.
+     *
+     * @param handle - The handle to resolve
+     * @returns Effect resolving to DID, or BskyError on resolution failure
+     */
     readonly resolveDid: (handle: string) => Effect.Effect<Did, BskyError>;
+
+    /**
+     * Resolves a DID to a handle, fetching from network if not cached.
+     *
+     * @param did - The DID to resolve
+     * @returns Effect resolving to Handle, or BskyError on resolution failure
+     */
     readonly resolveHandle: (did: string) => Effect.Effect<Handle, BskyError>;
+
+    /**
+     * Resolves an identity (handle or DID) to full identity info with verification.
+     *
+     * @param identifier - The handle or DID to resolve
+     * @returns Effect resolving to IdentityInfo with did and handle, or BskyError
+     */
     readonly resolveIdentity: (
       identifier: string
     ) => Effect.Effect<IdentityInfo, BskyError>;
+
+    /**
+     * Manually caches a profile's identity information.
+     *
+     * @param input - Object containing did, handle, and optional verified flag and source
+     * @returns Effect resolving to void, or BskyError on cache failure
+     */
     readonly cacheProfile: (input: {
       readonly did: Did;
       readonly handle: Handle;
