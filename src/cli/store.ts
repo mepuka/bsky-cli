@@ -81,6 +81,13 @@ const loadStoreRef = (name: StoreName) =>
     });
   });
 
+const loadStoreConfig = (name: StoreName) =>
+  Effect.gen(function* () {
+    const manager = yield* StoreManager;
+    const config = yield* manager.getConfig(name);
+    return Option.getOrElse(config, () => defaultStoreConfig);
+  });
+
 const compactLineage = (store: StoreRef, lineage: StoreLineage | undefined) => {
   if (!lineage) {
     return { store: store.name, derived: false, status: "ready" };
@@ -361,4 +368,4 @@ export const storeCommand = Command.make("store", {}).pipe(
   )
 );
 
-export const storeOptions = { storeNameOption, loadStoreRef };
+export const storeOptions = { storeNameOption, loadStoreRef, loadStoreConfig };

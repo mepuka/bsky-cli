@@ -1,6 +1,6 @@
 import { Command } from "@effect/cli";
 import { FileSystem, Path } from "@effect/platform";
-import { Effect, Option, Stream } from "effect";
+import { Clock, Effect, Option, Stream } from "effect";
 import { withExamples } from "./help.js";
 import { writeJson } from "./output.js";
 import { AppConfigService } from "../services/app-config.js";
@@ -42,9 +42,10 @@ const configCheckCommand = Command.make("check", {}, () =>
     // Store root writable
     const rootCheck = yield* Effect.gen(function* () {
       yield* fs.makeDirectory(config.storeRoot, { recursive: true });
+      const now = yield* Clock.currentTimeMillis;
       const probePath = path.join(
         config.storeRoot,
-        `.skygent-check-${Date.now()}`
+        `.skygent-check-${now}`
       );
       yield* fs.writeFileString(probePath, "ok");
       yield* fs.remove(probePath);

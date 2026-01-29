@@ -141,4 +141,27 @@ describe("StoreWriter", () => {
       await removeTempDir(tempDir);
     }
   });
+
+  test("append generates unique event IDs under concurrency", async () => {
+    const program = Effect.gen(function* () {
+      const writer = yield* StoreWriter;
+
+      const records = yield* Effect.forEach(
+        Array.from({ length: 20 }),
+        () => writer.append(sampleStore, sampleEvent),
+        { concurrency: "unbounded" }
+      );
+
+      return records.map((record) => record.id);
+    });
+
+    const tempDir = await makeTempDir();
+    try {
+      const layer = buildLayer(tempDir);
+      const ids = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      expect(new Set(ids).size).toBe(ids.length);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
 });

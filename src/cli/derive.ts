@@ -7,11 +7,13 @@ import { DerivationEngine } from "../services/derivation-engine.js";
 import { StoreManager } from "../services/store-manager.js";
 import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
 import { OutputManager } from "../services/output-manager.js";
+import { StoreLock } from "../services/store-lock.js";
 import { filterJsonDescription } from "./filter-help.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { writeJson } from "./output.js";
 import { storeOptions } from "./store.js";
 import { CliInputError } from "./errors.js";
+import { StoreLockError } from "../domain/errors.js";
 import { logInfo } from "./logging.js";
 import type { FilterEvaluationMode } from "../domain/derivation.js";
 import { CliPreferences } from "./preferences.js";
@@ -69,6 +71,7 @@ export const deriveCommand = Command.make(
       const checkpoints = yield* ViewCheckpointStore;
       const manager = yield* StoreManager;
       const outputManager = yield* OutputManager;
+      const storeLock = yield* StoreLock;
       const preferences = yield* CliPreferences;
 
       // Parse filter expression
@@ -146,37 +149,62 @@ export const deriveCommand = Command.make(
         onSome: Effect.succeed
       });
 
-      // Execute derivation
-      const result = yield* engine.derive(sourceRef, targetRef, filterExpr, {
-        mode: evaluationMode,
-        reset
-      });
+      const storesToLock = [sourceRef, targetRef]
+        .filter(
+          (store, index, stores) =>
+            stores.findIndex((value) => value.name === store.name) === index
+        )
+        .sort((a, b) => a.name.localeCompare(b.name));
 
-      const materialized = yield* outputManager.materializeStore(targetRef);
-      if (materialized.filters.length > 0) {
-        yield* logInfo("Materialized filter outputs", {
-          store: targetRef.name,
-          filters: materialized.filters.map((spec) => spec.name)
-        });
-      }
+      const withStoreLocks = <A, E, R>(
+        effect: Effect.Effect<A, E, R>
+      ): Effect.Effect<A, E | StoreLockError, R> => {
+        let next: Effect.Effect<A, E | StoreLockError, R> = effect;
+        for (let i = storesToLock.length - 1; i >= 0; i -= 1) {
+          const store = storesToLock[i];
+          if (!store) {
+            continue;
+          }
+          next = storeLock.withStoreLock(store, next);
+        }
+        return next;
+      };
 
-      // Output result with context
-      if (preferences.compact) {
-        yield* writeJson({
-          source: sourceRef.name,
-          target: targetRef.name,
-          mode: evaluationMode,
-          ...result
-        });
-        return;
-      }
+      return yield* withStoreLocks(
+        Effect.gen(function* () {
+          // Execute derivation
+          const result = yield* engine.derive(sourceRef, targetRef, filterExpr, {
+            mode: evaluationMode,
+            reset
+          });
 
-      yield* writeJson({
-        source: sourceRef.name,
-        target: targetRef.name,
-        mode: evaluationMode,
-        result
-      });
+          const materialized = yield* outputManager.materializeStore(targetRef);
+          if (materialized.filters.length > 0) {
+            yield* logInfo("Materialized filter outputs", {
+              store: targetRef.name,
+              filters: materialized.filters.map((spec) => spec.name)
+            });
+          }
+
+          // Output result with context
+          if (preferences.compact) {
+            yield* writeJson({
+              source: sourceRef.name,
+              target: targetRef.name,
+              mode: evaluationMode,
+              ...result
+            });
+            return;
+          }
+
+          yield* writeJson({
+            source: sourceRef.name,
+            target: targetRef.name,
+            mode: evaluationMode,
+            result
+          });
+        })
+      );
     })
 ).pipe(
   Command.withDescription(

@@ -6,3 +6,4 @@ export type { RenderContext, TreeConfig } from "./tree.js";
 export { renderTree } from "./tree.js";
 export { renderPostCompact, renderPostCard } from "./post.js";
 export { renderThread } from "./thread.js";
+export { renderFilterDescriptionDoc } from "./filter.js";

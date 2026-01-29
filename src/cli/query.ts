@@ -1,5 +1,6 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Chunk, Effect, Option, Stream } from "effect";
+import * as Doc from "@effect/printer/Doc";
 import { all } from "../domain/filter.js";
 import { StoreQuery } from "../domain/events.js";
 import { StoreName } from "../domain/primitives.js";
@@ -8,6 +9,9 @@ import { FilterRuntime } from "../services/filter-runtime.js";
 import { AppConfigService } from "../services/app-config.js";
 import { StoreIndex } from "../services/store-index.js";
 import { renderPostsMarkdown, renderPostsTable } from "../domain/format.js";
+import { renderPostCompact, renderPostCard } from "./doc/post.js";
+import { renderThread } from "./doc/thread.js";
+import { renderPlain, renderAnsi } from "./doc/render.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { parseRange } from "./range.js";
@@ -34,10 +38,20 @@ const formatOption = Options.choice("format", [
   "json",
   "ndjson",
   "markdown",
-  "table"
+  "table",
+  "compact",
+  "card",
+  "thread"
 ]).pipe(
   Options.optional,
   Options.withDescription("Output format (default: config output format)")
+);
+const ansiOption = Options.boolean("ansi").pipe(
+  Options.withDescription("Enable ANSI colors in output")
+);
+const widthOption = Options.integer("width").pipe(
+  Options.withDescription("Line width for terminal output"),
+  Options.optional
 );
 const fieldsOption = Options.text("fields").pipe(
   Options.withDescription(
@@ -62,9 +76,11 @@ export const queryCommand = Command.make(
     filterJson: filterJsonOption,
     limit: limitOption,
     format: formatOption,
+    ansi: ansiOption,
+    width: widthOption,
     fields: fieldsOption
   },
-  ({ store, range, filter, filterJson, limit, format, fields }) =>
+  ({ store, range, filter, filterJson, limit, format, ansi, width, fields }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
@@ -88,6 +104,8 @@ export const queryCommand = Command.make(
           cause: { format: outputFormat }
         });
       }
+
+      const w = Option.getOrUndefined(width);
 
       if (Option.isSome(limit) && limit.value <= 0) {
         return yield* CliInputError.make({
@@ -126,6 +144,24 @@ export const queryCommand = Command.make(
         case "table":
           yield* writeText(renderPostsTable(posts));
           return;
+        case "compact": {
+          const doc = Doc.vsep(posts.map(renderPostCompact));
+          yield* writeText(ansi ? renderAnsi(doc, w) : renderPlain(doc, w));
+          return;
+        }
+        case "card": {
+          const cards = posts.map((p) => Doc.vsep(renderPostCard(p)));
+          const doc = Doc.vsep(
+            cards.flatMap((card, i) => i < cards.length - 1 ? [card, Doc.empty] : [card])
+          );
+          yield* writeText(ansi ? renderAnsi(doc, w) : renderPlain(doc, w));
+          return;
+        }
+        case "thread": {
+          const doc = renderThread(posts, { compact: false });
+          yield* writeText(ansi ? renderAnsi(doc, w) : renderPlain(doc, w));
+          return;
+        }
         default:
           yield* writeJson(projectedPosts);
       }
@@ -136,7 +172,10 @@ export const queryCommand = Command.make(
       "Query a store with optional range and filter",
       [
         "skygent query my-store --limit 25 --format table",
-        "skygent query my-store --range 2024-01-01T00:00:00Z..2024-01-31T00:00:00Z --filter 'hashtag:#ai'"
+        "skygent query my-store --range 2024-01-01T00:00:00Z..2024-01-31T00:00:00Z --filter 'hashtag:#ai'",
+        "skygent query my-store --format card --ansi",
+        "skygent query my-store --format thread --ansi --width 120",
+        "skygent query my-store --format compact --limit 50"
       ],
       [
         "Tip: use --fields @minimal or --compact to reduce JSON output size."

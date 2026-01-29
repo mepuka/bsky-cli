@@ -1,5 +1,5 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Chunk, Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Chunk, Clock, Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { StoreQuery } from "../domain/events.js";
 import type { Post } from "../domain/post.js";
 import { Post as PostSchema } from "../domain/post.js";
@@ -128,7 +128,10 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
         path
       );
 
-      const updatedAt = yield* Schema.decodeUnknown(Timestamp)(new Date()).pipe(
+      const updatedAt = yield* Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          Schema.decodeUnknown(Timestamp)(new Date(now).toISOString())
+        ),
         Effect.orDie
       );
 

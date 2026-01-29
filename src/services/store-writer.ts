@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Random, Ref, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Random, Schema, SynchronizedRef } from "effect";
 import type * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import { StoreIoError } from "../domain/errors.js";
@@ -85,7 +85,7 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
     StoreWriter,
     Effect.gen(function* () {
       const storeDb = yield* StoreDb;
-      const idState = yield* Ref.make({
+      const idState = yield* SynchronizedRef.make({
         lastTime: 0,
         lastRandom: [] as ReadonlyArray<number>
       });
@@ -97,31 +97,34 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
         );
 
       const generateEventId = Effect.fn("StoreWriter.generateEventId")(() =>
-        Effect.gen(function* () {
-          const state = yield* Ref.get(idState);
-          const now = yield* Clock.currentTimeMillis;
-          let time = state.lastTime;
-          let digits = state.lastRandom;
+        SynchronizedRef.modifyEffect(idState, (state) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+            let time = state.lastTime;
+            let digits = state.lastRandom;
 
-          if (digits.length === 0 || now > state.lastTime) {
-            time = now;
-            digits = yield* nextRandomDigits();
-          } else {
-            const incremented = incrementRandomDigits(digits);
-            if (incremented.overflow) {
-              time = state.lastTime + 1;
+            if (digits.length === 0 || now > state.lastTime) {
+              time = now;
               digits = yield* nextRandomDigits();
             } else {
-              time = state.lastTime;
-              digits = incremented.digits;
+              const incremented = incrementRandomDigits(digits);
+              if (incremented.overflow) {
+                time = state.lastTime + 1;
+                digits = yield* nextRandomDigits();
+              } else {
+                time = state.lastTime;
+                digits = incremented.digits;
+              }
             }
-          }
 
-          const id = `${encodeTime(time)}${encodeRandomDigits(digits)}`;
-          const decoded = yield* Schema.decodeUnknown(EventId)(id);
-          yield* Ref.set(idState, { lastTime: time, lastRandom: digits });
-          return decoded;
-        }).pipe(Effect.orDie)
+            const id = `${encodeTime(time)}${encodeRandomDigits(digits)}`;
+            const decoded = yield* Schema.decodeUnknown(EventId)(id);
+            return [
+              decoded,
+              { lastTime: time, lastRandom: digits }
+            ] as const;
+          })
+        ).pipe(Effect.orDie)
       );
 
       const appendWithClient = Effect.fn("StoreWriter.appendWithClient")(

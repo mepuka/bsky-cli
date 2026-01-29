@@ -27,6 +27,7 @@ import {
   authorFilterOption,
   includePinsOption,
   quietOption,
+  refreshOption,
   strictOption,
   maxErrorsOption,
   parseMaxErrors
@@ -73,7 +74,8 @@ const timelineCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
-    quiet: quietOption
+    quiet: quietOption,
+    refresh: refreshOption
   },
   makeWatchCommandBody("timeline", () => DataSource.timeline())
 ).pipe(
@@ -97,7 +99,8 @@ const feedCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
-    quiet: quietOption
+    quiet: quietOption,
+    refresh: refreshOption
   },
   ({ uri, ...rest }) => makeWatchCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
 ).pipe(
@@ -119,7 +122,8 @@ const notificationsCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
-    quiet: quietOption
+    quiet: quietOption,
+    refresh: refreshOption
   },
   makeWatchCommandBody("notifications", () => DataSource.notifications())
 ).pipe(
@@ -142,9 +146,10 @@ const authorCommand = Command.make(
     postFilter: postFilterOption,
     postFilterJson: postFilterJsonOption,
     interval: intervalOption,
-    quiet: quietOption
+    quiet: quietOption,
+    refresh: refreshOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, interval, store, quiet }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, interval, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const apiFilter = Option.getOrUndefined(filter);
       const source = DataSource.author(actor, {
@@ -161,7 +166,8 @@ const authorCommand = Command.make(
         filter: postFilter,
         filterJson: postFilterJson,
         interval,
-        quiet
+        quiet,
+        refresh
       });
     })
 ).pipe(
@@ -187,9 +193,10 @@ const threadCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
-    quiet: quietOption
+    quiet: quietOption,
+    refresh: refreshOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, interval, store, quiet }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, interval, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
       const parsedParentHeight = yield* parseBoundedIntOption(
@@ -209,7 +216,7 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, interval, quiet });
+      return yield* run({ store, filter, filterJson, interval, quiet, refresh });
     })
 ).pipe(
   Command.withDescription(

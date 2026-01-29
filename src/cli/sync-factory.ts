@@ -8,7 +8,7 @@ import { ResourceMonitor } from "../services/resource-monitor.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJson, writeJsonStream } from "./output.js";
 import { storeOptions } from "./store.js";
-import { logInfo, makeSyncReporter } from "./logging.js";
+import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
 import { parseInterval } from "./interval.js";
 import type { Option } from "effect";
 import type { StoreName } from "../domain/primitives.js";
@@ -19,6 +19,7 @@ export interface CommonCommandInput {
   readonly filter: Option.Option<string>;
   readonly filterJson: Option.Option<string>;
   readonly quiet: boolean;
+  readonly refresh: boolean;
 }
 
 /** Build the command body for a one-shot sync command (timeline, feed, notifications). */
@@ -35,13 +36,22 @@ export const makeSyncCommandBody = (
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
       const storeRef = yield* storeOptions.loadStoreRef(input.store);
+      const storeConfig = yield* storeOptions.loadStoreConfig(input.store);
       const expr = yield* parseFilterExpr(input.filter, input.filterJson);
+      const basePolicy = storeConfig.syncPolicy ?? "dedupe";
+      const policy = input.refresh ? "refresh" : basePolicy;
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
           yield* logInfo("Starting sync", { source: sourceName, store: storeRef.name, ...extraLogFields });
+          if (policy === "refresh") {
+            yield* logWarn("Refresh mode updates existing posts and may grow the event log.", {
+              source: sourceName,
+              store: storeRef.name
+            });
+          }
           const result = yield* sync
-            .sync(makeDataSource(), storeRef, expr)
+            .sync(makeDataSource(), storeRef, expr, { policy })
             .pipe(
               Effect.provideService(SyncReporter, makeSyncReporter(input.quiet, monitor, output))
             );
@@ -76,19 +86,29 @@ export const makeWatchCommandBody = (
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(input.store);
+      const storeConfig = yield* storeOptions.loadStoreConfig(input.store);
       const expr = yield* parseFilterExpr(input.filter, input.filterJson);
+      const basePolicy = storeConfig.syncPolicy ?? "dedupe";
+      const policy = input.refresh ? "refresh" : basePolicy;
       const parsedInterval = yield* parseInterval(input.interval);
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
           yield* logInfo("Starting watch", { source: sourceName, store: storeRef.name, ...extraLogFields });
+          if (policy === "refresh") {
+            yield* logWarn("Refresh mode updates existing posts and may grow the event log.", {
+              source: sourceName,
+              store: storeRef.name
+            });
+          }
           const stream = sync
             .watch(
               WatchConfig.make({
                 source: makeDataSource(),
                 store: storeRef,
                 filter: expr,
-                interval: parsedInterval
+                interval: parsedInterval,
+                policy
               })
             )
             .pipe(

@@ -4,7 +4,7 @@ import * as Semigroup from "@effect/typeclass/Semigroup";
 import { MonoidSum } from "@effect/typeclass/data/Number";
 import { AuthorFeedFilter } from "./bsky.js";
 import { FilterExprSchema } from "./filter.js";
-import { StoreRef } from "./store.js";
+import { StoreRef, SyncUpsertPolicy } from "./store.js";
 import { EventId, Timestamp } from "./primitives.js";
 
 export const SyncStage = Schema.Literal("source", "parse", "filter", "store");
@@ -137,7 +137,8 @@ export class WatchConfig extends Schema.Class<WatchConfig>("WatchConfig")({
   source: DataSourceSchema,
   store: StoreRef,
   filter: FilterExprSchema,
-  interval: Schema.optional(Schema.Duration)
+  interval: Schema.optional(Schema.Duration),
+  policy: Schema.optional(SyncUpsertPolicy)
 }) {}
 
 export class SyncEvent extends Schema.TaggedClass<SyncEvent>()("SyncEvent", {

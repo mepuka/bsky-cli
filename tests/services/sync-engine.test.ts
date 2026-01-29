@@ -18,7 +18,7 @@ import { SyncReporter } from "../../src/services/sync-reporter.js";
 import { TrendingTopics } from "../../src/services/trending-topics.js";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { SyncSettings, SyncSettingsOverrides } from "../../src/services/sync-settings.js";
-import { all } from "../../src/domain/filter.js";
+import { all, none } from "../../src/domain/filter.js";
 import { RawPost } from "../../src/domain/raw.js";
 import { StoreRef } from "../../src/domain/store.js";
 import { DataSource, SyncCheckpoint } from "../../src/domain/sync.js";
@@ -168,6 +168,37 @@ describe("SyncEngine", () => {
     }
   });
 
+  test("sync refresh mode stores posts even when already present", async () => {
+    const program = Effect.gen(function* () {
+      const sync = yield* SyncEngine;
+
+      const first = yield* sync.sync(
+        DataSource.timeline(),
+        sampleStore,
+        all(),
+        { policy: "refresh" }
+      );
+      const second = yield* sync.sync(
+        DataSource.timeline(),
+        sampleStore,
+        all(),
+        { policy: "refresh" }
+      );
+
+      return { first, second };
+    });
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const outcome = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+
+      expect(outcome.first.postsAdded).toBe(1);
+      expect(outcome.second.postsAdded).toBe(1);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
   test("checkpoint cursor advances with page cursor from stream", async () => {
     const page1Post = Schema.decodeUnknownSync(RawPost)({
       uri: "at://did:plc:example/app.bsky.feed.post/p1",
@@ -247,6 +278,81 @@ describe("SyncEngine", () => {
       expect(Option.isSome(checkpoint)).toBe(true);
       if (Option.isSome(checkpoint)) {
         expect(checkpoint.value.cursor).toBe("cursor-page-2");
+      }
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("checkpoint saves cursor even when no posts match filter", async () => {
+    const page1Post = Schema.decodeUnknownSync(RawPost)({
+      uri: "at://did:plc:example/app.bsky.feed.post/p1",
+      author: "alice.bsky",
+      record: { text: "Page 1", createdAt: "2026-01-01T00:00:00.000Z" },
+      _pageCursor: "cursor-page-1"
+    });
+
+    const cursorBskyLayer = Layer.succeed(
+      BskyClient,
+      BskyClient.of({
+        getTimeline: () => Stream.fromIterable([page1Post]),
+        getNotifications: () => Stream.empty,
+        getFeed: () => Stream.empty,
+        getPost: () => Effect.succeed(page1Post)
+      })
+    );
+
+    const program = Effect.gen(function* () {
+      const sync = yield* SyncEngine;
+      const checkpointStore = yield* SyncCheckpointStore;
+
+      yield* sync.sync(DataSource.timeline(), sampleStore, none());
+
+      return yield* checkpointStore.load(sampleStore, DataSource.timeline());
+    });
+
+    const tempDir = await makeTempDir();
+    const overrides = Layer.succeed(ConfigOverrides, { storeRoot: tempDir });
+    const syncOverrides = Layer.succeed(SyncSettingsOverrides, {});
+    const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+    const syncSettingsLayer = SyncSettings.layer.pipe(Layer.provide(syncOverrides));
+    const storageLayer = KeyValueStore.layerMemory;
+    const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+    const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
+    const indexLayer = StoreIndex.layer.pipe(
+      Layer.provideMerge(storeDbLayer),
+      Layer.provideMerge(eventLogLayer)
+    );
+    const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+    const committerLayer = StoreCommitter.layer.pipe(
+      Layer.provideMerge(storeDbLayer),
+      Layer.provideMerge(writerLayer)
+    );
+    const checkpointLayer = SyncCheckpointStore.layer.pipe(
+      Layer.provideMerge(storageLayer)
+    );
+
+    const layer = SyncEngine.layer.pipe(
+      Layer.provideMerge(cursorBskyLayer),
+      Layer.provideMerge(PostParser.layer),
+      Layer.provideMerge(filterRuntimeLayer),
+      Layer.provideMerge(committerLayer),
+      Layer.provideMerge(indexLayer),
+      Layer.provideMerge(eventLogLayer),
+      Layer.provideMerge(checkpointLayer),
+      Layer.provideMerge(SyncReporter.layer),
+      Layer.provideMerge(syncSettingsLayer),
+      Layer.provideMerge(appConfigLayer),
+      Layer.provideMerge(storageLayer),
+      Layer.provideMerge(storeDbLayer),
+      Layer.provideMerge(BunContext.layer)
+    );
+
+    try {
+      const checkpoint = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      expect(Option.isSome(checkpoint)).toBe(true);
+      if (Option.isSome(checkpoint)) {
+        expect(checkpoint.value.cursor).toBe("cursor-page-1");
       }
     } finally {
       await removeTempDir(tempDir);

@@ -1,4 +1,4 @@
-import { Chunk, Context, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { Chunk, Clock, Context, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import { StoreIndexError } from "../domain/errors.js";
@@ -222,8 +222,10 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
             return;
           }
 
-          const updatedAt = yield* Schema.decodeUnknown(Timestamp)(
-            new Date().toISOString()
+          const updatedAt = yield* Clock.currentTimeMillis.pipe(
+            Effect.flatMap((now) =>
+              Schema.decodeUnknown(Timestamp)(new Date(now).toISOString())
+            )
           );
           const nextCheckpoint = IndexCheckpoint.make({
             index: indexName,

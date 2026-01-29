@@ -16,7 +16,9 @@ import { decodeJson } from "./parse.js";
 import { writeJson, writeText } from "./output.js";
 import { CliInputError, CliJsonError } from "./errors.js";
 import { storeOptions } from "./store.js";
-import { describeFilter, renderFilterDescription } from "../domain/filter-describe.js";
+import { describeFilter } from "../domain/filter-describe.js";
+import { renderFilterDescriptionDoc } from "./doc/filter.js";
+import { renderPlain, renderAnsi } from "./doc/render.js";
 import { withExamples } from "./help.js";
 import { filterOption, filterJsonOption } from "./shared-options.js";
 
@@ -44,6 +46,9 @@ const sampleSizeOption = Options.integer("sample-size").pipe(
 const describeFormatOption = Options.choice("format", ["text", "json"]).pipe(
   Options.withDescription("Output format for filter descriptions (default: text)"),
   Options.optional
+);
+const describeAnsiOption = Options.boolean("ansi").pipe(
+  Options.withDescription("Enable ANSI colors in output")
 );
 
 const requireFilterExpr = (
@@ -344,8 +349,8 @@ export const filterBenchmark = Command.make(
 
 export const filterDescribe = Command.make(
   "describe",
-  { filter: filterOption, filterJson: filterJsonOption, format: describeFormatOption },
-  ({ filter, filterJson, format }) =>
+  { filter: filterOption, filterJson: filterJsonOption, format: describeFormatOption, ansi: describeAnsiOption },
+  ({ filter, filterJson, format, ansi }) =>
     Effect.gen(function* () {
       yield* requireFilterExpr(filter, filterJson);
       const expr = yield* parseFilterExpr(filter, filterJson);
@@ -355,7 +360,8 @@ export const filterDescribe = Command.make(
         yield* writeJson(description);
         return;
       }
-      yield* writeText(renderFilterDescription(description));
+      const doc = renderFilterDescriptionDoc(description);
+      yield* writeText(ansi ? renderAnsi(doc) : renderPlain(doc));
     })
 ).pipe(
   Command.withDescription(

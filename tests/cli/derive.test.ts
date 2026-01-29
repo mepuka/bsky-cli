@@ -10,6 +10,7 @@ import { OutputManager } from "../../src/services/output-manager.js";
 import { DerivationEngine } from "../../src/services/derivation-engine.js";
 import { StoreManager } from "../../src/services/store-manager.js";
 import { ViewCheckpointStore } from "../../src/services/view-checkpoint-store.js";
+import { StoreLock } from "../../src/services/store-lock.js";
 import { FilterLibrary } from "../../src/services/filter-library.js";
 import { FilterNotFound } from "../../src/domain/errors.js";
 import { CliPreferences } from "../../src/cli/preferences.js";
@@ -89,6 +90,9 @@ describe("CLI derive command", () => {
     const storeLayer = StoreManager.layer.pipe(
       Layer.provideMerge(appConfigLayer)
     );
+    const storeLockLayer = StoreLock.layer.pipe(
+      Layer.provideMerge(appConfigLayer)
+    );
     const engineLayer = Layer.succeed(
       DerivationEngine,
       DerivationEngine.of({
@@ -134,6 +138,7 @@ describe("CLI derive command", () => {
     const appLayer = Layer.mergeAll(
       outputLayer,
       storeLayer,
+      storeLockLayer,
       engineLayer,
       checkpointsLayer,
       outputManagerLayer,

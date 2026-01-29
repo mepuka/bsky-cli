@@ -39,6 +39,11 @@ export const quietOption = Options.boolean("quiet").pipe(
   Options.withDescription("Suppress progress output")
 );
 
+/** --refresh flag to update existing posts instead of deduping */
+export const refreshOption = Options.boolean("refresh").pipe(
+  Options.withDescription("Refresh existing posts instead of deduping")
+);
+
 /** --strict flag to stop on first error */
 export const strictOption = Options.boolean("strict").pipe(
   Options.withDescription("Stop on first error and do not advance the checkpoint")

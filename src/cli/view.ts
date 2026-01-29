@@ -4,6 +4,7 @@ import { StoreName } from "../domain/primitives.js";
 import { DerivationValidator } from "../services/derivation-validator.js";
 import { writeJson } from "./output.js";
 import { withExamples } from "./help.js";
+import { threadCommand } from "./view-thread.js";
 
 const viewArg = Args.text({ name: "view" }).pipe(
   Args.withSchema(StoreName),
@@ -37,7 +38,7 @@ const statusCommand = Command.make(
 );
 
 export const viewCommand = Command.make("view", {}).pipe(
-  Command.withSubcommands([statusCommand]),
+  Command.withSubcommands([statusCommand, threadCommand]),
   Command.withDescription(
     withExamples("View derivation status and metadata", [
       "skygent view status derived-store source-store"

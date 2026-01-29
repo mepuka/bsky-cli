@@ -10,7 +10,7 @@ import { EventMeta, PostUpsert } from "../domain/events.js";
 import type { Post } from "../domain/post.js";
 import { EventId, Timestamp } from "../domain/primitives.js";
 import type { RawPost } from "../domain/raw.js";
-import type { StoreRef } from "../domain/store.js";
+import type { StoreRef, SyncUpsertPolicy } from "../domain/store.js";
 import {
   DataSource,
   SyncCheckpoint,
@@ -88,7 +88,8 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
     readonly sync: (
       source: DataSource,
       target: StoreRef,
-      filter: FilterExpr
+      filter: FilterExpr,
+      options?: { readonly policy?: SyncUpsertPolicy }
     ) => Effect.Effect<SyncResult, SyncError>;
     readonly watch: (config: WatchConfig) => Stream.Stream<SyncEvent, SyncError>;
   }
@@ -105,7 +106,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
       const settings = yield* SyncSettings;
 
       const sync = Effect.fn("SyncEngine.sync")(
-        (source: DataSource, target: StoreRef, filter: FilterExpr) =>
+        (source: DataSource, target: StoreRef, filter: FilterExpr, options?: { readonly policy?: SyncUpsertPolicy }) =>
           Effect.gen(function* () {
             const predicate = yield* runtime
               .evaluateWithMetadata(filter)
@@ -116,6 +117,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               );
 
             const filterHash = filterExprSignature(filter);
+            const policy = options?.policy ?? "dedupe";
 
             const makeMeta = () =>
               Clock.currentTimeMillis.pipe(
@@ -137,6 +139,16 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               Effect.gen(function* () {
                 const meta = yield* makeMeta();
                 const event = PostUpsert.make({ post, meta });
+                if (policy === "refresh") {
+                  const record = yield* committer
+                    .appendUpsert(target, event)
+                    .pipe(
+                      Effect.mapError(
+                        toSyncError("store", "Failed to append event")
+                      )
+                    );
+                  return Option.some(record.id);
+                }
                 const stored = yield* committer
                   .appendUpsertIfMissing(target, event)
                   .pipe(
@@ -287,7 +299,9 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
             const saveCheckpoint = (state: SyncState, now: number) => {
               const lastEventId = resolveLastEventId(state.lastEventId);
               const shouldSave =
-                Option.isSome(lastEventId) || Option.isSome(activeCheckpoint);
+                Option.isSome(lastEventId) ||
+                Option.isSome(state.latestCursor) ||
+                Option.isSome(activeCheckpoint);
               if (!shouldSave) {
                 return Effect.void;
               }
@@ -441,8 +455,9 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
 
       const watch = (config: WatchConfig) => {
         const interval = config.interval ?? Duration.seconds(30);
+        const syncOptions = config.policy ? { policy: config.policy } : undefined;
         return Stream.repeatEffectWithSchedule(
-          sync(config.source, config.store, config.filter),
+          sync(config.source, config.store, config.filter, syncOptions),
           Schedule.spaced(interval)
         ).pipe(Stream.map((result) => SyncEvent.make({ result })));
       };

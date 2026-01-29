@@ -28,6 +28,7 @@ import {
   authorFilterOption,
   includePinsOption,
   quietOption,
+  refreshOption,
   strictOption,
   maxErrorsOption,
   parseMaxErrors
@@ -110,7 +111,7 @@ const parseBoundedIntOption = (
 
 const timelineCommand = Command.make(
   "timeline",
-  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption },
+  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
   makeSyncCommandBody("timeline", () => DataSource.timeline())
 ).pipe(
   Command.withDescription(
@@ -127,7 +128,7 @@ const timelineCommand = Command.make(
 
 const feedCommand = Command.make(
   "feed",
-  { uri: feedUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption },
+  { uri: feedUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
   ({ uri, ...rest }) => makeSyncCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
 ).pipe(
   Command.withDescription(
@@ -143,7 +144,7 @@ const feedCommand = Command.make(
 
 const notificationsCommand = Command.make(
   "notifications",
-  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption },
+  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
   makeSyncCommandBody("notifications", () => DataSource.notifications())
 ).pipe(
   Command.withDescription(
@@ -164,9 +165,10 @@ const authorCommand = Command.make(
     includePins: includePinsOption,
     postFilter: postFilterOption,
     postFilterJson: postFilterJsonOption,
-    quiet: quietOption
+    quiet: quietOption,
+    refresh: refreshOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const apiFilter = Option.getOrUndefined(filter);
       const source = DataSource.author(actor, {
@@ -182,7 +184,8 @@ const authorCommand = Command.make(
         store,
         filter: postFilter,
         filterJson: postFilterJson,
-        quiet
+        quiet,
+        refresh
       });
     })
 ).pipe(
@@ -207,9 +210,10 @@ const threadCommand = Command.make(
     parentHeight: parentHeightOption,
     filter: filterOption,
     filterJson: filterJsonOption,
-    quiet: quietOption
+    quiet: quietOption,
+    refresh: refreshOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, store, quiet }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
       const parsedParentHeight = yield* parseBoundedIntOption(
@@ -229,7 +233,7 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, quiet });
+      return yield* run({ store, filter, filterJson, quiet, refresh });
     })
 ).pipe(
   Command.withDescription(

@@ -47,9 +47,9 @@ const walkNode = <T, E>(
   const contentPrefix = prefix + (isRoot ? "" : isLast ? "    " : "│   ");
   nodeLines.forEach((line, i) => {
     if (i === 0) {
-      docs.push(Doc.cat(Doc.text(prefix + connectorStr), line));
+      docs.push(Doc.cat(connector(prefix + connectorStr), line));
     } else {
-      docs.push(Doc.cat(Doc.text(contentPrefix), line));
+      docs.push(Doc.cat(connector(contentPrefix), line));
     }
   });
 

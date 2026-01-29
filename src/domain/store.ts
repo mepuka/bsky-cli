@@ -26,6 +26,9 @@ export class FilterSpec extends Schema.Class<FilterSpec>("FilterSpec")({
   output: FilterOutput
 }) {}
 
+export const SyncUpsertPolicy = Schema.Literal("dedupe", "refresh");
+export type SyncUpsertPolicy = typeof SyncUpsertPolicy.Type;
+
 export class StoreConfig extends Schema.Class<StoreConfig>("StoreConfig")({
   format: Schema.Struct({
     json: Schema.Boolean,
@@ -33,5 +36,6 @@ export class StoreConfig extends Schema.Class<StoreConfig>("StoreConfig")({
   }),
   autoSync: Schema.Boolean,
   syncInterval: Schema.optional(Schema.String),
+  syncPolicy: Schema.optional(SyncUpsertPolicy),
   filters: Schema.Array(FilterSpec)
 }) {}
