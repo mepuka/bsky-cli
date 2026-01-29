@@ -356,18 +356,21 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                         case "Stored":
                           return SyncResult.make({
                             postsAdded: 1,
+                            postsDeleted: 0,
                             postsSkipped: 0,
                             errors: []
                           });
                         case "Skipped":
                           return SyncResult.make({
                             postsAdded: 0,
+                            postsDeleted: 0,
                             postsSkipped: 1,
                             errors: []
                           });
                         case "Error":
                           return SyncResult.make({
                             postsAdded: 0,
+                            postsDeleted: 0,
                             postsSkipped: 1,
                             errors: [outcome.error]
                           });

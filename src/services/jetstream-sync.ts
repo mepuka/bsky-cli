@@ -53,7 +53,7 @@ export type JetstreamSyncConfig = {
 };
 
 type SyncOutcome =
-  | { readonly _tag: "Stored"; readonly eventId: EventId }
+  | { readonly _tag: "Stored"; readonly eventId: EventId; readonly kind: "upsert" | "delete" }
   | { readonly _tag: "Skipped" }
   | { readonly _tag: "Error"; readonly error: SyncError };
 
@@ -363,7 +363,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                     prepared.cid
                   ).pipe(
                     Effect.map(
-                      (eventId): SyncOutcome => ({ _tag: "Stored", eventId })
+                      (eventId): SyncOutcome => ({ _tag: "Stored", eventId, kind: "delete" })
                     )
                   );
                 case "Upsert":
@@ -379,7 +379,8 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                             onNone: () => skippedOutcome,
                             onSome: (value): SyncOutcome => ({
                               _tag: "Stored",
-                              eventId: value
+                              eventId: value,
+                              kind: "upsert"
                             })
                           })
                         )
@@ -393,7 +394,8 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                         Effect.map(
                           (eventId): SyncOutcome => ({
                             _tag: "Stored",
-                            eventId
+                            eventId,
+                            kind: "upsert"
                           })
                         )
                       )
@@ -416,13 +418,18 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                 const outcomes = yield* Effect.forEach(prepared, applyPrepared);
 
                 let added = 0;
+                let deleted = 0;
                 let skipped = 0;
                 const errors: Array<SyncError> = [];
                 let lastEventId = Option.none<EventId>();
                 for (const outcome of outcomes) {
                   switch (outcome._tag) {
                     case "Stored":
-                      added += 1;
+                      if (outcome.kind === "delete") {
+                        deleted += 1;
+                      } else {
+                        added += 1;
+                      }
                       lastEventId = Option.some(outcome.eventId);
                       break;
                     case "Skipped":
@@ -502,6 +509,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
 
                 return SyncResult.make({
                   postsAdded: added,
+                  postsDeleted: deleted,
                   postsSkipped: skipped,
                   errors
                 });

@@ -15,6 +15,76 @@ const encodePostJson = (post: Post) =>
     Effect.mapError(toStoreIndexError("StoreIndex.post encode failed"))
   );
 
+const embedTag = (embed: Post["embed"]): string | undefined => {
+  if (!embed || typeof embed !== "object" || !("_tag" in embed)) {
+    return undefined;
+  }
+  const tag = (embed as { readonly _tag?: unknown })._tag;
+  return typeof tag === "string" ? tag : undefined;
+};
+
+const embedMediaTag = (embed: Post["embed"]): string | undefined => {
+  if (!embed || typeof embed !== "object" || !("_tag" in embed)) {
+    return undefined;
+  }
+  const tag = (embed as { readonly _tag?: unknown })._tag;
+  if (tag !== "RecordWithMedia") {
+    return undefined;
+  }
+  const media = (embed as { readonly media?: unknown }).media;
+  if (!media || typeof media !== "object" || !("_tag" in media)) {
+    return undefined;
+  }
+  const mediaTag = (media as { readonly _tag?: unknown })._tag;
+  return typeof mediaTag === "string" ? mediaTag : undefined;
+};
+
+const hasExternalLink = (post: Post) => {
+  if (post.links.length > 0) {
+    return true;
+  }
+  const tag = embedTag(post.embed);
+  if (tag === "External") {
+    return true;
+  }
+  return embedMediaTag(post.embed) === "External";
+};
+
+const hasImages = (post: Post) => {
+  const tag = embedTag(post.embed);
+  if (tag === "Images") {
+    return true;
+  }
+  return embedMediaTag(post.embed) === "Images";
+};
+
+const hasVideo = (post: Post) => {
+  const tag = embedTag(post.embed);
+  if (tag === "Video") {
+    return true;
+  }
+  return embedMediaTag(post.embed) === "Video";
+};
+
+const hasMedia = (post: Post) =>
+  hasImages(post) || hasVideo(post) || hasExternalLink(post);
+
+const isRepost = (post: Post) => {
+  const reason = post.feed?.reason;
+  if (!reason || typeof reason !== "object") {
+    return false;
+  }
+  const tag = (reason as { readonly _tag?: unknown })._tag;
+  return tag === "ReasonRepost";
+};
+
+const isQuote = (post: Post) => {
+  const tag = embedTag(post.embed);
+  return tag === "Record" || tag === "RecordWithMedia";
+};
+
+const toFlag = (value: boolean) => (value ? 1 : 0);
+
 export const upsertPost = (
   sql: SqlClient.SqlClient,
   post: Post
@@ -23,13 +93,77 @@ export const upsertPost = (
     const createdAt = toIso(post.createdAt);
     const createdDate = createdAt.slice(0, 10);
     const postJson = yield* encodePostJson(post);
+    const lang = post.langs?.[0];
+    const isReply = Boolean(post.reply);
+    const quote = isQuote(post);
+    const repost = isRepost(post);
+    const original = !isReply && !quote && !repost;
+    const links = hasExternalLink(post);
+    const images = hasImages(post);
+    const video = hasVideo(post);
+    const media = hasMedia(post);
+    const metrics = post.metrics;
+    const likeCount = metrics?.likeCount ?? 0;
+    const repostCount = metrics?.repostCount ?? 0;
+    const replyCount = metrics?.replyCount ?? 0;
 
-    yield* sql`INSERT INTO posts (uri, created_at, created_date, author, post_json)
-      VALUES (${post.uri}, ${createdAt}, ${createdDate}, ${post.author}, ${postJson})
+    yield* sql`INSERT INTO posts (
+        uri,
+        created_at,
+        created_date,
+        author,
+        text,
+        lang,
+        is_reply,
+        is_quote,
+        is_repost,
+        is_original,
+        has_links,
+        has_media,
+        has_images,
+        has_video,
+        like_count,
+        repost_count,
+        reply_count,
+        post_json
+      )
+      VALUES (
+        ${post.uri},
+        ${createdAt},
+        ${createdDate},
+        ${post.author},
+        ${post.text},
+        ${lang},
+        ${toFlag(isReply)},
+        ${toFlag(quote)},
+        ${toFlag(repost)},
+        ${toFlag(original)},
+        ${toFlag(links)},
+        ${toFlag(media)},
+        ${toFlag(images)},
+        ${toFlag(video)},
+        ${likeCount},
+        ${repostCount},
+        ${replyCount},
+        ${postJson}
+      )
       ON CONFLICT(uri) DO UPDATE SET
         created_at = excluded.created_at,
         created_date = excluded.created_date,
         author = excluded.author,
+        text = excluded.text,
+        lang = excluded.lang,
+        is_reply = excluded.is_reply,
+        is_quote = excluded.is_quote,
+        is_repost = excluded.is_repost,
+        is_original = excluded.is_original,
+        has_links = excluded.has_links,
+        has_media = excluded.has_media,
+        has_images = excluded.has_images,
+        has_video = excluded.has_video,
+        like_count = excluded.like_count,
+        repost_count = excluded.repost_count,
+        reply_count = excluded.reply_count,
         post_json = excluded.post_json`;
 
     yield* sql`DELETE FROM post_hashtag WHERE uri = ${post.uri}`;
@@ -49,9 +183,60 @@ export const insertPostIfMissing = (
     const createdAt = toIso(post.createdAt);
     const createdDate = createdAt.slice(0, 10);
     const postJson = yield* encodePostJson(post);
+    const lang = post.langs?.[0];
+    const isReply = Boolean(post.reply);
+    const quote = isQuote(post);
+    const repost = isRepost(post);
+    const original = !isReply && !quote && !repost;
+    const links = hasExternalLink(post);
+    const images = hasImages(post);
+    const video = hasVideo(post);
+    const media = hasMedia(post);
+    const metrics = post.metrics;
+    const likeCount = metrics?.likeCount ?? 0;
+    const repostCount = metrics?.repostCount ?? 0;
+    const replyCount = metrics?.replyCount ?? 0;
 
-    const rows = yield* sql`INSERT INTO posts (uri, created_at, created_date, author, post_json)
-      VALUES (${post.uri}, ${createdAt}, ${createdDate}, ${post.author}, ${postJson})
+    const rows = yield* sql`INSERT INTO posts (
+        uri,
+        created_at,
+        created_date,
+        author,
+        text,
+        lang,
+        is_reply,
+        is_quote,
+        is_repost,
+        is_original,
+        has_links,
+        has_media,
+        has_images,
+        has_video,
+        like_count,
+        repost_count,
+        reply_count,
+        post_json
+      )
+      VALUES (
+        ${post.uri},
+        ${createdAt},
+        ${createdDate},
+        ${post.author},
+        ${post.text},
+        ${lang},
+        ${toFlag(isReply)},
+        ${toFlag(quote)},
+        ${toFlag(repost)},
+        ${toFlag(original)},
+        ${toFlag(links)},
+        ${toFlag(media)},
+        ${toFlag(images)},
+        ${toFlag(video)},
+        ${likeCount},
+        ${repostCount},
+        ${replyCount},
+        ${postJson}
+      )
       ON CONFLICT(uri) DO NOTHING
       RETURNING uri`;
 

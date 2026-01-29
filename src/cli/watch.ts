@@ -15,6 +15,7 @@ import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { StoreLock } from "../services/store-lock.js";
 import { makeWatchCommandBody } from "./sync-factory.js";
 import { CliInputError } from "./errors.js";
+import { parseOptionalDuration } from "./interval.js";
 import {
   feedUriArg,
   postUriArg,
@@ -30,7 +31,8 @@ import {
   refreshOption,
   strictOption,
   maxErrorsOption,
-  parseMaxErrors
+  parseMaxErrors,
+  waitOption
 } from "./shared-options.js";
 
 const intervalOption = Options.text("interval").pipe(
@@ -75,7 +77,8 @@ const timelineCommand = Command.make(
     filterJson: filterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    wait: waitOption
   },
   makeWatchCommandBody("timeline", () => DataSource.timeline())
 ).pipe(
@@ -100,7 +103,8 @@ const feedCommand = Command.make(
     filterJson: filterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    wait: waitOption
   },
   ({ uri, ...rest }) => makeWatchCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
 ).pipe(
@@ -123,7 +127,8 @@ const notificationsCommand = Command.make(
     filterJson: filterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    wait: waitOption
   },
   makeWatchCommandBody("notifications", () => DataSource.notifications())
 ).pipe(
@@ -147,9 +152,10 @@ const authorCommand = Command.make(
     postFilterJson: postFilterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    wait: waitOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, interval, store, quiet, refresh }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, interval, store, quiet, refresh, wait }) =>
     Effect.gen(function* () {
       const apiFilter = Option.getOrUndefined(filter);
       const source = DataSource.author(actor, {
@@ -167,7 +173,8 @@ const authorCommand = Command.make(
         filterJson: postFilterJson,
         interval,
         quiet,
-        refresh
+        refresh,
+        wait
       });
     })
 ).pipe(
@@ -194,9 +201,10 @@ const threadCommand = Command.make(
     filterJson: filterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    wait: waitOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, interval, store, quiet, refresh }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, interval, store, quiet, refresh, wait }) =>
     Effect.gen(function* () {
       const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
       const parsedParentHeight = yield* parseBoundedIntOption(
@@ -216,7 +224,7 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, interval, quiet, refresh });
+      return yield* run({ store, filter, filterJson, interval, quiet, refresh, wait });
     })
 ).pipe(
   Command.withDescription(
@@ -245,7 +253,8 @@ const jetstreamCommand = Command.make(
     compress: jetstreamOptions.compress,
     maxMessageSize: jetstreamOptions.maxMessageSize,
     strict: strictOption,
-    maxErrors: maxErrorsOption
+    maxErrors: maxErrorsOption,
+    wait: waitOption
   },
   ({
     store,
@@ -259,7 +268,8 @@ const jetstreamCommand = Command.make(
     compress,
     maxMessageSize,
     strict,
-    maxErrors
+    maxErrors,
+    wait
   }) =>
     Effect.gen(function* () {
       const storeLock = yield* StoreLock;
@@ -281,9 +291,11 @@ const jetstreamCommand = Command.make(
         filterHash
       );
       const parsedMaxErrors = yield* parseMaxErrors(maxErrors);
+      const parsedWait = yield* parseOptionalDuration(wait);
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
+      const waitFor = Option.getOrUndefined(parsedWait);
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
@@ -309,7 +321,8 @@ const jetstreamCommand = Command.make(
             );
             return yield* writeJsonStream(outputStream);
           }).pipe(Effect.provide(engineLayer));
-        })
+        }),
+        waitFor ? { waitFor } : undefined
       );
     })
 ).pipe(

@@ -1,6 +1,8 @@
 import { AtpAgent, AppBskyFeedDefs } from "@atproto/api";
 import { messageFromCause } from "./shared.js";
 import type {
+  AppBskyActorSearchActors,
+  AppBskyActorSearchActorsTypeahead,
   AppBskyActorGetProfiles,
   AppBskyFeedGetAuthorFeed,
   AppBskyFeedGetFeed,
@@ -9,6 +11,7 @@ import type {
   AppBskyFeedGetTimeline,
   AppBskyFeedPost,
   AppBskyNotificationListNotifications,
+  AppBskyUnspeccedGetPopularFeedGenerators,
   AppBskyUnspeccedGetTrendingTopics
 } from "@atproto/api";
 import {
@@ -47,6 +50,7 @@ import {
   EmbedUnknown,
   EmbedVideo,
   FeedContext,
+  FeedGeneratorView,
   FeedPostBlocked,
   FeedPostNotFound,
   FeedPostUnknown,
@@ -60,7 +64,8 @@ import {
   PostEmbed,
   PostMetrics,
   PostViewerState,
-  ProfileBasic
+  ProfileBasic,
+  ProfileView
 } from "../domain/bsky.js";
 import { PostCid, PostUri, Timestamp } from "../domain/primitives.js";
 
@@ -91,13 +96,56 @@ export interface NotificationsOptions {
   readonly cursor?: string;
 }
 
+export interface ActorSearchOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly typeahead?: boolean;
+}
+
+export interface FeedSearchOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
 type FeedViewPost = AppBskyFeedDefs.FeedViewPost;
 type PostView = AppBskyFeedDefs.PostView;
 type ThreadViewPost = AppBskyFeedDefs.ThreadViewPost;
 
 
+const formatBskyErrorMessage = (fallback: string, cause: unknown) => {
+  const base = messageFromCause(fallback, cause);
+  if (!cause || typeof cause !== "object") {
+    return base;
+  }
+  const record = cause as {
+    status?: unknown;
+    statusCode?: unknown;
+    error?: unknown;
+    message?: unknown;
+  };
+  const status =
+    typeof record.status === "number"
+      ? record.status
+      : typeof record.statusCode === "number"
+        ? record.statusCode
+        : typeof (record.error as { status?: unknown })?.status === "number"
+          ? (record.error as { status: number }).status
+          : undefined;
+  const error =
+    typeof record.error === "string"
+      ? record.error
+      : typeof (record.error as { message?: unknown })?.message === "string"
+        ? (record.error as { message: string }).message
+        : undefined;
+  const details = [
+    ...(typeof status === "number" ? [`status ${status}`] : []),
+    ...(error && error !== base ? [error] : [])
+  ];
+  return details.length > 0 ? `${base} (${details.join(", ")})` : base;
+};
+
 const toBskyError = (message: string) => (cause: unknown) =>
-  BskyError.make({ message: messageFromCause(message, cause), cause });
+  BskyError.make({ message: formatBskyErrorMessage(message, cause), cause });
 
 const isRetryableCause = (cause: unknown) => {
   if (!cause || typeof cause !== "object") return false;
@@ -181,6 +229,55 @@ const decodeProfileBasic = (input: unknown) =>
       status: author.status,
       debug: author.debug
     }).pipe(Effect.mapError(toBskyError("Invalid author payload")));
+  });
+
+const decodeProfileView = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return yield* BskyError.make({ message: "Invalid profile payload" });
+    }
+    const author = input as Record<string, unknown>;
+    return yield* Schema.decodeUnknown(ProfileView)({
+      did: author.did,
+      handle: author.handle,
+      displayName: author.displayName,
+      pronouns: author.pronouns,
+      description: author.description,
+      avatar: author.avatar,
+      associated: author.associated,
+      indexedAt: author.indexedAt,
+      createdAt: author.createdAt,
+      viewer: author.viewer,
+      labels: author.labels,
+      verification: author.verification,
+      status: author.status,
+      debug: author.debug
+    }).pipe(Effect.mapError(toBskyError("Invalid profile payload")));
+  });
+
+const decodeFeedGeneratorView = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return yield* BskyError.make({ message: "Invalid feed generator payload" });
+    }
+    const feed = input as Record<string, unknown>;
+    const creator = yield* decodeProfileView(feed.creator);
+    return yield* Schema.decodeUnknown(FeedGeneratorView)({
+      uri: feed.uri,
+      cid: feed.cid,
+      did: feed.did,
+      creator,
+      displayName: feed.displayName,
+      description: feed.description,
+      descriptionFacets: feed.descriptionFacets,
+      avatar: feed.avatar,
+      likeCount: feed.likeCount,
+      acceptsInteractions: feed.acceptsInteractions,
+      labels: feed.labels,
+      viewer: feed.viewer,
+      contentMode: feed.contentMode,
+      indexedAt: feed.indexedAt
+    }).pipe(Effect.mapError(toBskyError("Invalid feed generator payload")));
   });
 
 const decodeViewerState = (input: unknown) =>
@@ -678,6 +775,14 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
     readonly getProfiles: (
       actors: ReadonlyArray<string>
     ) => Effect.Effect<ReadonlyArray<ProfileBasic>, BskyError>;
+    readonly searchActors: (
+      query: string,
+      opts?: ActorSearchOptions
+    ) => Effect.Effect<{ readonly actors: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
+    readonly searchFeedGenerators: (
+      query: string,
+      opts?: FeedSearchOptions
+    ) => Effect.Effect<{ readonly feeds: ReadonlyArray<FeedGeneratorView>; readonly cursor?: string }, BskyError>;
     readonly getTrendingTopics: () => Effect.Effect<ReadonlyArray<string>, BskyError>;
   }
 >() {
@@ -936,6 +1041,71 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           return results.flat();
         });
 
+      const searchActors = (query: string, opts?: ActorSearchOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          if (opts?.typeahead) {
+            const response = yield* withRetry(
+              withRateLimit(
+                Effect.tryPromise<AppBskyActorSearchActorsTypeahead.Response>(() =>
+                  agent.app.bsky.actor.searchActorsTypeahead({
+                    q: query,
+                    limit: opts.limit ?? 10
+                  })
+                )
+              )
+            ).pipe(Effect.mapError(toBskyError("Failed to search actors")));
+            const actors = yield* Effect.forEach(
+              response.data.actors,
+              decodeProfileView,
+              { concurrency: "unbounded" }
+            );
+            return { actors };
+          }
+
+          const params = withCursor(
+            { q: query, limit: opts?.limit ?? 25 },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyActorSearchActors.Response>(() =>
+                agent.app.bsky.actor.searchActors(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to search actors")));
+          const actors = yield* Effect.forEach(
+            response.data.actors,
+            decodeProfileView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return cursor ? { actors, cursor } : { actors };
+        });
+
+      const searchFeedGenerators = (query: string, opts?: FeedSearchOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = withCursor(
+            { query, limit: opts?.limit ?? 25 },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyUnspeccedGetPopularFeedGenerators.Response>(() =>
+                agent.app.bsky.unspecced.getPopularFeedGenerators(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to search feed generators")));
+          const feeds = yield* Effect.forEach(
+            response.data.feeds,
+            decodeFeedGeneratorView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return cursor ? { feeds, cursor } : { feeds };
+        });
+
       const getNotifications = (opts?: NotificationsOptions) =>
         paginate(opts?.cursor, (cursor) =>
           Effect.gen(function* () {
@@ -1019,6 +1189,8 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
         getPost,
         getPostThread,
         getProfiles,
+        searchActors,
+        searchFeedGenerators,
         getTrendingTopics: () => getTrendingTopics
       });
     })

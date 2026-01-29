@@ -161,6 +161,23 @@ export class ProfileBasic extends Schema.Class<ProfileBasic>("ProfileBasic")({
   debug: Schema.optional(Schema.Unknown)
 }) {}
 
+export class ProfileView extends Schema.Class<ProfileView>("ProfileView")({
+  did: Did,
+  handle: Handle,
+  displayName: Schema.optional(Schema.String),
+  pronouns: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  avatar: Schema.optional(Schema.String),
+  associated: Schema.optional(Schema.Unknown),
+  indexedAt: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.String),
+  viewer: Schema.optional(Schema.Unknown),
+  labels: Schema.optional(Schema.Array(Schema.encodedSchema(Label))),
+  verification: Schema.optional(Schema.Unknown),
+  status: Schema.optional(Schema.Unknown),
+  debug: Schema.optional(Schema.Unknown)
+}) {}
+
 export class EmbedRecordView extends Schema.TaggedClass<EmbedRecordView>()(
   "RecordView",
   {
@@ -350,4 +367,27 @@ export class FeedContext extends Schema.Class<FeedContext>("FeedContext")({
   reason: Schema.optional(FeedReason),
   feedContext: Schema.optional(Schema.String),
   reqId: Schema.optional(Schema.String)
+}) {}
+
+export class FeedGeneratorViewerState extends Schema.Class<FeedGeneratorViewerState>(
+  "FeedGeneratorViewerState"
+)({
+  like: Schema.optional(AtUri)
+}) {}
+
+export class FeedGeneratorView extends Schema.Class<FeedGeneratorView>("FeedGeneratorView")({
+  uri: AtUri,
+  cid: PostCid,
+  did: Did,
+  creator: ProfileView,
+  displayName: Schema.String,
+  description: Schema.optional(Schema.String),
+  descriptionFacets: Schema.optional(Schema.Array(Schema.Unknown)),
+  avatar: Schema.optional(Schema.String),
+  likeCount: Schema.optional(NonNegativeInt),
+  acceptsInteractions: Schema.optional(Schema.Boolean),
+  labels: Schema.optional(Schema.Array(Label)),
+  viewer: Schema.optional(FeedGeneratorViewerState),
+  contentMode: Schema.optional(Schema.String),
+  indexedAt: Timestamp
 }) {}

@@ -13,6 +13,7 @@ import { watchCommand } from "./watch.js";
 import { deriveCommand } from "./derive.js";
 import { viewCommand } from "./view.js";
 import { filterCommand } from "./filter.js";
+import { searchCommand } from "./search.js";
 import { configCommand } from "./config-command.js";
 import {
   configOptions,
@@ -31,7 +32,8 @@ export const app = Command.make("skygent", configOptions).pipe(
     watchCommand,
     deriveCommand,
     viewCommand,
-    filterCommand
+    filterCommand,
+    searchCommand
   ]),
   Command.provide((config) =>
     Layer.mergeAll(

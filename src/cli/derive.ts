@@ -18,7 +18,8 @@ import { logInfo } from "./logging.js";
 import type { FilterEvaluationMode } from "../domain/derivation.js";
 import { CliPreferences } from "./preferences.js";
 import { withExamples } from "./help.js";
-import { filterOption } from "./shared-options.js";
+import { filterOption, waitOption } from "./shared-options.js";
+import { parseOptionalDuration } from "./interval.js";
 
 const sourceArg = Args.text({ name: "source" }).pipe(
   Args.withSchema(StoreName),
@@ -63,9 +64,10 @@ export const deriveCommand = Command.make(
     filterJson: filterJsonOption,
     mode: modeOption,
     reset: resetFlag,
-    yes: yesFlag
+    yes: yesFlag,
+    wait: waitOption
   },
-  ({ source, target, filter, filterJson, mode, reset, yes }) =>
+  ({ source, target, filter, filterJson, mode, reset, yes, wait }) =>
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const checkpoints = yield* ViewCheckpointStore;
@@ -73,6 +75,8 @@ export const deriveCommand = Command.make(
       const outputManager = yield* OutputManager;
       const storeLock = yield* StoreLock;
       const preferences = yield* CliPreferences;
+      const parsedWait = yield* parseOptionalDuration(wait);
+      const waitFor = Option.getOrUndefined(parsedWait);
 
       // Parse filter expression
       const filterExpr = yield* parseFilterExpr(filter, filterJson);
@@ -165,7 +169,7 @@ export const deriveCommand = Command.make(
           if (!store) {
             continue;
           }
-          next = storeLock.withStoreLock(store, next);
+          next = storeLock.withStoreLock(store, next, waitFor ? { waitFor } : undefined);
         }
         return next;
       };

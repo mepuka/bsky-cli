@@ -46,14 +46,16 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
         loader: MigratorFileSystem.fromFileSystem(migrationsDir)
       });
 
+      const optimizeClient = (client: SqlClient.SqlClient) =>
+        client`PRAGMA optimize`.pipe(Effect.catchAll(() => Effect.void));
+
+      const closeCachedClient = ({ client, scope }: CachedClient) =>
+        optimizeClient(client).pipe(Effect.zipRight(Scope.close(scope, Exit.void)));
+
       const closeAllClients = () =>
         Ref.get(clients).pipe(
           Effect.flatMap((current) =>
-            Effect.forEach(
-              current.values(),
-              ({ scope }) => Scope.close(scope, Exit.void),
-              { discard: true }
-            )
+            Effect.forEach(current.values(), closeCachedClient, { discard: true })
           )
         );
 
@@ -71,6 +73,12 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
             Effect.provideService(Reactivity.Reactivity, reactivity)
           );
 
+          yield* client`PRAGMA journal_mode = WAL`;
+          yield* client`PRAGMA synchronous = NORMAL`;
+          yield* client`PRAGMA temp_store = MEMORY`;
+          yield* client`PRAGMA cache_size = -64000`;
+          yield* client`PRAGMA mmap_size = 30000000000`;
+          yield* client`PRAGMA optimize=0x10002`;
           yield* client`PRAGMA foreign_keys = ON`;
           yield* migrate.pipe(
             Effect.provideService(SqlClient.SqlClient, client),
@@ -125,7 +133,7 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
           return [existing, next] as const;
         }).pipe(
           Effect.flatMap((existing) =>
-            existing ? Scope.close(existing.scope, Exit.void) : Effect.void
+            existing ? closeCachedClient(existing) : Effect.void
           )
         );
 

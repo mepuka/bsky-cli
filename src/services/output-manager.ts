@@ -105,7 +105,7 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
         .pipe(Effect.mapError(toStoreIoError(outputDir)));
 
       const expr = yield* compiler.compile(spec);
-      const stream = index.query(store, StoreQuery.make({}));
+      const stream = index.query(store, StoreQuery.make({ filter: expr }));
       const predicate = yield* runtime.evaluate(expr);
       const filtered = stream.pipe(
         Stream.grouped(50),

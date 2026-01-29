@@ -308,7 +308,7 @@ export const filterBenchmark = Command.make(
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const limit = Option.getOrElse(sampleSize, () => 1000);
       const evaluateBatch = yield* runtime.evaluateBatch(expr);
-      const query = StoreQuery.make({ limit });
+      const query = StoreQuery.make({ scanLimit: limit });
       const stream = index.query(storeRef, query);
       const start = yield* Clock.currentTimeMillis;
       const result = yield* stream.pipe(

@@ -27,3 +27,9 @@ export const parseInterval = (interval: Option.Option<string>) =>
     onSome: parseDurationText,
     onNone: () => Effect.succeed(Duration.seconds(30))
   });
+
+export const parseOptionalDuration = (value: Option.Option<string>) =>
+  Option.match(value, {
+    onSome: (raw) => parseDurationText(raw).pipe(Effect.map(Option.some)),
+    onNone: () => Effect.succeed(Option.none())
+  });

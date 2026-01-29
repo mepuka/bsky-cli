@@ -1,9 +1,11 @@
 import { Chunk, Clock, Context, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
+import type { Fragment } from "@effect/sql/Statement";
 import { StoreIndexError } from "../domain/errors.js";
 import { PostEventRecord } from "../domain/events.js";
 import type { PostEvent, StoreQuery } from "../domain/events.js";
+import type { FilterExpr } from "../domain/filter.js";
 import { IndexCheckpoint, PostIndexEntry } from "../domain/indexes.js";
 import { EventId, Handle, PostUri, Timestamp } from "../domain/primitives.js";
 import { Post } from "../domain/post.js";
@@ -14,6 +16,13 @@ import { deletePost, upsertPost } from "./store-index-sql.js";
 
 const indexName = "primary";
 const entryPageSize = 500;
+
+type SearchSort = "relevance" | "newest" | "oldest";
+type QueryCursorState = {
+  readonly lastCreatedAt: string | undefined;
+  readonly lastUri: string | undefined;
+  readonly fetched: number;
+};
 
 const postUriRow = Schema.Struct({ uri: PostUri });
 const postJsonRow = Schema.Struct({ post_json: Schema.String });
@@ -61,6 +70,238 @@ const decodeCheckpointRow = (row: typeof checkpointRow.Type) =>
 const toIso = (value: Date | string) =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 
+type PushdownExpr =
+  | { readonly _tag: "True" }
+  | { readonly _tag: "False" }
+  | { readonly _tag: "And"; readonly clauses: ReadonlyArray<PushdownExpr> }
+  | { readonly _tag: "Or"; readonly clauses: ReadonlyArray<PushdownExpr> }
+  | { readonly _tag: "Author"; readonly handle: string }
+  | { readonly _tag: "AuthorIn"; readonly handles: ReadonlyArray<string> }
+  | { readonly _tag: "Hashtag"; readonly tag: string }
+  | { readonly _tag: "HashtagIn"; readonly tags: ReadonlyArray<string> }
+  | { readonly _tag: "DateRange"; readonly start: Timestamp; readonly end: Timestamp }
+  | { readonly _tag: "IsReply" }
+  | { readonly _tag: "IsQuote" }
+  | { readonly _tag: "IsRepost" }
+  | { readonly _tag: "IsOriginal" }
+  | { readonly _tag: "HasLinks" }
+  | { readonly _tag: "HasMedia" }
+  | { readonly _tag: "HasImages" }
+  | { readonly _tag: "HasVideo" }
+  | { readonly _tag: "Engagement"; readonly minLikes?: number; readonly minReposts?: number; readonly minReplies?: number }
+  | { readonly _tag: "Contains"; readonly text: string; readonly caseSensitive: boolean };
+
+const pushdownTrue: PushdownExpr = { _tag: "True" };
+const pushdownFalse: PushdownExpr = { _tag: "False" };
+
+const simplifyAnd = (clauses: ReadonlyArray<PushdownExpr>): PushdownExpr => {
+  const flattened: Array<PushdownExpr> = [];
+  for (const clause of clauses) {
+    if (clause._tag === "False") {
+      return pushdownFalse;
+    }
+    if (clause._tag === "True") {
+      continue;
+    }
+    if (clause._tag === "And") {
+      flattened.push(...clause.clauses);
+      continue;
+    }
+    flattened.push(clause);
+  }
+  if (flattened.length === 0) {
+    return pushdownTrue;
+  }
+  if (flattened.length === 1) {
+    return flattened[0]!;
+  }
+  return { _tag: "And", clauses: flattened };
+};
+
+const simplifyOr = (clauses: ReadonlyArray<PushdownExpr>): PushdownExpr => {
+  const flattened: Array<PushdownExpr> = [];
+  for (const clause of clauses) {
+    if (clause._tag === "True") {
+      return pushdownTrue;
+    }
+    if (clause._tag === "False") {
+      continue;
+    }
+    if (clause._tag === "Or") {
+      flattened.push(...clause.clauses);
+      continue;
+    }
+    flattened.push(clause);
+  }
+  if (flattened.length === 0) {
+    return pushdownFalse;
+  }
+  if (flattened.length === 1) {
+    return flattened[0]!;
+  }
+  return { _tag: "Or", clauses: flattened };
+};
+
+const buildPushdown = (expr: FilterExpr | undefined): PushdownExpr => {
+  if (!expr) {
+    return pushdownTrue;
+  }
+  switch (expr._tag) {
+    case "All":
+      return pushdownTrue;
+    case "None":
+      return pushdownFalse;
+    case "And":
+      return simplifyAnd([buildPushdown(expr.left), buildPushdown(expr.right)]);
+    case "Or":
+      return simplifyOr([buildPushdown(expr.left), buildPushdown(expr.right)]);
+    case "Author":
+      return { _tag: "Author", handle: expr.handle };
+    case "AuthorIn":
+      return expr.handles.length === 0
+        ? pushdownFalse
+        : { _tag: "AuthorIn", handles: Array.from(new Set(expr.handles)) };
+    case "Hashtag":
+      return { _tag: "Hashtag", tag: expr.tag };
+    case "HashtagIn":
+      return expr.tags.length === 0
+        ? pushdownFalse
+        : { _tag: "HashtagIn", tags: Array.from(new Set(expr.tags)) };
+    case "DateRange":
+      return { _tag: "DateRange", start: expr.start, end: expr.end };
+    case "IsReply":
+      return { _tag: "IsReply" };
+    case "IsQuote":
+      return { _tag: "IsQuote" };
+    case "IsRepost":
+      return { _tag: "IsRepost" };
+    case "IsOriginal":
+      return { _tag: "IsOriginal" };
+    case "HasLinks":
+      return { _tag: "HasLinks" };
+    case "HasMedia":
+      return { _tag: "HasMedia" };
+    case "HasImages":
+      return { _tag: "HasImages" };
+    case "HasVideo":
+      return { _tag: "HasVideo" };
+    case "Engagement":
+      return {
+        _tag: "Engagement",
+        ...(expr.minLikes !== undefined ? { minLikes: expr.minLikes } : {}),
+        ...(expr.minReposts !== undefined ? { minReposts: expr.minReposts } : {}),
+        ...(expr.minReplies !== undefined ? { minReplies: expr.minReplies } : {})
+      };
+    case "Contains":
+      return {
+        _tag: "Contains",
+        text: expr.text,
+        caseSensitive: expr.caseSensitive ?? false
+      };
+    default:
+      return pushdownTrue;
+  }
+};
+
+const isAscii = (value: string) => /^[\x00-\x7F]*$/.test(value);
+
+const pushdownToSql = (
+  sql: SqlClient.SqlClient,
+  expr: PushdownExpr
+): Fragment | undefined => {
+  switch (expr._tag) {
+    case "True":
+      return undefined;
+    case "False":
+      return sql`1=0`;
+    case "Author":
+      return sql`p.author = ${expr.handle}`;
+    case "AuthorIn":
+      return expr.handles.length === 0
+        ? sql`1=0`
+        : sql`p.author IN ${sql.in(expr.handles)}`;
+    case "Hashtag":
+      return sql`EXISTS (SELECT 1 FROM post_hashtag h WHERE h.uri = p.uri AND h.tag = ${expr.tag})`;
+    case "HashtagIn":
+      return expr.tags.length === 0
+        ? sql`1=0`
+        : sql`EXISTS (SELECT 1 FROM post_hashtag h WHERE h.uri = p.uri AND h.tag IN ${sql.in(expr.tags)})`;
+    case "DateRange": {
+      const start = toIso(expr.start);
+      const end = toIso(expr.end);
+      return sql`p.created_at >= ${start} AND p.created_at <= ${end}`;
+    }
+    case "IsReply":
+      return sql`p.is_reply = 1`;
+    case "IsQuote":
+      return sql`p.is_quote = 1`;
+    case "IsRepost":
+      return sql`p.is_repost = 1`;
+    case "IsOriginal":
+      return sql`p.is_original = 1`;
+    case "HasLinks":
+      return sql`p.has_links = 1`;
+    case "HasMedia":
+      return sql`p.has_media = 1`;
+    case "HasImages":
+      return sql`p.has_images = 1`;
+    case "HasVideo":
+      return sql`p.has_video = 1`;
+    case "Engagement": {
+      const clauses: Array<Fragment> = [];
+      if (expr.minLikes !== undefined) {
+        clauses.push(sql`p.like_count >= ${expr.minLikes}`);
+      }
+      if (expr.minReposts !== undefined) {
+        clauses.push(sql`p.repost_count >= ${expr.minReposts}`);
+      }
+      if (expr.minReplies !== undefined) {
+        clauses.push(sql`p.reply_count >= ${expr.minReplies}`);
+      }
+      if (clauses.length === 0) {
+        return undefined;
+      }
+      return sql.and(clauses);
+    }
+    case "Contains": {
+      const text = expr.text;
+      if (text.length === 0) {
+        return undefined;
+      }
+      if (expr.caseSensitive) {
+        return sql`instr(p.text, ${text}) > 0`;
+      }
+      if (!isAscii(text)) {
+        return undefined;
+      }
+      return sql`instr(lower(p.text), lower(${text})) > 0`;
+    }
+    case "And": {
+      const clauses = expr.clauses
+        .map((clause) => pushdownToSql(sql, clause))
+        .filter((clause): clause is Fragment => clause !== undefined);
+      if (clauses.length === 0) {
+        return undefined;
+      }
+      return sql.and(clauses);
+    }
+    case "Or": {
+      const clauses: Array<Fragment> = [];
+      for (const clause of expr.clauses) {
+        const next = pushdownToSql(sql, clause);
+        if (!next) {
+          return undefined;
+        }
+        clauses.push(next);
+      }
+      if (clauses.length === 0) {
+        return undefined;
+      }
+      return sql.or(clauses);
+    }
+  }
+};
+
 const applyUpsert = (
   sql: SqlClient.SqlClient,
   event: Extract<PostEvent, { _tag: "PostUpsert" }>
@@ -107,6 +348,15 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
       store: StoreRef,
       query: StoreQuery
     ) => Stream.Stream<Post, StoreIndexError>;
+    readonly searchPosts: (
+      store: StoreRef,
+      input: {
+        readonly query: string;
+        readonly limit?: number;
+        readonly cursor?: number;
+        readonly sort?: SearchSort;
+      }
+    ) => Effect.Effect<{ readonly posts: ReadonlyArray<Post>; readonly cursor?: number }, StoreIndexError>;
     readonly entries: (store: StoreRef) => Stream.Stream<PostIndexEntry, StoreIndexError>;
     readonly count: (store: StoreRef) => Effect.Effect<number, StoreIndexError>;
     readonly rebuild: (
@@ -239,6 +489,8 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
           });
 
           yield* saveCheckpointWithClient(client, nextCheckpoint);
+          yield* client`ANALYZE`;
+          yield* client`PRAGMA optimize`;
         });
 
       const bootstrapStore = (store: StoreRef, client: SqlClient.SqlClient) =>
@@ -355,26 +607,51 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
       const query = (store: StoreRef, q: StoreQuery) => {
         const start = q.range ? toIso(q.range.start) : undefined;
         const end = q.range ? toIso(q.range.end) : undefined;
-        const userLimit = q.limit;
+        const scanLimit = q.scanLimit;
+        const order = q.order === "desc" ? "DESC" : "ASC";
+        const pushdownExpr = buildPushdown(q.filter);
+
+        const initialState: QueryCursorState = {
+          lastCreatedAt: undefined,
+          lastUri: undefined,
+          fetched: 0
+        };
 
         return Stream.paginateChunkEffect(
-          { offset: 0, fetched: 0 },
-          ({ offset, fetched }) =>
+          initialState,
+          ({ lastCreatedAt, lastUri, fetched }) =>
             withClient(store, "StoreIndex.query failed", (client) =>
               Effect.gen(function* () {
+                if (scanLimit !== undefined && fetched >= scanLimit) {
+                  return [Chunk.empty<Post>(), Option.none<QueryCursorState>()] as const;
+                }
                 const pageSize =
-                  userLimit !== undefined
-                    ? Math.min(entryPageSize, userLimit - fetched)
+                  scanLimit !== undefined
+                    ? Math.min(entryPageSize, scanLimit - fetched)
                     : entryPageSize;
 
-                const rows = q.range
-                  ? yield* client`SELECT post_json FROM posts
-                      WHERE created_at >= ${start} AND created_at <= ${end}
-                      ORDER BY created_at ASC
-                      LIMIT ${pageSize} OFFSET ${offset}`
-                  : yield* client`SELECT post_json FROM posts
-                      ORDER BY created_at ASC
-                      LIMIT ${pageSize} OFFSET ${offset}`;
+                const rangeClause =
+                  start && end
+                    ? client`p.created_at >= ${start} AND p.created_at <= ${end}`
+                    : undefined;
+                const keysetClause =
+                  lastCreatedAt && lastUri
+                    ? order === "ASC"
+                      ? client`(p.created_at > ${lastCreatedAt} OR (p.created_at = ${lastCreatedAt} AND p.uri > ${lastUri}))`
+                      : client`(p.created_at < ${lastCreatedAt} OR (p.created_at = ${lastCreatedAt} AND p.uri < ${lastUri}))`
+                    : undefined;
+                const pushdownClause = pushdownToSql(client, pushdownExpr);
+                const whereParts = [
+                  ...(rangeClause ? [rangeClause] : []),
+                  ...(keysetClause ? [keysetClause] : []),
+                  ...(pushdownClause ? [pushdownClause] : [])
+                ];
+                const where = client.and(whereParts);
+
+                const rows = yield* client`SELECT post_json FROM posts p
+                      WHERE ${where}
+                      ORDER BY p.created_at ${client.unsafe(order)}, p.uri ${client.unsafe(order)}
+                      LIMIT ${pageSize}`;
 
                 const decoded = yield* Schema.decodeUnknown(
                   Schema.Array(postJsonRow)
@@ -391,17 +668,65 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
                 const newFetched = fetched + posts.length;
                 const done =
                   posts.length < pageSize ||
-                  (userLimit !== undefined && newFetched >= userLimit);
+                  (scanLimit !== undefined && newFetched >= scanLimit);
+                const lastPost = posts.length > 0 ? posts[posts.length - 1] : undefined;
+                const nextCreatedAt = lastPost ? toIso(lastPost.createdAt) : lastCreatedAt;
+                const nextUri = lastPost ? lastPost.uri : lastUri;
 
                 const next = done
-                  ? Option.none<{ offset: number; fetched: number }>()
-                  : Option.some({ offset: offset + pageSize, fetched: newFetched });
+                  ? Option.none<QueryCursorState>()
+                  : Option.some({ lastCreatedAt: nextCreatedAt, lastUri: nextUri, fetched: newFetched });
 
                 return [Chunk.fromIterable(posts), next] as const;
               })
             )
         );
       };
+
+      const searchPosts = Effect.fn("StoreIndex.searchPosts")(
+        (store: StoreRef, input: { readonly query: string; readonly limit?: number; readonly cursor?: number; readonly sort?: SearchSort }) =>
+          withClient(store, "StoreIndex.searchPosts failed", (client) =>
+            Effect.gen(function* () {
+              const query = input.query.trim();
+              if (query.length === 0) {
+                return { posts: [] as ReadonlyArray<Post> };
+              }
+              const limit = input.limit && input.limit > 0 ? input.limit : 25;
+              const offset = input.cursor && input.cursor > 0 ? input.cursor : 0;
+              const sort = input.sort ?? "relevance";
+              const orderBy =
+                sort === "relevance"
+                  ? "bm25(posts_fts)"
+                  : sort === "oldest"
+                    ? "p.created_at ASC, p.uri ASC"
+                    : "p.created_at DESC, p.uri DESC";
+
+              const rows = yield* client`SELECT p.post_json FROM posts_fts
+                JOIN posts p ON p.rowid = posts_fts.rowid
+                WHERE posts_fts MATCH ${query}
+                ORDER BY ${client.unsafe(orderBy)}
+                LIMIT ${limit} OFFSET ${offset}`;
+
+              const decoded = yield* Schema.decodeUnknown(
+                Schema.Array(postJsonRow)
+              )(rows).pipe(
+                Effect.mapError(toStoreIndexError("StoreIndex.searchPosts decode failed"))
+              );
+
+              const posts = yield* Effect.forEach(
+                decoded,
+                (row) => decodePostJson(row.post_json),
+                { discard: false }
+              );
+
+              const nextCursor = posts.length < limit ? undefined : offset + posts.length;
+
+              return nextCursor !== undefined
+                ? { posts, cursor: nextCursor }
+                : { posts };
+            })
+          )
+      );
 
       const entries = (store: StoreRef) =>
         Stream.paginateChunkEffect(0, (offset) =>
@@ -464,6 +789,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         loadCheckpoint,
         saveCheckpoint,
         query,
+        searchPosts,
         entries,
         count,
         rebuild

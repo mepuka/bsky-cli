@@ -87,6 +87,7 @@ const syncErrorArb = fc
 const syncResultArb = fc
   .record({
     postsAdded: fc.nat(1000),
+    postsDeleted: fc.nat(1000),
     postsSkipped: fc.nat(1000),
     errors: fc.array(syncErrorArb, { maxLength: 5 })
   })

@@ -83,8 +83,11 @@ const limitArb = fc.option(fc.integer({ min: 1, max: 10 }), { nil: undefined });
 const toDate = (value: Date | string) =>
   typeof value === "string" ? new Date(value) : value;
 
-const compareByCreatedAt = (left: Post, right: Post) =>
-  toDate(left.createdAt).getTime() - toDate(right.createdAt).getTime();
+const compareByCreatedAt = (left: Post, right: Post) => {
+  const delta = toDate(left.createdAt).getTime() - toDate(right.createdAt).getTime();
+  if (delta !== 0) return delta;
+  return left.uri.localeCompare(right.uri);
+};
 
 type ModelEntry = { readonly createdDate: string; readonly hashtags: ReadonlyArray<string> };
 
@@ -262,7 +265,7 @@ describe("StoreIndex property", () => {
 
             const query = StoreQuery.make({
               range,
-              limit
+              scanLimit: limit
             });
 
             const collected = yield* storeIndex

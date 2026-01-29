@@ -21,6 +21,16 @@ const samplePost = Schema.decodeUnknownSync(Post)({
   mentions: [],
   links: []
 });
+const emoji = "\u{1F642}";
+const samplePostEmoji = Schema.decodeUnknownSync(Post)({
+  uri: "at://did:plc:example/app.bsky.feed.post/3",
+  author: "bob.bsky",
+  text: `Emoji ${emoji} post`,
+  createdAt: "2026-01-02T00:00:00.000Z",
+  hashtags: ["#emoji"],
+  mentions: [],
+  links: []
+});
 const samplePostLater = Schema.decodeUnknownSync(Post)({
   uri: "at://did:plc:example/app.bsky.feed.post/2",
   author: "bob.bsky",
@@ -197,7 +207,7 @@ describe("StoreIndex", () => {
           start: rangeStart,
           end: rangeEnd
         },
-        limit: 1
+        scanLimit: 1
       });
 
       const collected = yield* storeIndex
@@ -212,6 +222,106 @@ describe("StoreIndex", () => {
     try {
       const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
       expect(Chunk.toReadonlyArray(result)).toEqual([samplePost]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("query orders posts descending when requested", async () => {
+    const upsert1 = PostUpsert.make({ post: samplePost, meta: sampleMeta });
+    const upsert2 = PostUpsert.make({ post: samplePostLater, meta: sampleMeta });
+    const program = Effect.gen(function* () {
+      const writer = yield* StoreWriter;
+      const storeIndex = yield* StoreIndex;
+
+      yield* writer.append(sampleStore, upsert1);
+      yield* writer.append(sampleStore, upsert2);
+      yield* storeIndex.rebuild(sampleStore);
+
+      const query = StoreQuery.make({ order: "desc" });
+      const collected = yield* storeIndex
+        .query(sampleStore, query)
+        .pipe(Stream.runCollect);
+
+      return collected;
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      expect(Chunk.toReadonlyArray(result)).toEqual([samplePostLater, samplePost]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("query applies SQL pushdown for author and hashtag filters", async () => {
+    const upsert1 = PostUpsert.make({ post: samplePost, meta: sampleMeta });
+    const upsert2 = PostUpsert.make({ post: samplePostLater, meta: sampleMeta });
+    const program = Effect.gen(function* () {
+      const writer = yield* StoreWriter;
+      const storeIndex = yield* StoreIndex;
+
+      yield* writer.append(sampleStore, upsert1);
+      yield* writer.append(sampleStore, upsert2);
+      yield* storeIndex.rebuild(sampleStore);
+
+      const authorQuery = StoreQuery.make({
+        filter: { _tag: "Author", handle: samplePost.author }
+      });
+      const hashtagQuery = StoreQuery.make({
+        filter: { _tag: "Hashtag", tag: samplePostLater.hashtags[0]! }
+      });
+
+      const authorCollected = yield* storeIndex
+        .query(sampleStore, authorQuery)
+        .pipe(Stream.runCollect);
+      const hashtagCollected = yield* storeIndex
+        .query(sampleStore, hashtagQuery)
+        .pipe(Stream.runCollect);
+
+      return { authorCollected, hashtagCollected };
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      expect(Chunk.toReadonlyArray(result.authorCollected)).toEqual([samplePost]);
+      expect(Chunk.toReadonlyArray(result.hashtagCollected)).toEqual([samplePostLater]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("query skips OR pushdown when a clause is not SQL-pushdownable", async () => {
+    const upsert1 = PostUpsert.make({ post: samplePost, meta: sampleMeta });
+    const upsert2 = PostUpsert.make({ post: samplePostEmoji, meta: sampleMeta });
+    const program = Effect.gen(function* () {
+      const writer = yield* StoreWriter;
+      const storeIndex = yield* StoreIndex;
+
+      yield* writer.append(sampleStore, upsert1);
+      yield* writer.append(sampleStore, upsert2);
+      yield* storeIndex.rebuild(sampleStore);
+
+      const query = StoreQuery.make({
+        filter: {
+          _tag: "Or",
+          left: { _tag: "Author", handle: samplePost.author },
+          right: { _tag: "Contains", text: emoji, caseSensitive: false }
+        }
+      });
+
+      return yield* storeIndex.query(sampleStore, query).pipe(Stream.runCollect);
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      expect(Chunk.toReadonlyArray(result)).toEqual([samplePost, samplePostEmoji]);
     } finally {
       await removeTempDir(tempDir);
     }

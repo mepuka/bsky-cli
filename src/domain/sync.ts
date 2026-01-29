@@ -18,6 +18,7 @@ export class SyncError extends Schema.TaggedError<SyncError>()("SyncError", {
 
 export class SyncResult extends Schema.Class<SyncResult>("SyncResult")({
   postsAdded: Schema.Number,
+  postsDeleted: Schema.Number,
   postsSkipped: Schema.Number,
   errors: Schema.Array(SyncError)
 }) {}
@@ -28,6 +29,7 @@ const SyncResultSemigroup: Semigroup.Semigroup<SyncResult> = Semigroup.make(
   (left, right) =>
     SyncResult.make({
       postsAdded: MonoidSum.combine(left.postsAdded, right.postsAdded),
+      postsDeleted: MonoidSum.combine(left.postsDeleted, right.postsDeleted),
       postsSkipped: MonoidSum.combine(left.postsSkipped, right.postsSkipped),
       errors: SyncResultErrorsMonoid.combine(left.errors, right.errors)
     })
@@ -37,6 +39,7 @@ export const SyncResultMonoid: Monoid.Monoid<SyncResult> = Monoid.fromSemigroup(
   SyncResultSemigroup,
   SyncResult.make({
     postsAdded: MonoidSum.empty,
+    postsDeleted: MonoidSum.empty,
     postsSkipped: MonoidSum.empty,
     errors: SyncResultErrorsMonoid.empty
   })

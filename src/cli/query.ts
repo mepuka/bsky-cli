@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Effect, Option, Stream } from "effect";
+import { Chunk, Clock, Effect, Option, Ref, Stream } from "effect";
 import * as Doc from "@effect/printer/Doc";
 import { all } from "../domain/filter.js";
 import { StoreQuery } from "../domain/events.js";
@@ -13,7 +13,7 @@ import { renderPostCompact, renderPostCard } from "./doc/post.js";
 import { renderThread } from "./doc/thread.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
-import { writeJson, writeJsonStream, writeText } from "./output.js";
+import { CliOutput, writeJson, writeJsonStream, writeText } from "./output.js";
 import { parseRange } from "./range.js";
 import { storeOptions } from "./store.js";
 import { CliPreferences } from "./preferences.js";
@@ -33,6 +33,17 @@ const rangeOption = Options.text("range").pipe(
 const limitOption = Options.integer("limit").pipe(
   Options.withDescription("Maximum number of posts to return"),
   Options.optional
+);
+const scanLimitOption = Options.integer("scan-limit").pipe(
+  Options.withDescription("Maximum rows to scan before filtering (advanced)"),
+  Options.optional
+);
+const sortOption = Options.choice("sort", ["asc", "desc"]).pipe(
+  Options.withDescription("Sort order for results (default: asc)"),
+  Options.optional
+);
+const newestFirstOption = Options.boolean("newest-first").pipe(
+  Options.withDescription("Sort newest posts first (alias for --sort desc)")
 );
 const formatOption = Options.choice("format", [
   "json",
@@ -75,16 +86,20 @@ export const queryCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     limit: limitOption,
+    scanLimit: scanLimitOption,
+    sort: sortOption,
+    newestFirst: newestFirstOption,
     format: formatOption,
     ansi: ansiOption,
     width: widthOption,
     fields: fieldsOption
   },
-  ({ store, range, filter, filterJson, limit, format, ansi, width, fields }) =>
+  ({ store, range, filter, filterJson, limit, scanLimit, sort, newestFirst, format, ansi, width, fields }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
       const runtime = yield* FilterRuntime;
+      const output = yield* CliOutput;
       const preferences = yield* CliPreferences;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const parsedRange = yield* parseRangeOption(range);
@@ -113,21 +128,142 @@ export const queryCommand = Command.make(
           cause: { limit: limit.value }
         });
       }
+      if (Option.isSome(scanLimit) && scanLimit.value <= 0) {
+        return yield* CliInputError.make({
+          message: "--scan-limit must be a positive integer.",
+          cause: { scanLimit: scanLimit.value }
+        });
+      }
+      const sortValue = Option.getOrUndefined(sort);
+      const order =
+        newestFirst
+          ? "desc"
+          : sortValue;
+      if (newestFirst && sortValue === "asc") {
+        return yield* CliInputError.make({
+          message: "--newest-first conflicts with --sort asc.",
+          cause: { newestFirst, sort: sortValue }
+        });
+      }
+
+      const hasFilter = Option.isSome(parsedFilter);
+      const userLimit = Option.getOrUndefined(limit);
+      const userScanLimit = Option.getOrUndefined(scanLimit);
+      const resolvedScanLimit =
+        hasFilter
+          ? userScanLimit
+          : userScanLimit ?? userLimit;
+
+      if (
+        hasFilter &&
+        Option.isNone(limit) &&
+        (outputFormat === "thread" || outputFormat === "table")
+      ) {
+        yield* output
+          .writeStderr(
+            "Warning: thread/table output collects all matched posts in memory. Consider adding --limit."
+          )
+          .pipe(Effect.catchAll(() => Effect.void));
+      }
 
       const query = StoreQuery.make({
         range: Option.getOrUndefined(parsedRange),
         filter: Option.getOrUndefined(parsedFilter),
-        limit: Option.getOrUndefined(limit)
+        scanLimit: resolvedScanLimit,
+        order
       });
 
       const predicate = yield* runtime.evaluate(expr);
-      const stream = index
-        .query(storeRef, query)
-        .pipe(Stream.filterEffect((post) => predicate(post)));
+      const baseStream = index.query(storeRef, query);
+      const progressEnabled = hasFilter;
+      let startTime = 0;
+      let progressRef: Ref.Ref<{ scanned: number; matched: number; lastReportAt: number }> | undefined;
+      if (progressEnabled) {
+        startTime = yield* Clock.currentTimeMillis;
+        progressRef = yield* Ref.make({ scanned: 0, matched: 0, lastReportAt: startTime });
+      }
+
+      const reportProgress =
+        progressEnabled && progressRef
+          ? (scanned: number, matched: number, now: number) =>
+              output
+                .writeStderr(
+                  `Query progress: scanned=${scanned} matched=${matched} elapsedMs=${now - startTime}`
+                )
+                .pipe(Effect.catchAll(() => Effect.void))
+          : undefined;
+
+      const onScanned =
+        progressEnabled && progressRef && reportProgress
+          ? Effect.gen(function* () {
+              const now = yield* Clock.currentTimeMillis;
+              const state = yield* Ref.get(progressRef);
+              const scanned = state.scanned + 1;
+              const shouldReport =
+                scanned % 1000 === 0 || now - state.lastReportAt >= 1000;
+              if (shouldReport) {
+                yield* reportProgress(scanned, state.matched, now);
+              }
+              yield* Ref.set(progressRef, {
+                scanned,
+                matched: state.matched,
+                lastReportAt: shouldReport ? now : state.lastReportAt
+              });
+            })
+          : Effect.void;
+
+      const onMatched =
+        progressEnabled && progressRef
+          ? Ref.update(progressRef, (state) => ({
+              ...state,
+              matched: state.matched + 1
+            }))
+          : Effect.void;
+
+      const filtered = progressEnabled
+        ? baseStream.pipe(
+            Stream.tap(() => onScanned),
+            Stream.filterEffect((post) =>
+              predicate(post).pipe(
+                Effect.tap((ok) => (ok ? onMatched : Effect.void))
+              )
+            )
+          )
+        : baseStream.pipe(Stream.filterEffect((post) => predicate(post)));
+
+      const stream = Option.match(limit, {
+        onNone: () => filtered,
+        onSome: (value) => filtered.pipe(Stream.take(value))
+      });
 
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(stream.pipe(Stream.map(project)));
         return;
+      }
+
+      switch (outputFormat) {
+        case "compact": {
+          const render = (post: Post) =>
+            ansi
+              ? renderAnsi(renderPostCompact(post), w)
+              : renderPlain(renderPostCompact(post), w);
+          yield* Stream.runForEach(stream, (post) => writeText(render(post)));
+          return;
+        }
+        case "card": {
+          const rendered = stream.pipe(
+            Stream.map((post) => {
+              const doc = Doc.vsep(renderPostCard(post));
+              return ansi ? renderAnsi(doc, w) : renderPlain(doc, w);
+            }),
+            Stream.mapAccum(true, (isFirst, text) => {
+              const output = isFirst ? text : `\\n${text}`;
+              return [false, output] as const;
+            })
+          );
+          yield* Stream.runForEach(rendered, (text) => writeText(text));
+          return;
+        }
       }
 
       const collected = yield* Stream.runCollect(stream);
@@ -144,19 +280,6 @@ export const queryCommand = Command.make(
         case "table":
           yield* writeText(renderPostsTable(posts));
           return;
-        case "compact": {
-          const doc = Doc.vsep(posts.map(renderPostCompact));
-          yield* writeText(ansi ? renderAnsi(doc, w) : renderPlain(doc, w));
-          return;
-        }
-        case "card": {
-          const cards = posts.map((p) => Doc.vsep(renderPostCard(p)));
-          const doc = Doc.vsep(
-            cards.flatMap((card, i) => i < cards.length - 1 ? [card, Doc.empty] : [card])
-          );
-          yield* writeText(ansi ? renderAnsi(doc, w) : renderPlain(doc, w));
-          return;
-        }
         case "thread": {
           const doc = renderThread(posts, { compact: false });
           yield* writeText(ansi ? renderAnsi(doc, w) : renderPlain(doc, w));
@@ -175,7 +298,8 @@ export const queryCommand = Command.make(
         "skygent query my-store --range 2024-01-01T00:00:00Z..2024-01-31T00:00:00Z --filter 'hashtag:#ai'",
         "skygent query my-store --format card --ansi",
         "skygent query my-store --format thread --ansi --width 120",
-        "skygent query my-store --format compact --limit 50"
+        "skygent query my-store --format compact --limit 50",
+        "skygent query my-store --sort desc --limit 25"
       ],
       [
         "Tip: use --fields @minimal or --compact to reduce JSON output size."

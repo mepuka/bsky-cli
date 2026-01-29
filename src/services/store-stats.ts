@@ -179,6 +179,8 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
               ? yield* resolveSyncStatus(store, eventLog, checkpoints)
               : undefined;
 
+          yield* index.count(store);
+
           const aggregate = yield* storeDb
             .withClient(store, (client) =>
               Effect.gen(function* () {

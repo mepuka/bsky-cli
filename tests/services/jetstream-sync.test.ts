@@ -226,7 +226,8 @@ describe("JetstreamSyncEngine", () => {
         program.pipe(Effect.provide(layer))
       );
 
-      expect(outcome.result.postsAdded).toBe(3);
+      expect(outcome.result.postsAdded).toBe(2);
+      expect(outcome.result.postsDeleted).toBe(1);
       expect(outcome.result.postsSkipped).toBe(0);
       expect(outcome.result.errors).toEqual([]);
       expect(outcome.count).toBe(0);

@@ -1,5 +1,5 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Duration, Effect, Layer, Schedule, Schema } from "effect";
 import { StoreLockError } from "../domain/errors.js";
 import type { StoreRef } from "../domain/store.js";
 import { StorePath } from "../domain/primitives.js";
@@ -8,7 +8,8 @@ import { AppConfigService } from "./app-config.js";
 type StoreLockService = {
   readonly withStoreLock: <A, E, R>(
     store: StoreRef,
-    effect: Effect.Effect<A, E, R>
+    effect: Effect.Effect<A, E, R>,
+    options?: { readonly waitFor?: Duration.DurationInput }
   ) => Effect.Effect<A, E | StoreLockError, R>;
 };
 
@@ -76,9 +77,38 @@ export class StoreLock extends Context.Tag("@skygent/StoreLock")<
           (lockPath) => releaseLock(store, lockPath)
         );
 
+      const isStoreLockError = (error: unknown): error is StoreLockError =>
+        typeof error === "object" &&
+        error !== null &&
+        "_tag" in error &&
+        (error as { _tag?: unknown })._tag === "StoreLockError";
+
+      const isBusyLockError = (error: unknown) =>
+        isStoreLockError(error) &&
+        typeof (error as { message?: unknown }).message === "string" &&
+        (error as { message: string }).message.includes("busy");
+
       const withStoreLock = Effect.fn("StoreLock.withStoreLock")(
-        <A, E, R>(store: StoreRef, effect: Effect.Effect<A, E, R>) =>
-          Effect.scoped(acquireLock(store).pipe(Effect.zipRight(effect)))
+        <A, E, R>(
+          store: StoreRef,
+          effect: Effect.Effect<A, E, R>,
+          options?: { readonly waitFor?: Duration.DurationInput }
+        ) => {
+          const attempt = Effect.scoped(acquireLock(store).pipe(Effect.zipRight(effect)));
+          const waitFor = options?.waitFor;
+          if (!waitFor) {
+            return attempt;
+          }
+          const schedule = Schedule.spaced("250 millis").pipe(
+            Schedule.intersect(Schedule.recurUpTo(waitFor))
+          );
+          return attempt.pipe(
+            Effect.retry({
+              while: (error: StoreLockError | E) => isBusyLockError(error),
+              schedule
+            })
+          );
+        }
       );
 
       return StoreLock.of({ withStoreLock });

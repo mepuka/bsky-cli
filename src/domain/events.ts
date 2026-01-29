@@ -3,6 +3,9 @@ import { Post } from "./post.js";
 import { EventId, PostCid, PostUri, Timestamp, StoreName } from "./primitives.js";
 import { FilterExprSchema } from "./filter.js";
 
+export const StoreQueryOrder = Schema.Literal("asc", "desc");
+export type StoreQueryOrder = typeof StoreQueryOrder.Type;
+
 export class EventMeta extends Schema.Class<EventMeta>("EventMeta")({
   source: Schema.Literal(
     "timeline",
@@ -41,5 +44,6 @@ export class PostEventRecord extends Schema.Class<PostEventRecord>("PostEventRec
 export class StoreQuery extends Schema.Class<StoreQuery>("StoreQuery")({
   range: Schema.optional(Schema.Struct({ start: Timestamp, end: Timestamp })),
   filter: Schema.optional(FilterExprSchema),
-  limit: Schema.optional(Schema.NonNegativeInt)
+  scanLimit: Schema.optional(Schema.NonNegativeInt),
+  order: Schema.optional(StoreQueryOrder)
 }) {}

@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect";
+import { Effect, Option, Stream } from "effect";
 import { DataSource, SyncResult, WatchConfig } from "../domain/sync.js";
 import { SyncEngine } from "../services/sync-engine.js";
 import { SyncReporter } from "../services/sync-reporter.js";
@@ -9,8 +9,7 @@ import { parseFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJson, writeJsonStream } from "./output.js";
 import { storeOptions } from "./store.js";
 import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
-import { parseInterval } from "./interval.js";
-import type { Option } from "effect";
+import { parseInterval, parseOptionalDuration } from "./interval.js";
 import type { StoreName } from "../domain/primitives.js";
 
 /** Common options shared by sync and watch API-based commands */
@@ -20,6 +19,7 @@ export interface CommonCommandInput {
   readonly filterJson: Option.Option<string>;
   readonly quiet: boolean;
   readonly refresh: boolean;
+  readonly wait: Option.Option<string>;
 }
 
 /** Build the command body for a one-shot sync command (timeline, feed, notifications). */
@@ -40,6 +40,9 @@ export const makeSyncCommandBody = (
       const expr = yield* parseFilterExpr(input.filter, input.filterJson);
       const basePolicy = storeConfig.syncPolicy ?? "dedupe";
       const policy = input.refresh ? "refresh" : basePolicy;
+      const waitFor = Option.getOrUndefined(
+        yield* parseOptionalDuration(input.wait)
+      );
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
@@ -64,7 +67,8 @@ export const makeSyncCommandBody = (
           }
           yield* logInfo("Sync complete", { source: sourceName, store: storeRef.name, ...extraLogFields });
           yield* writeJson(result as SyncResult);
-        })
+        }),
+        waitFor ? { waitFor } : undefined
       );
     });
 
@@ -91,6 +95,9 @@ export const makeWatchCommandBody = (
       const basePolicy = storeConfig.syncPolicy ?? "dedupe";
       const policy = input.refresh ? "refresh" : basePolicy;
       const parsedInterval = yield* parseInterval(input.interval);
+      const waitFor = Option.getOrUndefined(
+        yield* parseOptionalDuration(input.wait)
+      );
       return yield* storeLock.withStoreLock(
         storeRef,
         Effect.gen(function* () {
@@ -116,6 +123,7 @@ export const makeWatchCommandBody = (
               Stream.provideService(SyncReporter, makeSyncReporter(input.quiet, monitor, output))
             );
           yield* writeJsonStream(stream);
-        })
+        }),
+        waitFor ? { waitFor } : undefined
       );
     });
