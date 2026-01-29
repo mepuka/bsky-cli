@@ -392,6 +392,12 @@ export class FeedGeneratorView extends Schema.Class<FeedGeneratorView>("FeedGene
   indexedAt: Timestamp
 }) {}
 
+export class PostLike extends Schema.Class<PostLike>("PostLike")({
+  actor: ProfileView,
+  createdAt: Timestamp,
+  indexedAt: Timestamp
+}) {}
+
 export const ListPurpose = Schema.Literal(
   "app.bsky.graph.defs#modlist",
   "app.bsky.graph.defs#curatelist",

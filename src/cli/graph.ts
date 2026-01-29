@@ -250,7 +250,15 @@ const relationshipsCommand = Command.make(
   ({ actor, others, format }) =>
     Effect.gen(function* () {
       const client = yield* BskyClient;
-      const resolvedActor = yield* decodeActor(actor);
+      const resolveDid = (value: string) =>
+        Effect.gen(function* () {
+          const decoded = yield* decodeActor(value);
+          const actorValue = String(decoded);
+          return actorValue.startsWith("did:")
+            ? actorValue
+            : yield* client.resolveHandle(actorValue);
+        });
+      const resolvedActor = yield* resolveDid(actor);
       const parsedOthers = others
         .split(",")
         .map((item) => item.trim())
@@ -261,13 +269,19 @@ const relationshipsCommand = Command.make(
           cause: { others }
         });
       }
-      if (parsedOthers.length > 30) {
+      const uniqueOthers = Array.from(new Set(parsedOthers));
+      if (uniqueOthers.length > 30) {
         return yield* CliInputError.make({
           message: "--others supports up to 30 actors per request.",
-          cause: { count: parsedOthers.length }
+          cause: { count: uniqueOthers.length }
         });
       }
-      const result = yield* client.getRelationships(resolvedActor, parsedOthers);
+      const resolvedOthers = yield* Effect.forEach(
+        uniqueOthers,
+        (value) => resolveDid(value),
+        { concurrency: "unbounded" }
+      );
+      const result = yield* client.getRelationships(resolvedActor, resolvedOthers);
       const outputFormat = Option.getOrElse(format, () => "json" as const);
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.relationships));

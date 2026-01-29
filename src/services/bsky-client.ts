@@ -9,6 +9,12 @@ import type {
   AppBskyFeedGetListFeed,
   AppBskyFeedGetPostThread,
   AppBskyFeedGetPosts,
+  AppBskyFeedGetFeedGenerator,
+  AppBskyFeedGetFeedGenerators,
+  AppBskyFeedGetActorFeeds,
+  AppBskyFeedGetLikes,
+  AppBskyFeedGetQuotes,
+  AppBskyFeedGetRepostedBy,
   AppBskyFeedSearchPosts,
   AppBskyFeedGetTimeline,
   AppBskyFeedPost,
@@ -72,6 +78,7 @@ import {
   Label,
   ListItemView,
   ListView,
+  PostLike,
   AuthorFeedFilter,
   PostEmbed,
   PostMetrics,
@@ -80,7 +87,7 @@ import {
   ProfileView,
   RelationshipView
 } from "../domain/bsky.js";
-import { PostCid, PostUri, Timestamp } from "../domain/primitives.js";
+import { Did, PostCid, PostUri, Timestamp } from "../domain/primitives.js";
 
 export interface TimelineOptions {
   readonly limit?: number;
@@ -127,6 +134,17 @@ export interface ActorSearchOptions {
 }
 
 export interface FeedSearchOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface ActorFeedsOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface EngagementOptions {
+  readonly cid?: string;
   readonly limit?: number;
   readonly cursor?: string;
 }
@@ -249,6 +267,11 @@ const mapAspectRatio = (input: unknown) => {
 
 const decodeTimestamp = (value: unknown, message: string) =>
   Schema.decodeUnknown(Timestamp)(value).pipe(
+    Effect.mapError(toBskyError(message))
+  );
+
+const decodeDid = (value: unknown, message: string) =>
+  Schema.decodeUnknown(Did)(value).pipe(
     Effect.mapError(toBskyError(message))
   );
 
@@ -388,6 +411,22 @@ const decodeRelationshipView = (input: unknown) =>
   Schema.decodeUnknown(RelationshipView)(input).pipe(
     Effect.mapError(toBskyError("Invalid relationship payload"))
   );
+
+const decodePostLike = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return yield* BskyError.make({ message: "Invalid like payload" });
+    }
+    const like = input as Record<string, unknown>;
+    const actor = yield* decodeProfileView(like.actor);
+    const createdAt = yield* decodeTimestamp(like.createdAt, "Invalid like timestamp");
+    const indexedAt = yield* decodeTimestamp(like.indexedAt, "Invalid like timestamp");
+    return yield* Schema.decodeUnknown(PostLike)({
+      actor,
+      createdAt,
+      indexedAt
+    }).pipe(Effect.mapError(toBskyError("Invalid like payload")));
+  });
 
 const decodeViewerState = (input: unknown) =>
   Schema.decodeUnknown(PostViewerState)(input).pipe(
@@ -915,6 +954,29 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
     readonly getMutes: (
       opts?: GraphOptions
     ) => Effect.Effect<{ readonly mutes: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
+    readonly getFeedGenerator: (
+      uri: string
+    ) => Effect.Effect<{ readonly view: FeedGeneratorView; readonly isOnline: boolean; readonly isValid: boolean }, BskyError>;
+    readonly getFeedGenerators: (
+      uris: ReadonlyArray<string>
+    ) => Effect.Effect<{ readonly feeds: ReadonlyArray<FeedGeneratorView> }, BskyError>;
+    readonly getActorFeeds: (
+      actor: string,
+      opts?: ActorFeedsOptions
+    ) => Effect.Effect<{ readonly feeds: ReadonlyArray<FeedGeneratorView>; readonly cursor?: string }, BskyError>;
+    readonly getLikes: (
+      uri: string,
+      opts?: EngagementOptions
+    ) => Effect.Effect<{ readonly uri: string; readonly cid?: string; readonly likes: ReadonlyArray<PostLike>; readonly cursor?: string }, BskyError>;
+    readonly getRepostedBy: (
+      uri: string,
+      opts?: EngagementOptions
+    ) => Effect.Effect<{ readonly uri: string; readonly cid?: string; readonly repostedBy: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
+    readonly getQuotes: (
+      uri: string,
+      opts?: EngagementOptions
+    ) => Effect.Effect<{ readonly uri: string; readonly cid?: string; readonly posts: ReadonlyArray<RawPost>; readonly cursor?: string }, BskyError>;
+    readonly resolveHandle: (handle: string) => Effect.Effect<string, BskyError>;
     readonly getProfiles: (
       actors: ReadonlyArray<string>
     ) => Effect.Effect<ReadonlyArray<ProfileBasic>, BskyError>;
@@ -1381,6 +1443,163 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           return cursor ? { mutes, cursor } : { mutes };
         });
 
+      const getFeedGenerator = (uri: string) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyFeedGetFeedGenerator.Response>(() =>
+                agent.app.bsky.feed.getFeedGenerator({ feed: uri })
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch feed generator", "getFeedGenerator")));
+          const view = yield* decodeFeedGeneratorView(response.data.view);
+          return {
+            view,
+            isOnline: response.data.isOnline,
+            isValid: response.data.isValid
+          };
+        });
+
+      const getFeedGenerators = (uris: ReadonlyArray<string>) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          if (uris.length === 0) {
+            return { feeds: [] as ReadonlyArray<FeedGeneratorView> };
+          }
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyFeedGetFeedGenerators.Response>(() =>
+                agent.app.bsky.feed.getFeedGenerators({ feeds: [...uris] })
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch feed generators", "getFeedGenerators")));
+          const feeds = yield* Effect.forEach(
+            response.data.feeds,
+            decodeFeedGeneratorView,
+            { concurrency: "unbounded" }
+          );
+          return { feeds };
+        });
+
+      const getActorFeeds = (actor: string, opts?: ActorFeedsOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = withCursor(
+            { actor, limit: opts?.limit ?? 50 },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyFeedGetActorFeeds.Response>(() =>
+                agent.app.bsky.feed.getActorFeeds(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch actor feeds", "getActorFeeds")));
+          const feeds = yield* Effect.forEach(
+            response.data.feeds,
+            decodeFeedGeneratorView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return cursor ? { feeds, cursor } : { feeds };
+        });
+
+      const getLikes = (uri: string, opts?: EngagementOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = withCursor(
+            { uri, limit: opts?.limit ?? 50, ...(opts?.cid ? { cid: opts.cid } : {}) },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyFeedGetLikes.Response>(() =>
+                agent.app.bsky.feed.getLikes(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch likes", "getLikes")));
+          const likes = yield* Effect.forEach(
+            response.data.likes,
+            decodePostLike,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return {
+            uri: response.data.uri,
+            ...(typeof response.data.cid === "string" ? { cid: response.data.cid } : {}),
+            likes,
+            ...(cursor ? { cursor } : {})
+          };
+        });
+
+      const getRepostedBy = (uri: string, opts?: EngagementOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = withCursor(
+            { uri, limit: opts?.limit ?? 50, ...(opts?.cid ? { cid: opts.cid } : {}) },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyFeedGetRepostedBy.Response>(() =>
+                agent.app.bsky.feed.getRepostedBy(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch reposts", "getRepostedBy")));
+          const repostedBy = yield* Effect.forEach(
+            response.data.repostedBy,
+            decodeProfileView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return {
+            uri: response.data.uri,
+            ...(typeof response.data.cid === "string" ? { cid: response.data.cid } : {}),
+            repostedBy,
+            ...(cursor ? { cursor } : {})
+          };
+        });
+
+      const getQuotes = (uri: string, opts?: EngagementOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = withCursor(
+            { uri, limit: opts?.limit ?? 50, ...(opts?.cid ? { cid: opts.cid } : {}) },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyFeedGetQuotes.Response>(() =>
+                agent.app.bsky.feed.getQuotes(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch quotes", "getQuotes")));
+          const posts = yield* Effect.forEach(
+            response.data.posts,
+            (post) => toRawPost(post),
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return {
+            uri: response.data.uri,
+            ...(typeof response.data.cid === "string" ? { cid: response.data.cid } : {}),
+            posts,
+            ...(cursor ? { cursor } : {})
+          };
+        });
+
+      const resolveHandle = (handle: string) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise(() => agent.resolveHandle({ handle }))
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to resolve handle", "resolveHandle")));
+          return yield* decodeDid(response.data.did, "Invalid DID from resolveHandle");
+        });
+
       const getProfiles = (actors: ReadonlyArray<string>) =>
         Effect.gen(function* () {
           const uniqueActors = Array.from(new Set(actors));
@@ -1605,6 +1824,13 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
         getLists,
         getBlocks,
         getMutes,
+        getFeedGenerator,
+        getFeedGenerators,
+        getActorFeeds,
+        getLikes,
+        getRepostedBy,
+        getQuotes,
+        resolveHandle,
         getProfiles,
         searchActors,
         searchFeedGenerators,
