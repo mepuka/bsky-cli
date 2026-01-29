@@ -44,7 +44,9 @@ export const renderPostCompact = (post: Post): SDoc => {
   return Doc.hsep(parts);
 };
 
-export const renderPostCard = (post: Post): SDoc => {
+/** Returns an array of Doc lines suitable for multi-line tree rendering.
+ *  When used standalone, combine with `Doc.vsep(renderPostCard(post))`. */
+export const renderPostCard = (post: Post): ReadonlyArray<SDoc> => {
   const lines: SDoc[] = [];
 
   lines.push(Doc.hsep([
@@ -67,5 +69,5 @@ export const renderPostCard = (post: Post): SDoc => {
     if (parts.length > 0) lines.push(Doc.hsep(parts));
   }
 
-  return Doc.vsep(lines);
+  return lines;
 };

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
+import * as Doc from "@effect/printer/Doc";
 import { renderPlain } from "../../../src/cli/doc/render.js";
 import { renderPostCompact, renderPostCard } from "../../../src/cli/doc/post.js";
 import { Post } from "../../../src/domain/post.js";
@@ -60,7 +61,7 @@ describe("renderPostCompact", () => {
 describe("renderPostCard", () => {
   test("renders full timestamp", () => {
     const post = makePost();
-    const output = renderPlain(renderPostCard(post));
+    const output = renderPlain(Doc.vsep(renderPostCard(post)));
     expect(output).toContain("2024-01-15T12:00:00.000Z");
   });
 
@@ -68,7 +69,7 @@ describe("renderPostCard", () => {
     const post = makePost({
       embed: { _tag: "Images", images: [{ thumb: "t", fullsize: "f", alt: "" }] }
     });
-    const output = renderPlain(renderPostCard(post));
+    const output = renderPlain(Doc.vsep(renderPostCard(post)));
     expect(output).toContain("[Images: 1]");
   });
 
@@ -76,7 +77,7 @@ describe("renderPostCard", () => {
     const post = makePost({
       embed: { _tag: "External", uri: "https://example.com", title: "Example", description: "" }
     });
-    const output = renderPlain(renderPostCard(post));
+    const output = renderPlain(Doc.vsep(renderPostCard(post)));
     expect(output).toContain("[Link: Example]");
   });
 
@@ -84,7 +85,7 @@ describe("renderPostCard", () => {
     const post = makePost({
       embed: { _tag: "Video", cid: "c", playlist: "p" }
     });
-    const output = renderPlain(renderPostCard(post));
+    const output = renderPlain(Doc.vsep(renderPostCard(post)));
     expect(output).toContain("[Video]");
   });
 
@@ -92,7 +93,7 @@ describe("renderPostCard", () => {
     const post = makePost({
       embed: { _tag: "Unknown", rawType: "x", data: {} }
     });
-    const output = renderPlain(renderPostCard(post));
+    const output = renderPlain(Doc.vsep(renderPostCard(post)));
     expect(output).toContain("[Embed]");
   });
 });

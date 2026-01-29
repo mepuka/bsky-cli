@@ -13,7 +13,10 @@ export interface RenderContext<E> {
 
 export interface TreeConfig<T, E = void> {
   readonly children: (node: T) => ReadonlyArray<{ node: T; edge: E }>;
-  readonly renderNode: (node: T, ctx: RenderContext<E>) => SDoc;
+  /** Return a single Doc (single-line) or an array of Docs (multi-line node).
+   *  First element is the headline; subsequent elements are continuation lines
+   *  that receive the content prefix (│ or spaces) without a connector. */
+  readonly renderNode: (node: T, ctx: RenderContext<E>) => SDoc | ReadonlyArray<SDoc>;
   readonly details?: (node: T, ctx: RenderContext<E>) => ReadonlyArray<SDoc>;
   readonly key: (node: T) => string;
 }
@@ -37,10 +40,18 @@ const walkNode = <T, E>(
   const key = config.key(node);
   const ctx: RenderContext<E> = { depth, isRoot, isLast, edge: edge as E };
 
-  // 1. Headline with connector prefix
-  const headline = config.renderNode(node, ctx);
+  // 1. Headline with connector prefix (+ continuation lines for multi-line nodes)
+  const rendered = config.renderNode(node, ctx);
+  const nodeLines = Array.isArray(rendered) ? rendered : [rendered];
   const connectorStr = isRoot ? "" : isLast ? "└── " : "├── ";
-  docs.push(Doc.cat(Doc.text(prefix + connectorStr), headline));
+  const contentPrefix = prefix + (isRoot ? "" : isLast ? "    " : "│   ");
+  nodeLines.forEach((line, i) => {
+    if (i === 0) {
+      docs.push(Doc.cat(Doc.text(prefix + connectorStr), line));
+    } else {
+      docs.push(Doc.cat(Doc.text(contentPrefix), line));
+    }
+  });
 
   // 2. Cycle check: path-based
   if (path.includes(key)) {
