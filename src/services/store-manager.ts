@@ -1,3 +1,60 @@
+/**
+ * Store Manager Service
+ *
+ * Manages the lifecycle of content stores for Bluesky data.
+ * Stores are SQLite databases that persist filtered posts and metadata.
+ *
+ * **Responsibilities:**
+ * - Create new stores with configuration
+ * - List all existing stores
+ * - Retrieve store references and metadata
+ * - Delete stores and clean up resources
+ * - Manage store catalog database (SQLite)
+ *
+ * **Store Catalog:**
+ * Each store is tracked in a central catalog database (catalog.sqlite)
+ * with metadata: name, root path, creation date, config JSON.
+ *
+ * **Store Root:**
+ * Stores are organized under `{storeRoot}/stores/{storeName}/` with:
+ * - posts.sqlite - Main content database
+ * - Additional store-specific files
+ *
+ * **Database Schema:**
+ * The catalog database runs migrations from `../db/migrations/store-catalog`
+ * to maintain the stores table schema.
+ *
+ * @module services/store-manager
+ *
+ * @example
+ * ```typescript
+ * import { StoreManager } from "./services/store-manager.js";
+ * import { Effect } from "effect";
+ *
+ * const program = Effect.gen(function* () {
+ *   const manager = yield* StoreManager;
+ *
+ *   // Create a new store
+ *   const storeRef = yield* manager.createStore("my-feed", {
+ *     filter: { _tag: "Contains", text: "tech" },
+ *     errorPolicy: { _tag: "Exclude" }
+ *   });
+ *
+ *   // List all stores
+ *   const stores = yield* manager.listStores();
+ *   for (const store of stores) {
+ *     console.log(`${store.name}: ${store.root}`);
+ *   }
+ *
+ *   // Get store reference
+ *   const ref = yield* manager.getStore("my-feed");
+ *   if (Option.isSome(ref)) {
+ *     console.log(`Store at: ${ref.value.root}`);
+ *   }
+ * }).pipe(Effect.provide(StoreManager.layer));
+ * ```
+ */
+
 import { FileSystem, Path } from "@effect/platform";
 import { Chunk, Clock, Context, Effect, Exit, Layer, Option, Schema, Scope } from "effect";
 import * as Reactivity from "@effect/experimental/Reactivity";
@@ -32,25 +89,107 @@ const toStoreIoError = (path: StorePath) => (cause: unknown) =>
 const storeRefFromMetadata = (metadata: StoreMetadata) =>
   StoreRef.make({ name: metadata.name, root: metadata.root });
 
+/**
+ * Context tag and Layer implementation for the store manager service.
+ * Provides CRUD operations for content stores with SQLite persistence.
+ *
+ * **Methods:**
+ * - createStore: Creates a new store or returns existing if name exists
+ * - getStore: Retrieves store reference by name
+ * - listStores: Returns all stores sorted by name
+ * - getConfig: Gets configuration for a specific store
+ * - deleteStore: Removes a store from the catalog
+ *
+ * **Idempotency:**
+ * createStore is idempotent - if a store with the given name already exists,
+ * it returns the existing store reference instead of failing.
+ *
+ * **Error Handling:**
+ * All methods return StoreIoError for filesystem or database issues.
+ *
+ * @example
+ * ```typescript
+ * // Create and use a store
+ * const storeRef = yield* manager.createStore("tech-posts", {
+ *   filter: { _tag: "Hashtag", tag: "tech" },
+ *   errorPolicy: { _tag: "Retry", maxRetries: 3, baseDelay: Duration.seconds(1) }
+ * });
+ *
+ * // Check if store exists before creating
+ * const existing = yield* manager.getStore("tech-posts");
+ * if (Option.isNone(existing)) {
+ *   yield* manager.createStore("tech-posts", config);
+ * }
+ *
+ * // Cleanup
+ * yield* manager.deleteStore("old-store");
+ * ```
+ */
 export class StoreManager extends Context.Tag("@skygent/StoreManager")<
   StoreManager,
   {
+    /**
+     * Creates a new store or returns existing if name already exists.
+     * Stores creation timestamp and configuration in the catalog.
+     *
+     * @param name - Unique name for the store
+     * @param config - Store configuration including filter and error policy
+     * @returns Effect resolving to StoreRef (existing or newly created)
+     * @throws {StoreIoError} When database operations fail
+     */
     readonly createStore: (
       name: StoreName,
       config: StoreConfig
     ) => Effect.Effect<StoreRef, StoreIoError>;
+
+    /**
+     * Retrieves a store reference by name.
+     *
+     * @param name - Store name to look up
+     * @returns Effect resolving to Some(StoreRef) if found, None otherwise
+     * @throws {StoreIoError} When database operations fail
+     */
     readonly getStore: (
       name: StoreName
     ) => Effect.Effect<Option.Option<StoreRef>, StoreIoError>;
+
+    /**
+     * Lists all stores sorted alphabetically by name.
+     *
+     * @returns Effect resolving to chunk of StoreMetadata
+     * @throws {StoreIoError} When database operations fail
+     */
     readonly listStores: () => Effect.Effect<Chunk.Chunk<StoreMetadata>, StoreIoError>;
+
+    /**
+     * Retrieves configuration for a specific store.
+     *
+     * @param name - Store name to look up
+     * @returns Effect resolving to Some(StoreConfig) if found, None otherwise
+     * @throws {StoreIoError} When database operations fail or config parsing fails
+     */
     readonly getConfig: (
       name: StoreName
     ) => Effect.Effect<Option.Option<StoreConfig>, StoreIoError>;
+
+    /**
+     * Deletes a store from the catalog.
+     * Note: This only removes the catalog entry, not the store files.
+     *
+     * @param name - Store name to delete
+     * @returns Effect resolving to void
+     * @throws {StoreIoError} When database operations fail
+     */
     readonly deleteStore: (
       name: StoreName
     ) => Effect.Effect<void, StoreIoError>;
   }
 >() {
+  /**
+   * Scoped layer that creates the store manager service.
+   * Manages SQLite client lifecycle with automatic cleanup.
+   * Requires: AppConfigService, FileSystem, Path, Reactivity
+   */
   static readonly layer = Layer.scoped(
     StoreManager,
     Effect.gen(function* () {
