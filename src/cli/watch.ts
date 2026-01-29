@@ -18,6 +18,7 @@ import { CliInputError } from "./errors.js";
 import { parseOptionalDuration } from "./interval.js";
 import {
   feedUriArg,
+  listUriArg,
   postUriArg,
   actorArg,
   storeNameOption,
@@ -114,6 +115,31 @@ const feedCommand = Command.make(
       "Watch a feed URI and emit sync results",
       [
         "skygent watch feed at://did:plc:example/app.bsky.feed.generator/xyz --store my-store --interval \"2 minutes\""
+      ],
+      ["Tip: add --quiet to suppress progress logs."]
+    )
+  )
+);
+
+const listCommand = Command.make(
+  "list",
+  {
+    uri: listUriArg,
+    store: storeNameOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    interval: intervalOption,
+    quiet: quietOption,
+    refresh: refreshOption,
+    wait: waitOption
+  },
+  ({ uri, ...rest }) => makeWatchCommandBody("list", () => DataSource.list(uri), { uri })(rest)
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Watch a list feed URI and emit sync results",
+      [
+        "skygent watch list at://did:plc:example/app.bsky.graph.list/xyz --store my-store --interval \"2 minutes\""
       ],
       ["Tip: add --quiet to suppress progress logs."]
     )
@@ -344,6 +370,7 @@ export const watchCommand = Command.make("watch", {}).pipe(
   Command.withSubcommands([
     timelineCommand,
     feedCommand,
+    listCommand,
     notificationsCommand,
     authorCommand,
     threadCommand,

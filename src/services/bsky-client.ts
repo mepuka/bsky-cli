@@ -6,10 +6,20 @@ import type {
   AppBskyActorGetProfiles,
   AppBskyFeedGetAuthorFeed,
   AppBskyFeedGetFeed,
+  AppBskyFeedGetListFeed,
   AppBskyFeedGetPostThread,
   AppBskyFeedGetPosts,
+  AppBskyFeedSearchPosts,
   AppBskyFeedGetTimeline,
   AppBskyFeedPost,
+  AppBskyGraphGetBlocks,
+  AppBskyGraphGetFollowers,
+  AppBskyGraphGetFollows,
+  AppBskyGraphGetKnownFollowers,
+  AppBskyGraphGetList,
+  AppBskyGraphGetLists,
+  AppBskyGraphGetMutes,
+  AppBskyGraphGetRelationships,
   AppBskyNotificationListNotifications,
   AppBskyUnspeccedGetPopularFeedGenerators,
   AppBskyUnspeccedGetTrendingTopics
@@ -60,12 +70,15 @@ import {
   FeedReasonUnknown,
   FeedReplyRef,
   Label,
+  ListItemView,
+  ListView,
   AuthorFeedFilter,
   PostEmbed,
   PostMetrics,
   PostViewerState,
   ProfileBasic,
-  ProfileView
+  ProfileView,
+  RelationshipView
 } from "../domain/bsky.js";
 import { PostCid, PostUri, Timestamp } from "../domain/primitives.js";
 
@@ -77,6 +90,17 @@ export interface TimelineOptions {
 export interface FeedOptions {
   readonly limit?: number;
   readonly cursor?: string;
+}
+
+export interface GraphOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface GraphListsOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly purposes?: ReadonlyArray<"modlist" | "curatelist">;
 }
 
 export interface AuthorFeedOptions {
@@ -105,6 +129,20 @@ export interface ActorSearchOptions {
 export interface FeedSearchOptions {
   readonly limit?: number;
   readonly cursor?: string;
+}
+
+export interface NetworkSearchOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly sort?: "top" | "latest";
+  readonly since?: string;
+  readonly until?: string;
+  readonly mentions?: string;
+  readonly author?: string;
+  readonly lang?: string;
+  readonly domain?: string;
+  readonly url?: string;
+  readonly tags?: ReadonlyArray<string>;
 }
 
 type FeedViewPost = AppBskyFeedDefs.FeedViewPost;
@@ -309,6 +347,47 @@ const decodeFeedGeneratorView = (input: unknown) =>
       indexedAt: feed.indexedAt
     }).pipe(Effect.mapError(toBskyError("Invalid feed generator payload")));
   });
+
+const decodeListView = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return yield* BskyError.make({ message: "Invalid list payload" });
+    }
+    const list = input as Record<string, unknown>;
+    const creator = yield* decodeProfileView(list.creator);
+    return yield* Schema.decodeUnknown(ListView)({
+      uri: list.uri,
+      cid: list.cid,
+      creator,
+      name: list.name,
+      purpose: list.purpose,
+      description: list.description,
+      descriptionFacets: list.descriptionFacets,
+      avatar: list.avatar,
+      listItemCount: list.listItemCount,
+      labels: list.labels,
+      viewer: list.viewer,
+      indexedAt: list.indexedAt
+    }).pipe(Effect.mapError(toBskyError("Invalid list payload")));
+  });
+
+const decodeListItemView = (input: unknown) =>
+  Effect.gen(function* () {
+    if (!input || typeof input !== "object") {
+      return yield* BskyError.make({ message: "Invalid list item payload" });
+    }
+    const item = input as Record<string, unknown>;
+    const subject = yield* decodeProfileView(item.subject);
+    return yield* Schema.decodeUnknown(ListItemView)({
+      uri: item.uri,
+      subject
+    }).pipe(Effect.mapError(toBskyError("Invalid list item payload")));
+  });
+
+const decodeRelationshipView = (input: unknown) =>
+  Schema.decodeUnknown(RelationshipView)(input).pipe(
+    Effect.mapError(toBskyError("Invalid relationship payload"))
+  );
 
 const decodeViewerState = (input: unknown) =>
   Schema.decodeUnknown(PostViewerState)(input).pipe(
@@ -793,6 +872,10 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       uri: string,
       opts?: FeedOptions
     ) => Stream.Stream<RawPost, BskyError>;
+    readonly getListFeed: (
+      uri: string,
+      opts?: FeedOptions
+    ) => Stream.Stream<RawPost, BskyError>;
     readonly getAuthorFeed: (
       actor: string,
       opts?: AuthorFeedOptions
@@ -802,6 +885,36 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       uri: string,
       opts?: ThreadOptions
     ) => Effect.Effect<ReadonlyArray<RawPost>, BskyError>;
+    readonly getFollowers: (
+      actor: string,
+      opts?: GraphOptions
+    ) => Effect.Effect<{ readonly subject: ProfileView; readonly followers: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
+    readonly getFollows: (
+      actor: string,
+      opts?: GraphOptions
+    ) => Effect.Effect<{ readonly subject: ProfileView; readonly follows: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
+    readonly getKnownFollowers: (
+      actor: string,
+      opts?: GraphOptions
+    ) => Effect.Effect<{ readonly subject: ProfileView; readonly followers: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
+    readonly getRelationships: (
+      actor: string,
+      others: ReadonlyArray<string>
+    ) => Effect.Effect<{ readonly actor: string; readonly relationships: ReadonlyArray<RelationshipView> }, BskyError>;
+    readonly getList: (
+      uri: string,
+      opts?: GraphOptions
+    ) => Effect.Effect<{ readonly list: ListView; readonly items: ReadonlyArray<ListItemView>; readonly cursor?: string }, BskyError>;
+    readonly getLists: (
+      actor: string,
+      opts?: GraphListsOptions
+    ) => Effect.Effect<{ readonly lists: ReadonlyArray<ListView>; readonly cursor?: string }, BskyError>;
+    readonly getBlocks: (
+      opts?: GraphOptions
+    ) => Effect.Effect<{ readonly blocks: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
+    readonly getMutes: (
+      opts?: GraphOptions
+    ) => Effect.Effect<{ readonly mutes: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
     readonly getProfiles: (
       actors: ReadonlyArray<string>
     ) => Effect.Effect<ReadonlyArray<ProfileBasic>, BskyError>;
@@ -813,6 +926,10 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       query: string,
       opts?: FeedSearchOptions
     ) => Effect.Effect<{ readonly feeds: ReadonlyArray<FeedGeneratorView>; readonly cursor?: string }, BskyError>;
+    readonly searchPosts: (
+      query: string,
+      opts?: NetworkSearchOptions
+    ) => Effect.Effect<{ readonly posts: ReadonlyArray<RawPost>; readonly cursor?: string; readonly hitsTotal?: number }, BskyError>;
     readonly getTrendingTopics: () => Effect.Effect<ReadonlyArray<string>, BskyError>;
   }
 >() {
@@ -961,6 +1078,35 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           })
         );
 
+      const getListFeed = (uri: string, opts?: FeedOptions) =>
+        paginate(opts?.cursor, (cursor) =>
+          Effect.gen(function* () {
+            yield* ensureAuth(false);
+            const params = withCursor(
+              { list: uri, limit: opts?.limit ?? 50 },
+              cursor
+            );
+            const response = yield* withRetry(
+              withRateLimit(
+                Effect.tryPromise<AppBskyFeedGetListFeed.Response>(() =>
+                  agent.app.bsky.feed.getListFeed(params)
+                )
+              )
+            ).pipe(Effect.mapError(toBskyError("Failed to fetch list feed", "getListFeed")));
+            const posts = yield* toRawPostsFromFeed(response.data.feed);
+            const nextCursor = response.data.cursor;
+            const tagged = posts.map((p) => new RawPost({ ...p, _pageCursor: nextCursor }));
+            const hasNext =
+              tagged.length > 0 &&
+              typeof nextCursor === "string" &&
+              nextCursor !== cursor;
+            return [
+              Chunk.fromIterable(tagged),
+              hasNext ? Option.some(nextCursor) : Option.none()
+            ] as const;
+          })
+        );
+
       const getAuthorFeed = (actor: string, opts?: AuthorFeedOptions) =>
         paginate(opts?.cursor, (cursor) =>
           Effect.gen(function* () {
@@ -1039,6 +1185,200 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           }
 
           return yield* toRawPostsFromThread(response.data.thread);
+        });
+
+      const getFollowers = (actor: string, opts?: GraphOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = withCursor(
+            { actor, limit: opts?.limit ?? 50 },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyGraphGetFollowers.Response>(() =>
+                agent.app.bsky.graph.getFollowers(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch followers", "getFollowers")));
+          const subject = yield* decodeProfileView(response.data.subject);
+          const followers = yield* Effect.forEach(
+            response.data.followers,
+            decodeProfileView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return cursor ? { subject, followers, cursor } : { subject, followers };
+        });
+
+      const getFollows = (actor: string, opts?: GraphOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = withCursor(
+            { actor, limit: opts?.limit ?? 50 },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyGraphGetFollows.Response>(() =>
+                agent.app.bsky.graph.getFollows(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch follows", "getFollows")));
+          const subject = yield* decodeProfileView(response.data.subject);
+          const follows = yield* Effect.forEach(
+            response.data.follows,
+            decodeProfileView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return cursor ? { subject, follows, cursor } : { subject, follows };
+        });
+
+      const getKnownFollowers = (actor: string, opts?: GraphOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(true);
+          const params = withCursor(
+            { actor, limit: opts?.limit ?? 50 },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyGraphGetKnownFollowers.Response>(() =>
+                agent.app.bsky.graph.getKnownFollowers(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch known followers", "getKnownFollowers")));
+          const subject = yield* decodeProfileView(response.data.subject);
+          const followers = yield* Effect.forEach(
+            response.data.followers,
+            decodeProfileView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return cursor ? { subject, followers, cursor } : { subject, followers };
+        });
+
+      const getRelationships = (actor: string, others: ReadonlyArray<string>) =>
+        Effect.gen(function* () {
+          if (others.length === 0) {
+            return { actor, relationships: [] };
+          }
+          yield* ensureAuth(false);
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyGraphGetRelationships.Response>(() =>
+                agent.app.bsky.graph.getRelationships({ actor, others: [...others] })
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch relationships", "getRelationships")));
+          const relationships = yield* Effect.forEach(
+            response.data.relationships,
+            decodeRelationshipView,
+            { concurrency: "unbounded" }
+          );
+          const actorDid =
+            typeof response.data.actor === "string" ? response.data.actor : actor;
+          return { actor: actorDid, relationships };
+        });
+
+      const getList = (uri: string, opts?: GraphOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = withCursor(
+            { list: uri, limit: opts?.limit ?? 50 },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyGraphGetList.Response>(() =>
+                agent.app.bsky.graph.getList(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch list", "getList")));
+          const list = yield* decodeListView(response.data.list);
+          const items = yield* Effect.forEach(
+            response.data.items,
+            decodeListItemView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return cursor ? { list, items, cursor } : { list, items };
+        });
+
+      const getLists = (actor: string, opts?: GraphListsOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = withCursor(
+            {
+              actor,
+              limit: opts?.limit ?? 50,
+              ...(opts?.purposes && opts.purposes.length > 0
+                ? { purposes: [...opts.purposes] }
+                : {})
+            },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyGraphGetLists.Response>(() =>
+                agent.app.bsky.graph.getLists(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch lists", "getLists")));
+          const lists = yield* Effect.forEach(
+            response.data.lists,
+            decodeListView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return cursor ? { lists, cursor } : { lists };
+        });
+
+      const getBlocks = (opts?: GraphOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(true);
+          const params = withCursor(
+            { limit: opts?.limit ?? 50 },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyGraphGetBlocks.Response>(() =>
+                agent.app.bsky.graph.getBlocks(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch blocks", "getBlocks")));
+          const blocks = yield* Effect.forEach(
+            response.data.blocks,
+            decodeProfileView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return cursor ? { blocks, cursor } : { blocks };
+        });
+
+      const getMutes = (opts?: GraphOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(true);
+          const params = withCursor(
+            { limit: opts?.limit ?? 50 },
+            opts?.cursor
+          );
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyGraphGetMutes.Response>(() =>
+                agent.app.bsky.graph.getMutes(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to fetch mutes", "getMutes")));
+          const mutes = yield* Effect.forEach(
+            response.data.mutes,
+            decodeProfileView,
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          return cursor ? { mutes, cursor } : { mutes };
         });
 
       const getProfiles = (actors: ReadonlyArray<string>) =>
@@ -1136,6 +1476,44 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           return cursor ? { feeds, cursor } : { feeds };
         });
 
+      const searchPosts = (query: string, opts?: NetworkSearchOptions) =>
+        Effect.gen(function* () {
+          yield* ensureAuth(false);
+          const params = {
+            q: query,
+            ...(opts?.sort ? { sort: opts.sort } : {}),
+            ...(opts?.since ? { since: opts.since } : {}),
+            ...(opts?.until ? { until: opts.until } : {}),
+            ...(opts?.mentions ? { mentions: opts.mentions } : {}),
+            ...(opts?.author ? { author: opts.author } : {}),
+            ...(opts?.lang ? { lang: opts.lang } : {}),
+            ...(opts?.domain ? { domain: opts.domain } : {}),
+            ...(opts?.url ? { url: opts.url } : {}),
+            ...(opts?.tags && opts.tags.length > 0 ? { tag: [...opts.tags] } : {}),
+            limit: opts?.limit ?? 25,
+            ...(opts?.cursor ? { cursor: opts.cursor } : {})
+          };
+          const response = yield* withRetry(
+            withRateLimit(
+              Effect.tryPromise<AppBskyFeedSearchPosts.Response>(() =>
+                agent.app.bsky.feed.searchPosts(params)
+              )
+            )
+          ).pipe(Effect.mapError(toBskyError("Failed to search posts", "searchPosts")));
+          const posts = yield* Effect.forEach(
+            response.data.posts,
+            (post) => toRawPost(post),
+            { concurrency: "unbounded" }
+          );
+          const cursor = response.data.cursor;
+          const hitsTotal = response.data.hitsTotal;
+          return {
+            posts,
+            ...(typeof cursor === "string" ? { cursor } : {}),
+            ...(typeof hitsTotal === "number" ? { hitsTotal } : {})
+          };
+        });
+
       const getNotifications = (opts?: NotificationsOptions) =>
         paginate(opts?.cursor, (cursor) =>
           Effect.gen(function* () {
@@ -1215,12 +1593,22 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
         getTimeline,
         getNotifications,
         getFeed,
+        getListFeed,
         getAuthorFeed,
         getPost,
         getPostThread,
+        getFollowers,
+        getFollows,
+        getKnownFollowers,
+        getRelationships,
+        getList,
+        getLists,
+        getBlocks,
+        getMutes,
         getProfiles,
         searchActors,
         searchFeedGenerators,
+        searchPosts,
         getTrendingTopics: () => getTrendingTopics
       });
     })

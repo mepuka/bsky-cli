@@ -18,6 +18,7 @@ import { CliInputError } from "./errors.js";
 import { makeSyncCommandBody } from "./sync-factory.js";
 import {
   feedUriArg,
+  listUriArg,
   postUriArg,
   actorArg,
   storeNameOption,
@@ -138,6 +139,22 @@ const feedCommand = Command.make(
       "Sync a feed URI into a store",
       [
         "skygent sync feed at://did:plc:example/app.bsky.feed.generator/xyz --store my-store"
+      ],
+      ["Tip: add --quiet to suppress progress logs."]
+    )
+  )
+);
+
+const listCommand = Command.make(
+  "list",
+  { uri: listUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, wait: waitOption },
+  ({ uri, ...rest }) => makeSyncCommandBody("list", () => DataSource.list(uri), { uri })(rest)
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Sync a list feed URI into a store",
+      [
+        "skygent sync list at://did:plc:example/app.bsky.graph.list/xyz --store my-store"
       ],
       ["Tip: add --quiet to suppress progress logs."]
     )
@@ -382,6 +399,7 @@ export const syncCommand = Command.make("sync", {}).pipe(
   Command.withSubcommands([
     timelineCommand,
     feedCommand,
+    listCommand,
     notificationsCommand,
     authorCommand,
     threadCommand,

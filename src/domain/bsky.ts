@@ -391,3 +391,65 @@ export class FeedGeneratorView extends Schema.Class<FeedGeneratorView>("FeedGene
   contentMode: Schema.optional(Schema.String),
   indexedAt: Timestamp
 }) {}
+
+export const ListPurpose = Schema.Literal(
+  "app.bsky.graph.defs#modlist",
+  "app.bsky.graph.defs#curatelist",
+  "app.bsky.graph.defs#referencelist"
+);
+export type ListPurpose = typeof ListPurpose.Type;
+
+export class ListViewerState extends Schema.Class<ListViewerState>("ListViewerState")({
+  muted: Schema.optional(Schema.Boolean),
+  blocked: Schema.optional(AtUri)
+}) {}
+
+export class ListViewBasic extends Schema.Class<ListViewBasic>("ListViewBasic")({
+  uri: AtUri,
+  cid: PostCid,
+  name: Schema.String,
+  purpose: ListPurpose,
+  avatar: Schema.optional(Schema.String),
+  listItemCount: Schema.optional(NonNegativeInt),
+  labels: Schema.optional(Schema.Array(Label)),
+  viewer: Schema.optional(ListViewerState),
+  indexedAt: Schema.optional(Timestamp)
+}) {}
+
+export class ListView extends Schema.Class<ListView>("ListView")({
+  uri: AtUri,
+  cid: PostCid,
+  creator: ProfileView,
+  name: Schema.String,
+  purpose: ListPurpose,
+  description: Schema.optional(Schema.String),
+  descriptionFacets: Schema.optional(Schema.Array(RichTextFacet)),
+  avatar: Schema.optional(Schema.String),
+  listItemCount: Schema.optional(NonNegativeInt),
+  labels: Schema.optional(Schema.Array(Label)),
+  viewer: Schema.optional(ListViewerState),
+  indexedAt: Timestamp
+}) {}
+
+export class ListItemView extends Schema.Class<ListItemView>("ListItemView")({
+  uri: AtUri,
+  subject: ProfileView
+}) {}
+
+export class Relationship extends Schema.Class<Relationship>("Relationship")({
+  did: Did,
+  following: Schema.optional(AtUri),
+  followedBy: Schema.optional(AtUri),
+  blocking: Schema.optional(AtUri),
+  blockedBy: Schema.optional(AtUri),
+  blockingByList: Schema.optional(AtUri),
+  blockedByList: Schema.optional(AtUri)
+}) {}
+
+export class NotFoundActor extends Schema.Class<NotFoundActor>("NotFoundActor")({
+  actor: Schema.String,
+  notFound: Schema.Literal(true)
+}) {}
+
+export const RelationshipView = Schema.Union(Relationship, NotFoundActor);
+export type RelationshipView = typeof RelationshipView.Type;

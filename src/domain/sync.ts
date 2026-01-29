@@ -54,6 +54,10 @@ export class DataSourceFeed extends Schema.TaggedClass<DataSourceFeed>()("Feed",
   uri: Schema.String
 }) {}
 
+export class DataSourceList extends Schema.TaggedClass<DataSourceList>()("List", {
+  uri: Schema.String
+}) {}
+
 export class DataSourceNotifications extends Schema.TaggedClass<DataSourceNotifications>()(
   "Notifications",
   {}
@@ -85,6 +89,7 @@ export class DataSourceJetstream extends Schema.TaggedClass<DataSourceJetstream>
 export const DataSourceSchema = Schema.Union(
   DataSourceTimeline,
   DataSourceFeed,
+  DataSourceList,
   DataSourceNotifications,
   DataSourceAuthor,
   DataSourceThread,
@@ -95,6 +100,7 @@ export type DataSource = typeof DataSourceSchema.Type;
 export const DataSource = {
   timeline: (): DataSource => DataSourceTimeline.make({}),
   feed: (uri: string): DataSource => DataSourceFeed.make({ uri }),
+  list: (uri: string): DataSource => DataSourceList.make({ uri }),
   notifications: (): DataSource => DataSourceNotifications.make({}),
   author: (
     actor: string,
@@ -174,6 +180,8 @@ export const dataSourceKey = (source: DataSource): string => {
       return "timeline";
     case "Feed":
       return `feed:${source.uri}`;
+    case "List":
+      return `list:${source.uri}`;
     case "Notifications":
       return "notifications";
     case "Author": {

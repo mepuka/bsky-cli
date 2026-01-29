@@ -12,6 +12,7 @@ export class EventMeta extends Schema.Class<EventMeta>("EventMeta")({
     "notifications",
     "jetstream",
     "feed",
+    "list",
     "author",
     "thread"
   ),

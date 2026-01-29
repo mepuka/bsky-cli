@@ -14,6 +14,7 @@ import { deriveCommand } from "./derive.js";
 import { viewCommand } from "./view.js";
 import { filterCommand } from "./filter.js";
 import { searchCommand } from "./search.js";
+import { graphCommand } from "./graph.js";
 import { configCommand } from "./config-command.js";
 import {
   configOptions,
@@ -33,7 +34,8 @@ export const app = Command.make("skygent", configOptions).pipe(
     deriveCommand,
     viewCommand,
     filterCommand,
-    searchCommand
+    searchCommand,
+    graphCommand
   ]),
   Command.provide((config) =>
     Layer.mergeAll(
