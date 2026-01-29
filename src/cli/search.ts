@@ -1,6 +1,7 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Option, Stream } from "effect";
 import { BskyClient } from "../services/bsky-client.js";
+import { PostParser } from "../services/post-parser.js";
 import { StoreIndex } from "../services/store-index.js";
 import { renderPostsTable } from "../domain/format.js";
 import type { FeedGeneratorView, ProfileView } from "../domain/bsky.js";
@@ -8,6 +9,8 @@ import { StoreName } from "../domain/primitives.js";
 import { storeOptions } from "./store.js";
 import { withExamples } from "./help.js";
 import { CliInputError } from "./errors.js";
+import { decodeActor } from "./shared-options.js";
+import { formatSchemaError } from "./shared.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 
 const queryArg = Args.text({ name: "query" }).pipe(
@@ -38,13 +41,59 @@ const storeOption = Options.text("store").pipe(
   Options.withDescription("Store name to search")
 );
 
-const postCursorOption = Options.integer("cursor").pipe(
-  Options.withDescription("Pagination offset for local search results"),
+const storeOptionOptional = storeOption.pipe(Options.optional);
+
+const networkOption = Options.boolean("network").pipe(
+  Options.withDescription("Search the Bluesky network instead of a local store")
+);
+
+const postCursorOption = Options.text("cursor").pipe(
+  Options.withDescription("Pagination cursor (network) or offset (local)"),
   Options.optional
 );
 
-const sortOption = Options.choice("sort", ["relevance", "newest", "oldest"]).pipe(
-  Options.withDescription("Sort order for local search (default: relevance)"),
+const sortOption = Options.text("sort").pipe(
+  Options.withDescription("Sort order (local: relevance|newest|oldest, network: top|latest)"),
+  Options.optional
+);
+
+const sinceOption = Options.text("since").pipe(
+  Options.withDescription("Filter network results after datetime (inclusive)"),
+  Options.optional
+);
+
+const untilOption = Options.text("until").pipe(
+  Options.withDescription("Filter network results before datetime (exclusive)"),
+  Options.optional
+);
+
+const mentionsOption = Options.text("mentions").pipe(
+  Options.withDescription("Filter network results by mention (handle or DID)"),
+  Options.optional
+);
+
+const authorOption = Options.text("author").pipe(
+  Options.withDescription("Filter network results by author (handle or DID)"),
+  Options.optional
+);
+
+const langOption = Options.text("lang").pipe(
+  Options.withDescription("Filter network results by language code"),
+  Options.optional
+);
+
+const domainOption = Options.text("domain").pipe(
+  Options.withDescription("Filter network results by link domain"),
+  Options.optional
+);
+
+const urlOption = Options.text("url").pipe(
+  Options.withDescription("Filter network results by URL"),
+  Options.optional
+);
+
+const tagOption = Options.text("tag").pipe(
+  Options.withDescription("Comma-separated tags for network search"),
   Options.optional
 );
 
@@ -52,6 +101,8 @@ const formatOption = Options.choice("format", ["json", "ndjson", "table"]).pipe(
   Options.withDescription("Output format (default: json)"),
   Options.optional
 );
+
+type LocalSort = "relevance" | "newest" | "oldest";
 
 const renderTable = (
   headers: ReadonlyArray<string>,
@@ -175,13 +226,22 @@ const postsCommand = Command.make(
   "posts",
   {
     query: queryArg,
-    store: storeOption,
+    store: storeOptionOptional,
+    network: networkOption,
     limit: limitOption,
     cursor: postCursorOption,
     sort: sortOption,
+    since: sinceOption,
+    until: untilOption,
+    mentions: mentionsOption,
+    author: authorOption,
+    lang: langOption,
+    domain: domainOption,
+    url: urlOption,
+    tag: tagOption,
     format: formatOption
   },
-  ({ query, store, limit, cursor, sort, format }) =>
+  ({ query, store, network, limit, cursor, sort, since, until, mentions, author, lang, domain, url, tag, format }) =>
     Effect.gen(function* () {
       if (Option.isSome(limit) && limit.value <= 0) {
         return yield* CliInputError.make({
@@ -189,23 +249,183 @@ const postsCommand = Command.make(
           cause: { limit: limit.value }
         });
       }
-      if (Option.isSome(cursor) && cursor.value < 0) {
+      if (network && Option.isSome(store)) {
         return yield* CliInputError.make({
-          message: "--cursor must be a non-negative integer.",
-          cause: { cursor: cursor.value }
+          message: "--store cannot be used with --network.",
+          cause: { store: store.value }
         });
       }
-      const storeRef = yield* storeOptions.loadStoreRef(store);
+      if (!network && Option.isNone(store)) {
+        return yield* CliInputError.make({
+          message: "Provide --store for local search or --network for Bluesky search.",
+          cause: { store: null }
+        });
+      }
+      const hasNetworkOnlyOption =
+        Option.isSome(since) ||
+        Option.isSome(until) ||
+        Option.isSome(mentions) ||
+        Option.isSome(author) ||
+        Option.isSome(lang) ||
+        Option.isSome(domain) ||
+        Option.isSome(url) ||
+        Option.isSome(tag);
+      if (!network && hasNetworkOnlyOption) {
+        return yield* CliInputError.make({
+          message: "Network-only filters require --network.",
+          cause: {
+            since: Option.isSome(since),
+            until: Option.isSome(until),
+            mentions: Option.isSome(mentions),
+            author: Option.isSome(author),
+            lang: Option.isSome(lang),
+            domain: Option.isSome(domain),
+            url: Option.isSome(url),
+            tag: Option.isSome(tag)
+          }
+        });
+      }
+
+      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const storeValue = Option.getOrElse(store, () => undefined);
+
+      if (network) {
+        const client = yield* BskyClient;
+        const parser = yield* PostParser;
+        const sortRaw = Option.getOrElse(sort, () => undefined);
+        const sortValue = Option.match(sort, {
+          onNone: () => undefined,
+          onSome: (value) =>
+            value === "top" || value === "latest"
+              ? value
+              : undefined
+        });
+        if (sortRaw && !sortValue) {
+          return yield* CliInputError.make({
+            message: "--sort must be one of: top, latest (for --network).",
+            cause: { sort: sortRaw }
+          });
+        }
+        const cursorValue = Option.map(cursor, (value) => value);
+        const tags = Option.match(tag, {
+          onNone: () => [] as ReadonlyArray<string>,
+          onSome: (value) =>
+            value
+              .split(",")
+              .map((item) => item.trim())
+              .filter((item) => item.length > 0)
+        });
+        const authorValue = Option.match(author, {
+          onNone: () => Effect.void.pipe(Effect.as(undefined)),
+          onSome: (value) =>
+            Effect.gen(function* () {
+              const decoded = yield* decodeActor(value);
+              return String(decoded);
+            })
+        });
+        const mentionsValue = Option.match(mentions, {
+          onNone: () => Effect.void.pipe(Effect.as(undefined)),
+          onSome: (value) =>
+            Effect.gen(function* () {
+              const decoded = yield* decodeActor(value);
+              return String(decoded);
+            })
+        });
+        const parsedAuthor = yield* authorValue;
+        const parsedMentions = yield* mentionsValue;
+        const result = yield* client.searchPosts(query, {
+          ...(Option.isSome(limit) ? { limit: limit.value } : {}),
+          ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
+          ...(sortValue ? { sort: sortValue } : {}),
+          ...(Option.isSome(since) ? { since: since.value } : {}),
+          ...(Option.isSome(until) ? { until: until.value } : {}),
+          ...(parsedMentions ? { mentions: parsedMentions } : {}),
+          ...(parsedAuthor ? { author: parsedAuthor } : {}),
+          ...(Option.isSome(lang) ? { lang: lang.value } : {}),
+          ...(Option.isSome(domain) ? { domain: domain.value } : {}),
+          ...(Option.isSome(url) ? { url: url.value } : {}),
+          ...(tags.length > 0 ? { tags } : {})
+        });
+        const posts = yield* Effect.forEach(
+          result.posts,
+          (raw) =>
+            parser.parsePost(raw).pipe(
+              Effect.mapError((error) =>
+                CliInputError.make({
+                  message: `Failed to parse network post: ${formatSchemaError(error)}`,
+                  cause: error
+                })
+              )
+            ),
+          { concurrency: "unbounded" }
+        );
+        if (outputFormat === "ndjson") {
+          yield* writeJsonStream(Stream.fromIterable(posts));
+          return;
+        }
+        if (outputFormat === "table") {
+          yield* writeText(renderPostsTable(posts));
+          return;
+        }
+        yield* writeJson({
+          query,
+          cursor: result.cursor,
+          hitsTotal: result.hitsTotal,
+          count: posts.length,
+          posts
+        });
+        return;
+      }
+
+      if (!storeValue) {
+        return yield* CliInputError.make({
+          message: "Missing --store for local search.",
+          cause: { store: null }
+        });
+      }
+      const storeRef = yield* storeOptions.loadStoreRef(storeValue);
       const index = yield* StoreIndex;
+      const parsedCursor = Option.match(cursor, {
+        onNone: () => Effect.succeed(Option.none()),
+        onSome: (value) => {
+          const raw = value;
+          const parsed = Number(raw);
+          if (!Number.isInteger(parsed) || parsed < 0) {
+            return Effect.fail(
+              CliInputError.make({
+                message: "--cursor must be a non-negative integer for local search.",
+                cause: { cursor: raw }
+              })
+            );
+          }
+          return Effect.succeed(Option.some(parsed));
+        }
+      });
+      const cursorValue = yield* parsedCursor;
+      const localSortRaw = Option.getOrElse(sort, () => undefined);
+      const localSort = Option.match(sort, {
+        onNone: () => "relevance" as const,
+        onSome: (value) => {
+          if (value === "relevance" || value === "newest" || value === "oldest") {
+            return value;
+          }
+          return undefined;
+        }
+      }) as LocalSort | undefined;
+      if (localSortRaw && !localSort) {
+        return yield* CliInputError.make({
+          message: "--sort must be one of: relevance, newest, oldest (for local search).",
+          cause: { sort: localSortRaw }
+        });
+      }
       const input = {
         query,
         ...(Option.isSome(limit) ? { limit: limit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {}),
-        ...(Option.isSome(sort) ? { sort: sort.value } : {})
+        ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
+        ...(localSort ? { sort: localSort } : {})
       };
       const result = yield* index.searchPosts(storeRef, input);
 
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
       if (outputFormat === "ndjson") {
         const stream = Stream.fromIterable(result.posts);
         yield* writeJsonStream(stream);
@@ -227,7 +447,8 @@ const postsCommand = Command.make(
     withExamples("Search posts within a local store using FTS", [
       "skygent search posts \"deep learning\" --store my-store --limit 25",
       "skygent search posts \"bluesky\" --store my-store --format table",
-      "skygent search posts \"effect\" --store my-store --sort newest"
+      "skygent search posts \"effect\" --store my-store --sort newest",
+      "skygent search posts \"ai\" --network --sort latest"
     ])
   )
 );

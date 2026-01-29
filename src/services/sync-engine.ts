@@ -54,6 +54,8 @@ const sourceLabel = (source: DataSource) => {
       return "timeline";
     case "Feed":
       return "feed";
+    case "List":
+      return "list";
     case "Notifications":
       return "notifications";
     case "Author":
@@ -71,6 +73,8 @@ const commandForSource = (source: DataSource) => {
       return "sync timeline";
     case "Feed":
       return `sync feed ${source.uri}`;
+    case "List":
+      return `sync list ${source.uri}`;
     case "Notifications":
       return "sync notifications";
     case "Author":
@@ -220,6 +224,14 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                   );
                 case "Feed":
                   return client.getFeed(
+                    source.uri,
+                    Option.match(cursorOption, {
+                      onNone: () => undefined,
+                      onSome: (value) => ({ cursor: value })
+                    })
+                  );
+                case "List":
+                  return client.getListFeed(
                     source.uri,
                     Option.match(cursorOption, {
                       onNone: () => undefined,

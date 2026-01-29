@@ -67,6 +67,11 @@ export const feedUriArg = Args.text({ name: "uri" }).pipe(
   Args.withDescription("Bluesky feed URI (at://...)")
 );
 
+/** Positional arg for list URI */
+export const listUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withDescription("Bluesky list URI (at://...)")
+);
+
 /** Positional arg for author handle or DID */
 export const actorArg = Args.text({ name: "actor" }).pipe(
   Args.withDescription("Bluesky handle or DID")
