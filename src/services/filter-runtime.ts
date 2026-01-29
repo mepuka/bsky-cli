@@ -1,3 +1,75 @@
+/**
+ * Filter runtime service for compiling and evaluating filter expressions against posts.
+ *
+ * This service provides the core filtering logic for Skygent. It compiles filter
+ * expressions into executable predicates and supports both synchronous and effectful
+ * filters. Effectful filters (like `HasValidLinks` and `Trending`) can perform
+ * external operations such as HTTP requests.
+ *
+ * ## Features
+ *
+ * - **Filter compilation**: Converts FilterExpr AST into executable predicates
+ * - **Effectful filters**: Supports filters requiring async operations with retry policies
+ * - **Batch evaluation**: Efficiently evaluates filters against multiple posts
+ * - **Explanation mode**: Provides detailed reasoning for filter decisions
+ * - **Error policies**: Configurable handling of filter evaluation errors (Include/Exclude/Retry)
+ *
+ * ## Filter Types
+ *
+ * ### Simple Filters
+ * - `All`, `None`: Identity filters
+ * - `Author`, `AuthorIn`: Match by author handle
+ * - `Hashtag`, `HashtagIn`: Match by hashtag
+ * - `Contains`: Text substring matching
+ * - `IsReply`, `IsQuote`, `IsRepost`, `IsOriginal`: Post type matching
+ * - `HasImages`, `HasVideo`, `HasLinks`, `HasMedia`: Media detection
+ * - `Engagement`: Threshold-based engagement matching
+ * - `Language`: Language code matching
+ * - `Regex`: Regular expression pattern matching
+ * - `DateRange`: Creation date range matching
+ *
+ * ### Effectful Filters
+ * - `HasValidLinks`: Validates external links via HTTP requests
+ * - `Trending`: Checks hashtag trending status via Bluesky API
+ *
+ * ### Composite Filters
+ * - `And`, `Or`: Logical composition
+ * - `Not`: Logical negation
+ *
+ * ## Error Handling
+ *
+ * Effectful filters use `FilterErrorPolicy` to determine behavior on failure:
+ * - `Include`: Treat errors as matching (include the post)
+ * - `Exclude`: Treat errors as non-matching (exclude the post)
+ * - `Retry`: Retry with exponential backoff
+ *
+ * ## Dependencies
+ *
+ * - `LinkValidator`: For validating external links
+ * - `TrendingTopics`: For checking trending hashtag status
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect";
+ * import { FilterRuntime } from "./services/filter-runtime.js";
+ * import { and, hashtag, author } from "./domain/filter.js";
+ *
+ * const program = Effect.gen(function* () {
+ *   const runtime = yield* FilterRuntime;
+ *
+ *   // Compile a filter expression
+ *   const predicate = yield* runtime.evaluate(
+ *     and(hashtag("tech"), author("@alice.bsky.social"))
+ *   );
+ *
+ *   // Evaluate against a post
+ *   const matches = yield* predicate(post);
+ * });
+ * ```
+ *
+ * @module services/filter-runtime
+ */
+
 import { Chunk, Context, Duration, Effect, Layer, Schedule } from "effect";
 import { FilterCompileError, FilterEvalError } from "../domain/errors.js";
 import type { FilterExpr } from "../domain/filter.js";
@@ -613,12 +685,51 @@ const buildPredicate = (
     }
   });
 
+/**
+ * Service for compiling and evaluating filter expressions.
+ *
+ * Provides methods to compile FilterExpr AST into executable predicates,
+ * with support for batch evaluation and explanation mode.
+ *
+ * ## Methods
+ *
+ * - `evaluate`: Compile a filter into a predicate function
+ * - `evaluateWithMetadata`: Like evaluate but returns detailed match results
+ * - `evaluateBatch`: Efficiently evaluate a filter against multiple posts
+ * - `explain`: Get detailed explanations for why posts match or don't match
+ *
+ * @example
+ * ```ts
+ * const runtime = yield* FilterRuntime;
+ *
+ * // Simple evaluation
+ * const predicate = yield* runtime.evaluate(hashtag("tech"));
+ * const matches = yield* predicate(post);
+ *
+ * // Batch evaluation for performance
+ * const batchPredicate = yield* runtime.evaluateBatch(filter);
+ * const results = yield* batchPredicate(Chunk.fromIterable(posts));
+ * ```
+ */
 export class FilterRuntime extends Context.Tag("@skygent/FilterRuntime")<
   FilterRuntime,
   {
+    /**
+     * Compiles a filter expression into an executable predicate.
+     *
+     * @param expr - The filter expression to compile
+     * @returns Effect that yields a predicate function
+     */
     readonly evaluate: (
       expr: FilterExpr
     ) => Effect.Effect<Predicate, FilterCompileError>;
+
+    /**
+     * Like evaluate, but returns detailed match results with metadata.
+     *
+     * @param expr - The filter expression to compile
+     * @returns Effect that yields a predicate returning { ok: boolean }
+     */
     readonly evaluateWithMetadata: (
       expr: FilterExpr
     ) => Effect.Effect<
@@ -628,12 +739,32 @@ export class FilterRuntime extends Context.Tag("@skygent/FilterRuntime")<
       >,
       FilterCompileError
     >;
+
+    /**
+     * Compiles a filter for efficient batch evaluation.
+     *
+     * Batch evaluation processes multiple posts concurrently with
+     * automatic request batching for effectful filters.
+     *
+     * @param expr - The filter expression to compile
+     * @returns Effect that yields a batch predicate
+     */
     readonly evaluateBatch: (
       expr: FilterExpr
     ) => Effect.Effect<
       (posts: Chunk.Chunk<Post>) => Effect.Effect<Chunk.Chunk<boolean>, FilterEvalError>,
       FilterCompileError
     >;
+
+    /**
+     * Compiles a filter into an explainer function.
+     *
+     * Explainer functions provide detailed reasoning for filter decisions,
+     * useful for debugging and user feedback.
+     *
+     * @param expr - The filter expression to compile
+     * @returns Effect that yields an explainer function
+     */
     readonly explain: (
       expr: FilterExpr
     ) => Effect.Effect<Explainer, FilterCompileError>;

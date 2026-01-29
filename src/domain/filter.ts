@@ -9,100 +9,343 @@ const required = <A, I, R>(schema: Schema.Schema<A, I, R>, message: string) =>
     missingMessage: () => message
   });
 
+/**
+ * Filter that matches all posts.
+ *
+ * Used as an identity element for filter composition.
+ */
 export interface FilterAll {
   readonly _tag: "All";
 }
+
+/**
+ * Filter that matches no posts.
+ *
+ * Used to exclude everything in filter composition.
+ */
 export interface FilterNone {
   readonly _tag: "None";
 }
+
+/**
+ * Logical AND composition of two filters.
+ *
+ * A post matches if both left and right filters match.
+ *
+ * @example
+ * ```ts
+ * and(author("@alice.bsky.social"), hashtag("tech"))
+ * // Matches posts by @alice.bsky.social containing #tech
+ * ```
+ */
 export interface FilterAnd {
   readonly _tag: "And";
+  /** The left filter expression */
   readonly left: FilterExpr;
+  /** The right filter expression */
   readonly right: FilterExpr;
 }
+
+/**
+ * Logical OR composition of two filters.
+ *
+ * A post matches if either left or right filter matches.
+ *
+ * @example
+ * ```ts
+ * or(hashtag("javascript"), hashtag("typescript"))
+ * // Matches posts with either #javascript or #typescript
+ * ```
+ */
 export interface FilterOr {
   readonly _tag: "Or";
+  /** The left filter expression */
   readonly left: FilterExpr;
+  /** The right filter expression */
   readonly right: FilterExpr;
 }
+
+/**
+ * Logical NOT of a filter.
+ *
+ * A post matches if the wrapped filter does NOT match.
+ *
+ * @example
+ * ```ts
+ * not(isReply())
+ * // Matches posts that are NOT replies
+ * ```
+ */
 export interface FilterNot {
   readonly _tag: "Not";
+  /** The filter expression to negate */
   readonly expr: FilterExpr;
 }
+
+/**
+ * Filter posts by a specific author handle.
+ *
+ * @example
+ * ```ts
+ * author("@alice.bsky.social")
+ * // Matches all posts by @alice.bsky.social
+ * ```
+ */
 export interface FilterAuthor {
   readonly _tag: "Author";
+  /** The author's handle (with or without @ prefix) */
   readonly handle: Handle;
 }
+
+/**
+ * Filter posts containing a specific hashtag.
+ *
+ * @example
+ * ```ts
+ * hashtag("tech")
+ * // Matches posts containing #tech
+ * ```
+ */
 export interface FilterHashtag {
   readonly _tag: "Hashtag";
+  /** The hashtag to match (without # prefix) */
   readonly tag: Hashtag;
 }
+
+/**
+ * Filter posts by multiple author handles (matches any).
+ *
+ * @example
+ * ```ts
+ * authorIn(["@alice.bsky.social", "@bob.bsky.social"])
+ * // Matches posts by either @alice.bsky.social or @bob.bsky.social
+ * ```
+ */
 export interface FilterAuthorIn {
   readonly _tag: "AuthorIn";
+  /** Array of author handles to match */
   readonly handles: ReadonlyArray<Handle>;
 }
+
+/**
+ * Filter posts containing any of multiple hashtags.
+ *
+ * @example
+ * ```ts
+ * hashtagIn(["javascript", "typescript", "nodejs"])
+ * // Matches posts with any of the specified hashtags
+ * ```
+ */
 export interface FilterHashtagIn {
   readonly _tag: "HashtagIn";
+  /** Array of hashtags to match (without # prefix) */
   readonly tags: ReadonlyArray<Hashtag>;
 }
+
+/**
+ * Filter posts containing specific text.
+ *
+ * Performs substring matching on the post text.
+ *
+ * @example
+ * ```ts
+ * contains("skygent", { caseSensitive: false })
+ * // Matches posts containing "skygent", "SkyGent", etc.
+ * ```
+ */
 export interface FilterContains {
   readonly _tag: "Contains";
+  /** The text to search for */
   readonly text: string;
+  /** Whether matching should be case-sensitive (default: false) */
   readonly caseSensitive?: boolean;
 }
+
+/**
+ * Filter posts that are replies to other posts.
+ */
 export interface FilterIsReply {
   readonly _tag: "IsReply";
 }
+
+/**
+ * Filter posts that quote other posts.
+ */
 export interface FilterIsQuote {
   readonly _tag: "IsQuote";
 }
+
+/**
+ * Filter posts that are reposts.
+ */
 export interface FilterIsRepost {
   readonly _tag: "IsRepost";
 }
+
+/**
+ * Filter posts that are original content (not reposts).
+ */
 export interface FilterIsOriginal {
   readonly _tag: "IsOriginal";
 }
+
+/**
+ * Filter posts by engagement metrics (likes, reposts, replies).
+ *
+ * Requires at least one threshold to be specified.
+ *
+ * @example
+ * ```ts
+ * engagement({ minLikes: 10, minReposts: 5 })
+ * // Matches posts with at least 10 likes AND 5 reposts
+ * ```
+ */
 export interface FilterEngagement {
   readonly _tag: "Engagement";
+  /** Minimum number of likes required */
   readonly minLikes?: number;
+  /** Minimum number of reposts required */
   readonly minReposts?: number;
+  /** Minimum number of replies required */
   readonly minReplies?: number;
 }
+
+/**
+ * Filter posts containing images.
+ */
 export interface FilterHasImages {
   readonly _tag: "HasImages";
 }
+
+/**
+ * Filter posts containing video.
+ */
 export interface FilterHasVideo {
   readonly _tag: "HasVideo";
 }
+
+/**
+ * Filter posts containing external links.
+ */
 export interface FilterHasLinks {
   readonly _tag: "HasLinks";
 }
+
+/**
+ * Filter posts containing any media (images, video, or external links).
+ */
 export interface FilterHasMedia {
   readonly _tag: "HasMedia";
 }
+
+/**
+ * Filter posts by language codes.
+ *
+ * Matches posts that have any of the specified languages in their `langs` field.
+ *
+ * @example
+ * ```ts
+ * language(["en", "es"])
+ * // Matches posts marked as English or Spanish
+ * ```
+ */
 export interface FilterLanguage {
   readonly _tag: "Language";
+  /** Array of ISO 639-1 language codes */
   readonly langs: ReadonlyArray<string>;
 }
+
+/**
+ * Filter posts using regular expression patterns.
+ *
+ * @example
+ * ```ts
+ * regex(["\\bnodejs\\b", "\\bnode\\.js\\b"], "i")
+ * // Matches posts containing "nodejs" or "node.js" (case-insensitive)
+ * ```
+ */
 export interface FilterRegex {
   readonly _tag: "Regex";
+  /** One or more regex patterns to match */
   readonly patterns: ReadonlyArray<string>;
+  /** Regex flags (e.g., "i" for case-insensitive, "g" for global) */
   readonly flags?: string;
 }
+
+/**
+ * Filter posts by creation date range.
+ *
+ * @example
+ * ```ts
+ * dateRange("2024-01-01", "2024-12-31")
+ * // Matches posts created in 2024
+ * ```
+ */
 export interface FilterDateRange {
   readonly _tag: "DateRange";
+  /** Start of the date range (inclusive) */
   readonly start: Timestamp;
+  /** End of the date range (inclusive) */
   readonly end: Timestamp;
 }
+
+/**
+ * Filter posts that have valid external links.
+ *
+ * This is an effectful filter that may perform HTTP requests to validate links.
+ *
+ * @example
+ * ```ts
+ * hasValidLinks({ onError: { _tag: "Exclude" } })
+ * // Matches posts where all external links are valid (404s are excluded)
+ * ```
+ */
 export interface FilterHasValidLinks {
   readonly _tag: "HasValidLinks";
+  /** Policy for handling validation errors */
   readonly onError: FilterErrorPolicy;
 }
+
+/**
+ * Filter for posts about trending topics.
+ *
+ * This is an effectful filter that checks hashtag trending status.
+ *
+ * @example
+ * ```ts
+ * trending("tech", { onError: { _tag: "Include" } })
+ * // Matches posts with #tech when it's trending
+ * ```
+ */
 export interface FilterTrending {
   readonly _tag: "Trending";
+  /** The hashtag to check for trending status */
   readonly tag: Hashtag;
+  /** Policy for handling errors (e.g., API failures) */
   readonly onError: FilterErrorPolicy;
 }
+
+/**
+ * The complete set of filter expressions supported by Skygent.
+ *
+ * Filter expressions can be combined using `and`, `or`, and `not` to create
+ * complex filtering logic. They are used to determine which posts should be
+ * stored, output, or displayed.
+ *
+ * @example
+ * ```ts
+ * and(
+ *   hashtag("tech"),
+ *   or(
+ *     author("@alice.bsky.social"),
+ *     engagement({ minLikes: 100 })
+ *   ),
+ *   not(isReply())
+ * )
+ * // Matches tech posts by @alice.bsky.social OR tech posts with 100+ likes,
+ * // excluding replies
+ * ```
+ */
 export type FilterExpr =
   | FilterAll
   | FilterNone
@@ -251,6 +494,7 @@ type FilterExprEncoded =
   | FilterHasValidLinksEncoded
   | FilterTrendingEncoded;
 
+/** JSON schema for serializing/deserializing filter expressions. */
 export const FilterExprSchema: Schema.Schema<FilterExpr, FilterExprEncoded, never> = Schema.suspend(
   () => FilterExprInternal
 );
@@ -424,29 +668,68 @@ const FilterExprInternal: Schema.Schema<FilterExpr, FilterExprEncoded, never> = 
   FilterTrendingSchema
 ).annotations({ identifier: "FilterExpr" });
 
+/** Creates a filter that matches all posts. */
 export const all = (): FilterAll => ({ _tag: "All" });
+
+/** Creates a filter that matches no posts. */
 export const none = (): FilterNone => ({ _tag: "None" });
+
+/**
+ * Creates an AND filter combining two expressions.
+ * @param left - First filter expression
+ * @param right - Second filter expression
+ * @returns A filter that matches when both expressions match
+ */
 export const and = (left: FilterExpr, right: FilterExpr): FilterAnd => ({
   _tag: "And",
   left,
   right
 });
+
+/**
+ * Creates an OR filter combining two expressions.
+ * @param left - First filter expression
+ * @param right - Second filter expression
+ * @returns A filter that matches when either expression matches
+ */
 export const or = (left: FilterExpr, right: FilterExpr): FilterOr => ({
   _tag: "Or",
   left,
   right
 });
+
+/**
+ * Creates a NOT filter that negates an expression.
+ * @param expr - The filter expression to negate
+ * @returns A filter that matches when the expression does NOT match
+ */
 export const not = (expr: FilterExpr): FilterNot => ({ _tag: "Not", expr });
 
+/**
+ * Semigroup for combining filters using logical AND.
+ *
+ * Enables combining multiple filters: `filters.reduce(FilterExprSemigroup.combine)`
+ */
 export const FilterExprSemigroup: Semigroup.Semigroup<FilterExpr> = Semigroup.make(
   (left, right) => and(left, right)
 );
 
+/**
+ * Monoid for filters with `all()` as the identity element.
+ *
+ * Provides `combine` (AND) and `empty` (match all) operations.
+ */
 export const FilterExprMonoid: Monoid.Monoid<FilterExpr> = Monoid.fromSemigroup(
   FilterExprSemigroup,
   all()
 );
 
+/**
+ * Encodes a filter expression to its JSON-serializable form.
+ *
+ * @param expr - The filter expression to encode
+ * @returns The encoded filter expression
+ */
 export const encodeFilterExpr = (expr: FilterExpr): FilterExprEncoded =>
   Schema.encodeSync(FilterExprSchema)(expr);
 
@@ -460,9 +743,27 @@ const canonicalJson = (value: unknown): string => {
   return `{${entries.join(",")}}`;
 };
 
+/**
+ * Generates a canonical signature for a filter expression.
+ *
+ * This produces a consistent string representation that can be used for
+ * caching, comparison, or generating stable identifiers.
+ *
+ * @param expr - The filter expression
+ * @returns A canonical JSON string representation
+ */
 export const filterExprSignature = (expr: FilterExpr): string =>
   canonicalJson(encodeFilterExpr(expr));
 
+/**
+ * Checks if a filter expression requires effects to evaluate.
+ *
+ * Effectful filters (like `HasValidLinks` and `Trending`) may perform
+ * async operations like HTTP requests and need special handling.
+ *
+ * @param expr - The filter expression to check
+ * @returns True if the filter requires effects to evaluate
+ */
 export const isEffectfulFilter = (expr: FilterExpr): boolean => {
   switch (expr._tag) {
     case "HasValidLinks":

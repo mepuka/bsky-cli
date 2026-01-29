@@ -1,3 +1,64 @@
+/**
+ * Sync engine service for orchestrating data synchronization from Bluesky to stores.
+ *
+ * This service provides the core synchronization logic for fetching posts from various
+ * Bluesky sources (timeline, feeds, lists, etc.), filtering them, and persisting them
+ * to a store. It supports both one-time sync operations and continuous watch mode.
+ *
+ * ## Features
+ *
+ * - **Multiple data sources**: Timeline, custom feeds, lists, notifications, author feeds, threads, Jetstream
+ * - **Filter-based storage**: Only matching posts are stored based on filter expressions
+ * - **Deduplication**: Configurable upsert policies (dedupe vs refresh)
+ * - **Incremental sync**: Resumable sync with checkpoint support
+ * - **Watch mode**: Continuous streaming sync with progress tracking
+ * - **Error handling**: Comprehensive error tracking and reporting
+ *
+ * ## Architecture
+ *
+ * The sync process follows these stages:
+ * 1. **Fetch**: Retrieve posts from the configured data source
+ * 2. **Parse**: Convert raw Bluesky posts to normalized Post objects
+ * 3. **Filter**: Evaluate posts against the filter expression
+ * 4. **Store**: Persist matching posts to the store's event log
+ * 5. **Checkpoint**: Save progress for resumable sync
+ *
+ * ## Dependencies
+ *
+ * - `BskyClient`: For API access
+ * - `PostParser`: For post normalization
+ * - `FilterRuntime`: For filter evaluation
+ * - `StoreCommitter`: For event persistence
+ * - `SyncCheckpointStore`: For progress tracking
+ * - `SyncReporter`: For progress reporting
+ * - `SyncSettings`: For configuration
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect";
+ * import { SyncEngine } from "./services/sync-engine.js";
+ * import { DataSource } from "./domain/sync.js";
+ * import { StoreRef } from "./domain/store.js";
+ * import { hashtag } from "./domain/filter.js";
+ *
+ * const program = Effect.gen(function* () {
+ *   const engine = yield* SyncEngine;
+ *
+ *   // Sync a feed to a store
+ *   const result = yield* engine.sync(
+ *     DataSource.Feed({ uri: "at://did:plc:abc/app.bsky.feed.generator/tech" }),
+ *     StoreRef.make({ name: "tech-posts", root: "/path/to/.skygent" }),
+ *     hashtag("javascript"),
+ *     { policy: "dedupe" }
+ *   );
+ *
+ *   console.log(`Synced ${result.stored} posts`);
+ * });
+ * ```
+ *
+ * @module services/sync-engine
+ */
+
 import { Clock, Context, Duration, Effect, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
 import { messageFromCause } from "./shared.js";
 import { FilterRuntime } from "./filter-runtime.js";

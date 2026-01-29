@@ -1,3 +1,50 @@
+/**
+ * Bluesky API client service providing authenticated access to AT Protocol APIs.
+ *
+ * This service wraps the @atproto/api client with Effect-based error handling,
+ * automatic retry logic, and rate limiting. It provides a streaming interface
+ * for paginated endpoints and supports multiple authentication sources.
+ *
+ * ## Authentication
+ *
+ * Credentials are resolved from (in order of priority):
+ * 1. Environment variables (BSKY_HANDLE, BSKY_PASSWORD)
+ * 2. Credential store (managed via `skygent credentials` commands)
+ * 3. Interactive prompts (if TTY available)
+ *
+ * ## Features
+ *
+ * - Automatic session refresh and retry on rate limits
+ * - Configurable retry policies via AppConfig
+ * - Streaming interface for paginated feeds
+ * - Type-safe API wrappers
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect";
+ * import { BskyClient } from "./services/bsky-client.js";
+ *
+ * const program = Effect.gen(function* () {
+ *   const client = yield* BskyClient;
+ *
+ *   // Stream posts from the authenticated user's timeline
+ *   const posts = yield* client.getTimeline({ limit: 100 }).pipe(
+ *     Effect.runCollect
+ *   );
+ *
+ *   // Get a specific post
+ *   const post = yield* client.getPost("at://did:plc:abc/app.bsky.feed.post/123");
+ *
+ *   // Search for posts
+ *   const searchResults = yield* client.searchPosts("skygent").pipe(
+ *     Effect.runCollect
+ *   );
+ * });
+ * ```
+ *
+ * @module services/bsky-client
+ */
+
 import { AtpAgent, AppBskyFeedDefs } from "@atproto/api";
 import { messageFromCause } from "./shared.js";
 import type {
@@ -91,77 +138,151 @@ import {
 } from "../domain/bsky.js";
 import { Did, PostCid, PostUri, Timestamp } from "../domain/primitives.js";
 
+/**
+ * Options for retrieving the user's timeline.
+ */
 export interface TimelineOptions {
+  /** Maximum number of posts to retrieve per page (default: 100) */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
 }
 
+/**
+ * Options for retrieving feed or list posts.
+ */
 export interface FeedOptions {
+  /** Maximum number of posts to retrieve per page (default: 100) */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
 }
 
+/**
+ * Options for graph-related queries (followers, follows, etc.).
+ */
 export interface GraphOptions {
+  /** Maximum number of results per page */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
 }
 
+/**
+ * Options for retrieving Bluesky lists.
+ */
 export interface GraphListsOptions {
+  /** Maximum number of lists per page */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
+  /** Filter by list purpose ("modlist" or "curatelist") */
   readonly purposes?: ReadonlyArray<"modlist" | "curatelist">;
 }
 
+/**
+ * Options for retrieving an author's feed.
+ */
 export interface AuthorFeedOptions {
+  /** Maximum number of posts per page */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
+  /** Filter posts by type (posts, posts_and_author_threads, posts_no_replies, posts_with_media, posts_with_video) */
   readonly filter?: AuthorFeedFilter;
+  /** Whether to include pinned posts */
   readonly includePins?: boolean;
 }
 
+/**
+ * Options for retrieving a post thread.
+ */
 export interface ThreadOptions {
+  /** How many levels of replies to fetch (default: 6) */
   readonly depth?: number;
+  /** How many levels of parent posts to fetch (default: 6) */
   readonly parentHeight?: number;
 }
 
+/**
+ * Options for retrieving notifications.
+ */
 export interface NotificationsOptions {
+  /** Maximum number of notifications per page */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
 }
 
+/**
+ * Options for searching actors (users).
+ */
 export interface ActorSearchOptions {
+  /** Maximum number of results per page */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
+  /** Use typeahead search for faster results */
   readonly typeahead?: boolean;
 }
 
+/**
+ * Options for searching feeds.
+ */
 export interface FeedSearchOptions {
+  /** Maximum number of results per page */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
 }
 
+/**
+ * Options for retrieving an actor's feeds.
+ */
 export interface ActorFeedsOptions {
+  /** Maximum number of feeds per page */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
 }
 
+/**
+ * Options for retrieving engagement data (likes, reposts, quotes).
+ */
 export interface EngagementOptions {
+  /** The post CID to query engagement for */
   readonly cid?: string;
+  /** Maximum number of results per page */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
 }
 
+/**
+ * Options for searching posts across the Bluesky network.
+ */
 export interface NetworkSearchOptions {
+  /** Maximum number of results per page */
   readonly limit?: number;
+  /** Pagination cursor for fetching the next page */
   readonly cursor?: string;
+  /** Sort order: "top" for relevance, "latest" for recency */
   readonly sort?: "top" | "latest";
+  /** Filter posts after this timestamp (ISO 8601) */
   readonly since?: string;
+  /** Filter posts before this timestamp (ISO 8601) */
   readonly until?: string;
+  /** Filter posts mentioning this handle */
   readonly mentions?: string;
+  /** Filter posts by this author handle */
   readonly author?: string;
+  /** Filter posts by language code */
   readonly lang?: string;
+  /** Filter posts containing links to this domain */
   readonly domain?: string;
+  /** Filter posts containing this URL */
   readonly url?: string;
+  /** Filter posts containing all of these hashtags */
   readonly tags?: ReadonlyArray<string>;
 }
 
@@ -915,9 +1036,73 @@ const toRawPostsFromThread = (root: ThreadViewPost) =>
     Effect.map(Chunk.toReadonlyArray)
   );
 
+/**
+ * Service for interacting with the Bluesky (AT Protocol) API.
+ *
+ * Provides authenticated access to all major Bluesky API endpoints including:
+ * - Timeline and feed retrieval
+ * - Post search and discovery
+ * - Social graph operations (followers, follows, lists)
+ * - Engagement data (likes, reposts, quotes)
+ * - Notifications
+ * - Thread viewing
+ *
+ * ## Authentication
+ *
+ * The client automatically handles authentication using credentials resolved
+ * from environment variables, credential store, or interactive prompts.
+ *
+ * ## Error Handling
+ *
+ * All methods return Effect values that can fail with `BskyError`. Common
+ * error scenarios include:
+ * - Network failures (automatically retried)
+ * - Rate limiting (automatically retried with backoff)
+ * - Authentication errors
+ * - Invalid post/feed URIs
+ *
+ * ## Streaming
+ *
+ * Paginated endpoints (timeline, feeds, search) return `Stream.Stream` values
+ * that automatically handle pagination. Use `Effect.runCollect` to gather
+ * all results or process them incrementally.
+ *
+ * @example
+ * ```ts
+ * import { Effect, Stream } from "effect";
+ * import { BskyClient } from "./services/bsky-client.js";
+ *
+ * const program = Effect.gen(function* () {
+ *   const client = yield* BskyClient;
+ *
+ *   // Get timeline as a stream
+ *   const timelineStream = client.getTimeline({ limit: 100 });
+ *
+ *   // Collect all posts
+ *   const allPosts = yield* timelineStream.pipe(Stream.runCollect);
+ *
+ *   // Get a specific post
+ *   const post = yield* client.getPost("at://did:plc:abc/app.bsky.feed.post/123");
+ *
+ *   // Search for posts
+ *   const results = yield* client.searchPosts("typescript", {
+ *     sort: "latest",
+ *     limit: 50
+ *   }).pipe(Stream.runCollect);
+ * });
+ * ```
+ */
 export class BskyClient extends Context.Tag("@skygent/BskyClient")<
   BskyClient,
   {
+    /**
+     * Get the authenticated user's home timeline.
+     *
+     * Returns a stream of posts from followed accounts.
+     *
+     * @param opts - Pagination options
+     * @returns Stream of posts from the timeline
+     */
     readonly getTimeline: (opts?: TimelineOptions) => Stream.Stream<RawPost, BskyError>;
     readonly getNotifications: (
       opts?: NotificationsOptions
