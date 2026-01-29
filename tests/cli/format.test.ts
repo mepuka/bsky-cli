@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
-import { renderPostsMarkdown, renderPostsTable } from "../../src/cli/format.js";
+import { renderPostsMarkdown, renderPostsTable } from "../../src/domain/format.js";
 import { Post } from "../../src/domain/post.js";
 
 const post1 = Schema.decodeUnknownSync(Post)({

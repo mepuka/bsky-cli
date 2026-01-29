@@ -7,7 +7,7 @@ import type { Post } from "../domain/post.js";
 import { FilterRuntime } from "../services/filter-runtime.js";
 import { AppConfigService } from "../services/app-config.js";
 import { StoreIndex } from "../services/store-index.js";
-import { renderPostsMarkdown, renderPostsTable } from "./format.js";
+import { renderPostsMarkdown, renderPostsTable } from "../domain/format.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { parseRange } from "./range.js";

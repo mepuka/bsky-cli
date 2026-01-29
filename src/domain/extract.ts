@@ -1,7 +1,7 @@
 const hashtagRegex =
   /#[\p{L}\p{M}\p{Pc}\p{Po}\p{Pd}\p{S}\p{Extended_Pictographic}][\p{L}\p{M}\p{N}\p{Pc}\p{Po}\p{Pd}\p{S}\p{Extended_Pictographic}]*/gu;
 const mentionRegex = /@([a-z0-9][a-z0-9.-]{1,63})/gi;
-const urlRegex = /https?:\/\/[^\s)]+/g;
+const urlRegex = /https?:\/\/[^\s)]+[^\s).,;:!?'"]/g;
 
 export const extractHashtags = (text: string): ReadonlyArray<string> => {
   const matches = text.match(hashtagRegex) ?? [];

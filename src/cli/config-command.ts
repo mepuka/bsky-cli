@@ -101,6 +101,8 @@ const configCheckCommand = Command.make("check", {}, () =>
     const ok = results.every((result) => result.status !== "error");
     yield* writeJson({ ok, checks: results });
   })
+).pipe(
+  Command.withDescription("Run health checks (store root, credentials, Bluesky auth)")
 );
 
 export const configCommand = Command.make("config", {}).pipe(

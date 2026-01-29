@@ -450,8 +450,18 @@ export const FilterExprMonoid: Monoid.Monoid<FilterExpr> = Monoid.fromSemigroup(
 export const encodeFilterExpr = (expr: FilterExpr): FilterExprEncoded =>
   Schema.encodeSync(FilterExprSchema)(expr);
 
+const canonicalJson = (value: unknown): string => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const sorted = Object.keys(value as Record<string, unknown>).sort();
+  const entries = sorted.map(
+    (k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`
+  );
+  return `{${entries.join(",")}}`;
+};
+
 export const filterExprSignature = (expr: FilterExpr): string =>
-  JSON.stringify(encodeFilterExpr(expr));
+  canonicalJson(encodeFilterExpr(expr));
 
 export const isEffectfulFilter = (expr: FilterExpr): boolean => {
   switch (expr._tag) {
