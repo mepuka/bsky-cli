@@ -1,3 +1,59 @@
+/**
+ * StoreIndex Service - SQLite-based Indexing for Posts
+ *
+ * This module provides the StoreIndex service, which manages SQLite-based indexing
+ * of posts within a store. The index maintains a synchronized view of all posts
+ * based on events from the StoreEventLog, enabling efficient querying, filtering,
+ * and full-text search capabilities.
+ *
+ * ## Architecture
+ *
+ * The StoreIndex uses SQLite as its backing store and maintains several tables:
+ * - `posts`: Main post data with JSON serialization, engagement metrics, and metadata
+ * - `post_hashtag`: Many-to-many relationship for hashtags
+ * - `post_lang`: Language tags for posts
+ * - `posts_fts`: Full-text search index using SQLite FTS5
+ * - `index_checkpoints`: Tracks indexing progress for incremental rebuilds
+ *
+ * ## Query Pushdown (Predicate Pushdown)
+ *
+ * The index implements query pushdown (also known as predicate pushdown) to optimize
+ * query performance. This means filter expressions are translated into SQL WHERE clauses
+ * where possible, reducing the amount of data that needs to be fetched and processed.
+ *
+ * The {@link PushdownExpr} type represents expressions that can be pushed down to SQLite.
+ * Not all filter expressions can be pushed down (e.g., some complex predicates must be
+ * evaluated in-memory), so the pushdown system identifies which constraints can be
+ * handled by the database layer.
+ *
+ * ### Pushdown Expression Types
+ *
+ * - **Logical**: True, False, And, Or
+ * - **Author filters**: Author (single), AuthorIn (multiple handles)
+ * - **Content filters**: Hashtag, HashtagIn, Contains (text search)
+ * - **Temporal filters**: DateRange (created_at bounds)
+ * - **Post type filters**: IsReply, IsQuote, IsRepost, IsOriginal
+ * - **Media filters**: HasLinks, HasMedia, HasImages, HasVideo
+ * - **Language filters**: Language (post language matching)
+ * - **Engagement filters**: Engagement (min likes/reposts/replies)
+ *
+ * ## Key Features
+ *
+ * 1. **Event-driven indexing**: Reacts to PostUpsert and PostDelete events from the event log
+ * 2. **Incremental rebuilds**: Checkpoint system enables resuming indexing without reprocessing
+ * 3. **Full-text search**: SQLite FTS5 integration for text search across post content
+ * 4. **Efficient querying**: Pushdown predicates reduce data transfer and improve performance
+ * 5. **Streaming results**: Large result sets are streamed using pagination
+ * 6. **Bootstrap on first access**: Automatic index initialization when first accessed
+ *
+ * ## Dependencies
+ *
+ * - {@link StoreDb}: Provides SQLite client connections per store
+ * - {@link StoreEventLog}: Source of truth for post events, used during rebuilds
+ *
+ * @module StoreIndex
+ */
+
 import { Chunk, Clock, Context, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
@@ -70,26 +126,64 @@ const decodeCheckpointRow = (row: typeof checkpointRow.Type) =>
 const toIso = (value: Date | string) =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 
+/**
+ * Pushdown Expression - Represents filter predicates that can be pushed down to SQLite
+ *
+ * Pushdown expressions are a subset of filter expressions that can be directly
+ * translated into SQL WHERE clauses. This enables the database to do the heavy
+ * lifting of filtering, reducing memory usage and improving query performance.
+ *
+ * The expression tree is built from {@link FilterExpr} via {@link buildPushdown}
+ * and then converted to SQL fragments via {@link pushdownToSql}.
+ *
+ * @example
+ * // A complex filter becomes a pushdown expression:
+ * // Author("alice") AND Hashtag("tech") ->
+ * // { _tag: "And", clauses: [
+ * //   { _tag: "Author", handle: "alice" },
+ * //   { _tag: "Hashtag", tag: "tech" }
+ * // ]}
+ */
 type PushdownExpr =
+  /** Always true, no filtering needed */
   | { readonly _tag: "True" }
+  /** Always false, returns no results */
   | { readonly _tag: "False" }
+  /** Logical AND of multiple clauses */
   | { readonly _tag: "And"; readonly clauses: ReadonlyArray<PushdownExpr> }
+  /** Logical OR of multiple clauses */
   | { readonly _tag: "Or"; readonly clauses: ReadonlyArray<PushdownExpr> }
+  /** Filter by single author handle */
   | { readonly _tag: "Author"; readonly handle: string }
+  /** Filter by multiple author handles */
   | { readonly _tag: "AuthorIn"; readonly handles: ReadonlyArray<string> }
+  /** Filter by single hashtag */
   | { readonly _tag: "Hashtag"; readonly tag: string }
+  /** Filter by multiple hashtags */
   | { readonly _tag: "HashtagIn"; readonly tags: ReadonlyArray<string> }
+  /** Filter by creation date range (inclusive) */
   | { readonly _tag: "DateRange"; readonly start: Timestamp; readonly end: Timestamp }
+  /** Filter for reply posts only */
   | { readonly _tag: "IsReply" }
+  /** Filter for quote posts only */
   | { readonly _tag: "IsQuote" }
+  /** Filter for reposts only */
   | { readonly _tag: "IsRepost" }
+  /** Filter for original posts only (not replies, quotes, or reposts) */
   | { readonly _tag: "IsOriginal" }
+  /** Filter for posts containing links */
   | { readonly _tag: "HasLinks" }
+  /** Filter for posts with any media */
   | { readonly _tag: "HasMedia" }
+  /** Filter for posts with images */
   | { readonly _tag: "HasImages" }
+  /** Filter for posts with video */
   | { readonly _tag: "HasVideo" }
+  /** Filter by post language */
   | { readonly _tag: "Language"; readonly langs: ReadonlyArray<string> }
+  /** Filter by engagement metrics (likes, reposts, replies) */
   | { readonly _tag: "Engagement"; readonly minLikes?: number; readonly minReposts?: number; readonly minReplies?: number }
+  /** Filter by text content (case-sensitive or insensitive) */
   | { readonly _tag: "Contains"; readonly text: string; readonly caseSensitive: boolean };
 
 const pushdownTrue: PushdownExpr = { _tag: "True" };
@@ -339,42 +433,204 @@ const applyDelete = (
   event: Extract<PostEvent, { _tag: "PostDelete" }>
 ) => deletePost(sql, event.uri);
 
+/**
+ * StoreIndex Service - Effect Tag and Layer for post indexing
+ *
+ * The StoreIndex service provides a complete indexing solution for posts within
+ * a store. It maintains SQLite tables synchronized with the event log and offers
+ * various querying capabilities including filtering, full-text search, and
+ * streaming access to all indexed posts.
+ *
+ * ## Usage
+ *
+ * ```typescript
+ * // Apply a single event to the index
+ * yield* StoreIndex.apply(store, eventRecord);
+ *
+ * // Query posts with filters
+ * const posts = yield* StoreIndex.query(store, {
+ *   filter: { _tag: "Hashtag", tag: "tech" },
+ *   order: "desc"
+ * }).pipe(Stream.runCollect);
+ *
+ * // Search posts using full-text search
+ * const results = yield* StoreIndex.searchPosts(store, {
+ *   query: "javascript tutorial",
+ *   limit: 25
+ * });
+ *
+ * // Get checkpoint for incremental processing
+ * const checkpoint = yield* StoreIndex.loadCheckpoint(store, "primary");
+ * ```
+ *
+ * ## Automatic Bootstrap
+ *
+ * On first access to any store, the service automatically checks if the index
+ * needs to be bootstrapped. If the posts table is empty but events exist in the
+ * event log, a rebuild is triggered automatically.
+ *
+ * ## Checkpoint System
+ *
+ * Checkpoints track indexing progress, storing the last processed event ID and
+ * total event count. This enables:
+ * - Resuming interrupted rebuilds without reprocessing
+ * - Incremental updates (process only new events since last checkpoint)
+ * - Multiple index versions (tracked by index name)
+ */
 export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
   StoreIndex,
   {
+    /**
+     * Apply a single post event to the index
+     *
+     * Processes a PostEventRecord and updates the index accordingly:
+     * - PostUpsert: Inserts or updates the post with all metadata
+     * - PostDelete: Removes the post and related data from index
+     *
+     * @param store - Store reference to apply the event to
+     * @param record - The post event record containing the event to apply
+     * @returns Effect that completes when the index has been updated
+     */
     readonly apply: (
       store: StoreRef,
       record: PostEventRecord
     ) => Effect.Effect<void, StoreIndexError>;
+
+    /**
+     * Get all post URIs created on a specific date
+     *
+     * Returns posts ordered by creation time (ascending). The date should be
+     * in ISO date format (YYYY-MM-DD).
+     *
+     * @param store - Store reference to query
+     * @param date - ISO date string (YYYY-MM-DD)
+     * @returns Effect containing array of post URIs
+     */
     readonly getByDate: (
       store: StoreRef,
       date: string
     ) => Effect.Effect<ReadonlyArray<PostUri>, StoreIndexError>;
+
+    /**
+     * Get all post URIs tagged with a specific hashtag
+     *
+     * Returns posts ordered by URI (ascending). Case-sensitive exact match.
+     *
+     * @param store - Store reference to query
+     * @param tag - Hashtag to search for (without # prefix)
+     * @returns Effect containing array of post URIs
+     */
     readonly getByHashtag: (
       store: StoreRef,
       tag: string
     ) => Effect.Effect<ReadonlyArray<PostUri>, StoreIndexError>;
+
+    /**
+     * Retrieve a single post by URI
+     *
+     * Fetches the post JSON from the database and decodes it into a Post object.
+     * Returns None if the post doesn't exist in the index.
+     *
+     * @param store - Store reference to query
+     * @param uri - Post URI to retrieve
+     * @returns Effect containing Option of Post (Some if found, None if not)
+     */
     readonly getPost: (
       store: StoreRef,
       uri: PostUri
     ) => Effect.Effect<Option.Option<Post>, StoreIndexError>;
+
+    /**
+     * Check if a post URI exists in the index
+     *
+     * Efficient existence check using a LIMIT 1 query.
+     *
+     * @param store - Store reference to query
+     * @param uri - Post URI to check
+     * @returns Effect containing true if the URI exists, false otherwise
+     */
     readonly hasUri: (
       store: StoreRef,
       uri: PostUri
     ) => Effect.Effect<boolean, StoreIndexError>;
+
+    /**
+     * Clear all indexed data for a store
+     *
+     * Removes all posts, hashtags, languages, and checkpoints from the index.
+     * This operation is performed in a transaction for consistency.
+     *
+     * @param store - Store reference to clear
+     * @returns Effect that completes when all data has been cleared
+     */
     readonly clear: (store: StoreRef) => Effect.Effect<void, StoreIndexError>;
+
+    /**
+     * Load a checkpoint for an index
+     *
+     * Retrieves the stored checkpoint for a given index name, containing
+     * the last processed event ID and event count. Returns None if no
+     * checkpoint exists.
+     *
+     * @param store - Store reference to load from
+     * @param index - Name of the index to load checkpoint for
+     * @returns Effect containing Option of IndexCheckpoint
+     */
     readonly loadCheckpoint: (
       store: StoreRef,
       index: string
     ) => Effect.Effect<Option.Option<IndexCheckpoint>, StoreIndexError>;
+
+    /**
+     * Save a checkpoint for an index
+     *
+     * Persists the checkpoint to the database, overwriting any existing
+     * checkpoint for the same index name.
+     *
+     * @param store - Store reference to save to
+     * @param checkpoint - Checkpoint data to persist
+     * @returns Effect that completes when checkpoint has been saved
+     */
     readonly saveCheckpoint: (
       store: StoreRef,
       checkpoint: IndexCheckpoint
     ) => Effect.Effect<void, StoreIndexError>;
+
+    /**
+     * Query posts with filtering and pagination
+     *
+     * Executes a query against the index with optional:
+     * - Filter expressions (converted to SQL via pushdown)
+     * - Date range constraints
+     * - Scan limits (maximum posts to examine)
+     * - Sort order (ascending/descending)
+     *
+     * Results are streamed using keyset pagination for efficient large result sets.
+     *
+     * @param store - Store reference to query
+     * @param query - Query configuration including filter, range, limit, and order
+     * @returns Stream of Posts matching the query criteria
+     */
     readonly query: (
       store: StoreRef,
       query: StoreQuery
     ) => Stream.Stream<Post, StoreIndexError>;
+
+    /**
+     * Search posts using full-text search (FTS5)
+     *
+     * Performs a full-text search across post content using SQLite FTS5.
+     * Supports different sort orders: relevance (BM25 ranking), newest, or oldest.
+     * Results are paginated using offset-based cursors.
+     *
+     * @param store - Store reference to search
+     * @param input - Search configuration
+     * @param input.query - Search query string (FTS5 syntax supported)
+     * @param input.limit - Maximum results to return (default: 25)
+     * @param input.cursor - Offset for pagination (default: 0)
+     * @param input.sort - Sort order: "relevance" | "newest" | "oldest"
+     * @returns Effect containing search results and optional next cursor
+     */
     readonly searchPosts: (
       store: StoreRef,
       input: {
@@ -384,8 +640,43 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         readonly sort?: SearchSort;
       }
     ) => Effect.Effect<{ readonly posts: ReadonlyArray<Post>; readonly cursor?: number }, StoreIndexError>;
+
+    /**
+     * Stream all index entries
+     *
+     * Returns a stream of PostIndexEntry objects containing basic metadata
+     * (URI, creation date, author, hashtags) for all posts in the index.
+     * Results are paginated internally and streamed as a continuous flow.
+     *
+     * @param store - Store reference to stream from
+     * @returns Stream of PostIndexEntry objects
+     */
     readonly entries: (store: StoreRef) => Stream.Stream<PostIndexEntry, StoreIndexError>;
+
+    /**
+     * Count total posts in the index
+     *
+     * Returns the total number of posts currently indexed in the store.
+     *
+     * @param store - Store reference to count
+     * @returns Effect containing the post count
+     */
     readonly count: (store: StoreRef) => Effect.Effect<number, StoreIndexError>;
+
+    /**
+     * Rebuild the index from the event log
+     *
+     * Performs a full or incremental rebuild of the index:
+     * - If a checkpoint exists, only processes events after the checkpoint
+     * - If no checkpoint exists, processes all events from the beginning
+     * - Updates the checkpoint upon completion
+     * - Runs ANALYZE and PRAGMA optimize for query performance
+     *
+     * Events are processed in batches within transactions for efficiency.
+     *
+     * @param store - Store reference to rebuild
+     * @returns Effect that completes when rebuild is finished
+     */
     readonly rebuild: (
       store: StoreRef
     ) => Effect.Effect<void, StoreIndexError>;

@@ -1,3 +1,16 @@
+/**
+ * Store Committer Service Module
+ *
+ * This module provides the StoreCommitter service, which handles atomic transactions
+ * for appending events to stores. It ensures data consistency by wrapping operations
+ * (upserts, conditional inserts, and deletes) in SQLite transactions.
+ *
+ * Key responsibilities:
+ * - Atomic event appending with database state changes
+ * - Deduplication support via conditional insert operations
+ * - Error handling and mapping to StoreIoError
+ */
+
 import { Context, Effect, Layer, Option } from "effect";
 import { StoreIoError } from "../domain/errors.js";
 import type { StorePath } from "../domain/primitives.js";
@@ -10,17 +23,82 @@ import { deletePost, insertPostIfMissing, upsertPost } from "./store-index-sql.j
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
   StoreIoError.make({ path, cause });
 
+/**
+ * Service for committing events to stores with atomic transaction guarantees.
+ *
+ * The StoreCommitter provides three core operations for persisting post events:
+ * - `appendUpsert`: Atomically upsert a post and record the event
+ * - `appendUpsertIfMissing`: Insert only if the post doesn't exist (for deduplication)
+ * - `appendDelete`: Atomically delete a post and record the event
+ *
+ * All operations are performed within SQLite transactions to maintain consistency
+ * between the post index and the event log.
+ *
+ * @example
+ * ```ts
+ * const program = Effect.gen(function* () {
+ *   const committer = yield* StoreCommitter;
+ *   const store = { root: "/data/posts" };
+ *   const event = PostUpsert.make({ ... });
+ *
+ *   const record = yield* committer.appendUpsert(store, event);
+ *   return record;
+ * });
+ * ```
+ */
 export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
   StoreCommitter,
   {
+    /**
+     * Append an upsert event to the store, updating or inserting the post.
+     *
+     * This method performs an atomic transaction that:
+     * 1. Upserts the post data into the store's index
+     * 2. Appends the event to the store's event log
+     *
+     * If either operation fails, the entire transaction is rolled back.
+     *
+     * @param store - Reference to the target store
+     * @param event - The PostUpsert event containing the post data
+     * @returns Effect that resolves to the recorded PostEventRecord
+     * @throws StoreIoError if the transaction fails
+     */
     readonly appendUpsert: (
       store: StoreRef,
       event: PostUpsert
     ) => Effect.Effect<PostEventRecord, StoreIoError>;
+
+    /**
+     * Append an upsert event only if the post doesn't already exist.
+     *
+     * This method is used for deduplication scenarios. It performs an atomic transaction that:
+     * 1. Attempts to insert the post only if it's not already present
+     * 2. If inserted, appends the event to the store's event log
+     *
+     * @param store - Reference to the target store
+     * @param event - The PostUpsert event containing the post data
+     * @returns Effect that resolves to Option.Some(record) if inserted, or Option.None() if the post already exists
+     * @throws StoreIoError if the transaction fails
+     */
     readonly appendUpsertIfMissing: (
       store: StoreRef,
       event: PostUpsert
     ) => Effect.Effect<Option.Option<PostEventRecord>, StoreIoError>;
+
+    /**
+     * Append a delete event to the store, removing the post.
+     *
+     * This method performs an atomic transaction that:
+     * 1. Deletes the post from the store's index
+     * 2. Appends the delete event to the store's event log
+     *
+     * If either operation fails, the entire transaction is rolled back.
+     *
+     * @param store - Reference to the target store
+     * @param event - The PostDelete event containing the post URI to delete
+     * @returns Effect that resolves to the recorded PostEventRecord
+     * @throws StoreIoError if the transaction fails
+     */
     readonly appendDelete: (
       store: StoreRef,
       event: PostDelete
