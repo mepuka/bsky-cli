@@ -315,7 +315,16 @@ export const queryCommand = Command.make(
         : () => Effect.void;
 
       if (outputFormat === "ndjson") {
-        yield* writeJsonStream(stream.pipe(Stream.map(project)));
+        const countRef = yield* Ref.make(0);
+        const counted = stream.pipe(
+          Stream.map(project),
+          Stream.tap(() => Ref.update(countRef, (count) => count + 1))
+        );
+        yield* writeJsonStream(counted);
+        const count = yield* Ref.get(countRef);
+        if (count === 0) {
+          yield* writeText("[]");
+        }
         yield* warnIfScanLimitReached();
         return;
       }
@@ -338,15 +347,25 @@ export const queryCommand = Command.make(
 
       switch (outputFormat) {
         case "compact": {
+          const countRef = yield* Ref.make(0);
           const render = (post: Post) =>
             ansi
               ? renderAnsi(renderPostCompact(post), w)
               : renderPlain(renderPostCompact(post), w);
-          yield* Stream.runForEach(stream, (post) => writeText(render(post)));
+          yield* Stream.runForEach(stream, (post) =>
+            Ref.update(countRef, (count) => count + 1).pipe(
+              Effect.zipRight(writeText(render(post)))
+            )
+          );
+          const count = yield* Ref.get(countRef);
+          if (count === 0) {
+            yield* writeText("No posts found.");
+          }
           yield* warnIfScanLimitReached();
           return;
         }
         case "card": {
+          const countRef = yield* Ref.make(0);
           const rendered = stream.pipe(
             Stream.map((post) => {
               const doc = Doc.vsep(renderPostCard(post));
@@ -355,9 +374,14 @@ export const queryCommand = Command.make(
             Stream.mapAccum(true, (isFirst, text) => {
               const output = isFirst ? text : `\\n${text}`;
               return [false, output] as const;
-            })
+            }),
+            Stream.tap(() => Ref.update(countRef, (count) => count + 1))
           );
           yield* Stream.runForEach(rendered, (text) => writeText(text));
+          const count = yield* Ref.get(countRef);
+          if (count === 0) {
+            yield* writeText("No posts found.");
+          }
           yield* warnIfScanLimitReached();
           return;
         }
@@ -376,6 +400,10 @@ export const queryCommand = Command.make(
           yield* writeText(renderPostsTable(posts));
           return;
         case "thread": {
+          if (posts.length === 0) {
+            yield* writeText("No posts found.");
+            return;
+          }
           // B3: Warn if query doesn't have thread relationships
           if (!hasFilter) {
             yield* output
