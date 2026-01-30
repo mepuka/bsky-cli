@@ -129,6 +129,7 @@ const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError
       case "HasVideo":
       case "HasLinks":
       case "HasMedia":
+      case "HasEmbed":
         return;
       case "Language":
         if (expr.langs.length === 0) {
@@ -179,7 +180,7 @@ const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError
  * **Supported Filter Types:**
  * - Basic: All, None, Author, Hashtag, Contains, IsReply, IsQuote, IsRepost
  * - Collections: AuthorIn, HashtagIn (require non-empty arrays)
- * - Media: HasImages, HasVideo, HasLinks, HasMedia
+ * - Media: HasImages, HasVideo, HasLinks, HasMedia, HasEmbed
  * - Metadata: Language (requires langs array), Engagement (requires at least one threshold)
  * - Time: DateRange (start must be before end)
  * - Text: Regex (validates pattern syntax)

@@ -803,6 +803,9 @@ class Parser {
       if (lower === "hasmedia" || lower === "media") {
         return { _tag: "HasMedia" };
       }
+      if (lower === "hasembed" || lower === "embed" || lower === "embeds") {
+        return { _tag: "HasEmbed" };
+      }
       if (lower === "haslinks") {
         return { _tag: "HasLinks" };
       }
@@ -874,7 +877,8 @@ class Parser {
       const baseValue = stripQuotes(baseValueRaw);
 
       switch (key) {
-        case "author": {
+        case "author":
+        case "from": {
           if (baseValue.length === 0) {
             return yield* self.fail(`Missing value for "${key}".`, token.position);
           }
@@ -934,6 +938,30 @@ class Parser {
                 `Unknown post type "${baseValue}".`,
                 token.position
               );
+          }
+        }
+        case "has": {
+          if (baseValue.length === 0) {
+            return yield* self.fail(`Missing value for "${key}".`, token.position);
+          }
+          yield* ensureNoUnknownOptions(options, self.input);
+          switch (baseValue.toLowerCase()) {
+            case "images":
+            case "image":
+              return { _tag: "HasImages" };
+            case "video":
+            case "videos":
+              return { _tag: "HasVideo" };
+            case "links":
+            case "link":
+              return { _tag: "HasLinks" };
+            case "media":
+              return { _tag: "HasMedia" };
+            case "embed":
+            case "embeds":
+              return { _tag: "HasEmbed" };
+            default:
+              return yield* self.fail(`Unknown has: filter "${baseValue}".`, token.position);
           }
         }
         case "engagement": {

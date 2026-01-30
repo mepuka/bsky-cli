@@ -22,7 +22,7 @@
  * - `Hashtag`, `HashtagIn`: Match by hashtag
  * - `Contains`: Text substring matching
  * - `IsReply`, `IsQuote`, `IsRepost`, `IsOriginal`: Post type matching
- * - `HasImages`, `HasVideo`, `HasLinks`, `HasMedia`: Media detection
+ * - `HasImages`, `HasVideo`, `HasLinks`, `HasMedia`, `HasEmbed`: Media detection
  * - `Engagement`: Threshold-based engagement matching
  * - `Language`: Language code matching
  * - `Regex`: Regular expression pattern matching
@@ -137,6 +137,9 @@ const hasVideo = (post: Post) => {
 
 const hasMedia = (post: Post) =>
   hasImages(post) || hasVideo(post) || hasExternalLink(post);
+
+const hasEmbed = (post: Post) =>
+  post.embed != null || post.recordEmbed != null;
 
 const isRepost = (post: Post) => {
   const reason = post.feed?.reason;
@@ -361,6 +364,13 @@ const buildExplanation = (
             _tag: "HasMedia",
             ok: hasMedia(post),
             detail: `hasMedia=${hasMedia(post)}`
+          });
+      case "HasEmbed":
+        return (post: Post) =>
+          Effect.succeed({
+            _tag: "HasEmbed",
+            ok: hasEmbed(post),
+            detail: `hasEmbed=${hasEmbed(post)}`
           });
       case "Language": {
         const langs = new Set(expr.langs.map((lang) => lang.toLowerCase()));
@@ -597,6 +607,8 @@ const buildPredicate = (
           Effect.succeed(hasExternalLink(post));
       case "HasMedia":
         return (post: Post) => Effect.succeed(hasMedia(post));
+      case "HasEmbed":
+        return (post: Post) => Effect.succeed(hasEmbed(post));
       case "Language": {
         const langs = new Set(expr.langs.map((lang) => lang.toLowerCase()));
         return (post: Post) => {

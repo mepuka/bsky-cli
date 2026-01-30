@@ -1,12 +1,12 @@
 import * as Doc from "@effect/printer/Doc";
 import type { Annotation } from "./annotation.js";
 import { renderTree } from "./tree.js";
-import { renderPostCompact, renderPostCard } from "./post.js";
+import { renderPostCompact, renderPostCardLines } from "./post.js";
 import type { Post } from "../../domain/post.js";
 
 export const renderThread = (
   posts: ReadonlyArray<Post>,
-  options?: { compact?: boolean }
+  options?: { compact?: boolean; lineWidth?: number }
 ): Doc.Doc<Annotation> => {
   const byUri = new Map(posts.map((p) => [String(p.uri), p]));
   const childMap = new Map<string, Post[]>();
@@ -31,7 +31,9 @@ export const renderThread = (
   sortPosts(roots);
   for (const children of childMap.values()) sortPosts(children);
 
-  const render = options?.compact ? renderPostCompact : renderPostCard;
+  const render = options?.compact
+    ? renderPostCompact
+    : (post: Post) => renderPostCardLines(post, { lineWidth: options?.lineWidth });
 
   return renderTree<Post, undefined>(roots, {
     children: (post) =>

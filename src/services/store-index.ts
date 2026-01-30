@@ -33,7 +33,7 @@
  * - **Content filters**: Hashtag, HashtagIn, Contains (text search)
  * - **Temporal filters**: DateRange (created_at bounds)
  * - **Post type filters**: IsReply, IsQuote, IsRepost, IsOriginal
- * - **Media filters**: HasLinks, HasMedia, HasImages, HasVideo
+ * - **Media filters**: HasLinks, HasMedia, HasEmbed, HasImages, HasVideo
  * - **Language filters**: Language (post language matching)
  * - **Engagement filters**: Engagement (min likes/reposts/replies)
  *
@@ -175,6 +175,8 @@ type PushdownExpr =
   | { readonly _tag: "HasLinks" }
   /** Filter for posts with any media */
   | { readonly _tag: "HasMedia" }
+  /** Filter for posts with any embed */
+  | { readonly _tag: "HasEmbed" }
   /** Filter for posts with images */
   | { readonly _tag: "HasImages" }
   /** Filter for posts with video */
@@ -276,6 +278,8 @@ const buildPushdown = (expr: FilterExpr | undefined): PushdownExpr => {
       return { _tag: "HasLinks" };
     case "HasMedia":
       return { _tag: "HasMedia" };
+    case "HasEmbed":
+      return { _tag: "HasEmbed" };
     case "HasImages":
       return { _tag: "HasImages" };
     case "HasVideo":
@@ -351,6 +355,8 @@ const pushdownToSql = (
       return sql`p.has_links = 1`;
     case "HasMedia":
       return sql`p.has_media = 1`;
+    case "HasEmbed":
+      return sql`p.has_embed = 1`;
     case "HasImages":
       return sql`p.has_images = 1`;
     case "HasVideo":

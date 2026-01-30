@@ -69,6 +69,9 @@ const hasVideo = (post: Post) => {
 const hasMedia = (post: Post) =>
   hasImages(post) || hasVideo(post) || hasExternalLink(post);
 
+const hasEmbed = (post: Post) =>
+  post.embed != null || post.recordEmbed != null;
+
 const normalizeLangs = (langs: ReadonlyArray<string> | undefined) =>
   Array.from(
     new Set(
@@ -112,6 +115,7 @@ export const upsertPost = (
     const images = hasImages(post);
     const video = hasVideo(post);
     const media = hasMedia(post);
+    const embed = hasEmbed(post);
     const metrics = post.metrics;
     const likeCount = metrics?.likeCount ?? 0;
     const repostCount = metrics?.repostCount ?? 0;
@@ -130,6 +134,7 @@ export const upsertPost = (
         is_original,
         has_links,
         has_media,
+        has_embed,
         has_images,
         has_video,
         like_count,
@@ -150,6 +155,7 @@ export const upsertPost = (
         ${toFlag(original)},
         ${toFlag(links)},
         ${toFlag(media)},
+        ${toFlag(embed)},
         ${toFlag(images)},
         ${toFlag(video)},
         ${likeCount},
@@ -169,6 +175,7 @@ export const upsertPost = (
         is_original = excluded.is_original,
         has_links = excluded.has_links,
         has_media = excluded.has_media,
+        has_embed = excluded.has_embed,
         has_images = excluded.has_images,
         has_video = excluded.has_video,
         like_count = excluded.like_count,
@@ -209,6 +216,7 @@ export const insertPostIfMissing = (
     const images = hasImages(post);
     const video = hasVideo(post);
     const media = hasMedia(post);
+    const embed = hasEmbed(post);
     const metrics = post.metrics;
     const likeCount = metrics?.likeCount ?? 0;
     const repostCount = metrics?.repostCount ?? 0;
@@ -227,6 +235,7 @@ export const insertPostIfMissing = (
         is_original,
         has_links,
         has_media,
+        has_embed,
         has_images,
         has_video,
         like_count,
@@ -247,6 +256,7 @@ export const insertPostIfMissing = (
         ${toFlag(original)},
         ${toFlag(links)},
         ${toFlag(media)},
+        ${toFlag(embed)},
         ${toFlag(images)},
         ${toFlag(video)},
         ${likeCount},

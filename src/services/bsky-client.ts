@@ -46,7 +46,6 @@
  */
 
 import { AtpAgent, AppBskyFeedDefs } from "@atproto/api";
-import { messageFromCause } from "./shared.js";
 import type {
   AppBskyActorSearchActors,
   AppBskyActorSearchActorsTypeahead,
@@ -330,20 +329,56 @@ const extractBskyErrorDetails = (cause: unknown) => {
 
 const formatBskyErrorMessage = (
   fallback: string,
-  cause: unknown,
+  _cause: unknown,
   details: ReturnType<typeof extractBskyErrorDetails>
 ) => {
-  const base = messageFromCause(fallback, cause);
-  const detailParts = [
-    ...(typeof details.status === "number" ? [`status ${details.status}`] : []),
-    ...(details.error && details.error !== base ? [details.error] : []),
-    ...(details.detail &&
-    details.detail !== base &&
-    details.detail !== details.error
-      ? [details.detail]
-      : [])
-  ];
-  return detailParts.length > 0 ? `${base} (${detailParts.join(", ")})` : base;
+  const status = details.status;
+  const summary = typeof status === "number" ? statusSummary(status) : undefined;
+  const detail = normalizeDetail(details.detail ?? details.error);
+
+  if (typeof status === "number") {
+    const summaryPart = summary ? `: ${summary}` : "";
+    const detailPart = detail && detail !== summary ? ` - ${detail}` : "";
+    return `${fallback} (HTTP ${status}${summaryPart}${detailPart})`;
+  }
+
+  return detail ? `${fallback} (${detail})` : fallback;
+};
+
+const statusSummary = (status: number): string | undefined => {
+  switch (status) {
+    case 400:
+      return "Bad request";
+    case 401:
+      return "Unauthorized";
+    case 403:
+      return "Forbidden";
+    case 404:
+      return "Not found";
+    case 409:
+      return "Conflict";
+    case 413:
+      return "Payload too large";
+    case 429:
+      return "Rate limited";
+    case 500:
+      return "Server error";
+    case 502:
+      return "Bad gateway";
+    case 503:
+      return "Service unavailable";
+    case 504:
+      return "Gateway timeout";
+    default:
+      return status >= 500 ? "Server error" : undefined;
+  }
+};
+
+const normalizeDetail = (detail?: string) => {
+  if (!detail) return undefined;
+  const trimmed = detail.trim();
+  if (trimmed.length === 0) return undefined;
+  return trimmed.length > 160 ? `${trimmed.slice(0, 157)}...` : trimmed;
 };
 
 const toBskyError = (message: string, operation?: string) => (cause: unknown) => {

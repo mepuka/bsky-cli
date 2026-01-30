@@ -9,6 +9,7 @@ const filterJsonExamples = [
   "  Is reply:        '{\"_tag\":\"IsReply\"}'",
   "  Engagement:      '{\"_tag\":\"Engagement\",\"minLikes\":100}'",
   "  Has media:       '{\"_tag\":\"HasMedia\"}'",
+  "  Has embed:       '{\"_tag\":\"HasEmbed\"}'",
   "  Language:        '{\"_tag\":\"Language\",\"langs\":[\"en\",\"es\"]}'",
   "  By regex:        '{\"_tag\":\"Regex\",\"patterns\":[\"pattern\"],\"flags\":\"i\"}'",
   "  Trending tag:    '{\"_tag\":\"Trending\",\"tag\":\"#ai\",\"onError\":{\"_tag\":\"Include\"}}'",
@@ -38,12 +39,23 @@ const filterDslExamples = [
   "  is:reply",
   "  engagement:minLikes=100,minReplies=5",
   "  hasmedia",
+  "  hasembed",
   "  language:en,es",
   "  @tech AND author:user.bsky.social",
   "  date:2024-01-01T00:00:00Z..2024-01-31T00:00:00Z",
   "  links:onError=exclude",
   "  trending:#ai,onError=include",
-  "  (hashtag:#ai OR hashtag:#ml) AND author:user.bsky.social"
+  "  (hashtag:#ai OR hashtag:#ml) AND author:user.bsky.social",
+  "",
+  "Aliases:",
+  "  from:alice.bsky.social        -> author:alice.bsky.social",
+  "  tag:#ai                       -> hashtag:#ai",
+  "  text:\"hello\"                 -> contains:\"hello\"",
+  "  lang:en                       -> language:en",
+  "  authors:alice,bob             -> authorin:alice,bob",
+  "  tags:#ai,#ml                  -> hashtagin:#ai,#ml",
+  "  is:reply|quote|repost|original",
+  "  has:images|video|links|media|embed"
 ].join("\n");
 
 export const filterDslDescription = () =>
