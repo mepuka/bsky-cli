@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { StoreName, Timestamp, EventId } from "./primitives.js";
+import { StoreName, Timestamp, EventSeq } from "./primitives.js";
 import { FilterExprSchema } from "./filter.js";
 
 export const FilterEvaluationMode = Schema.Literal("EventTime", "DeriveTime");
@@ -31,7 +31,7 @@ export class DerivationCheckpoint extends Schema.Class<DerivationCheckpoint>(
   targetStore: StoreName,
   filterHash: Schema.String,
   evaluationMode: FilterEvaluationMode,
-  lastSourceEventId: Schema.optional(EventId),
+  lastSourceEventSeq: Schema.optional(EventSeq),
   eventsProcessed: Schema.NonNegativeInt,
   eventsMatched: Schema.NonNegativeInt,
   deletesPropagated: Schema.NonNegativeInt,

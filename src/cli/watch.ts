@@ -12,10 +12,8 @@ import { logInfo, makeSyncReporter } from "./logging.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
-import { StoreLock } from "../services/store-lock.js";
 import { makeWatchCommandBody } from "./sync-factory.js";
 import { CliInputError } from "./errors.js";
-import { parseOptionalDuration } from "./interval.js";
 import {
   feedUriArg,
   listUriArg,
@@ -33,8 +31,7 @@ import {
   refreshOption,
   strictOption,
   maxErrorsOption,
-  parseMaxErrors,
-  waitOption
+  parseMaxErrors
 } from "./shared-options.js";
 
 const intervalOption = Options.text("interval").pipe(
@@ -79,8 +76,7 @@ const timelineCommand = Command.make(
     filterJson: filterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption,
-    wait: waitOption
+    refresh: refreshOption
   },
   makeWatchCommandBody("timeline", () => DataSource.timeline())
 ).pipe(
@@ -105,8 +101,7 @@ const feedCommand = Command.make(
     filterJson: filterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption,
-    wait: waitOption
+    refresh: refreshOption
   },
   ({ uri, ...rest }) => makeWatchCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
 ).pipe(
@@ -130,8 +125,7 @@ const listCommand = Command.make(
     filterJson: filterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption,
-    wait: waitOption
+    refresh: refreshOption
   },
   ({ uri, ...rest }) => makeWatchCommandBody("list", () => DataSource.list(uri), { uri })(rest)
 ).pipe(
@@ -154,8 +148,7 @@ const notificationsCommand = Command.make(
     filterJson: filterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption,
-    wait: waitOption
+    refresh: refreshOption
   },
   makeWatchCommandBody("notifications", () => DataSource.notifications())
 ).pipe(
@@ -179,10 +172,9 @@ const authorCommand = Command.make(
     postFilterJson: postFilterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption,
-    wait: waitOption
+    refresh: refreshOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, interval, store, quiet, refresh, wait }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, interval, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const resolvedActor = yield* decodeActor(actor);
       const apiFilter = Option.getOrUndefined(filter);
@@ -201,8 +193,7 @@ const authorCommand = Command.make(
         filterJson: postFilterJson,
         interval,
         quiet,
-        refresh,
-        wait
+        refresh
       });
     })
 ).pipe(
@@ -229,10 +220,9 @@ const threadCommand = Command.make(
     filterJson: filterJsonOption,
     interval: intervalOption,
     quiet: quietOption,
-    refresh: refreshOption,
-    wait: waitOption
+    refresh: refreshOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, interval, store, quiet, refresh, wait }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, interval, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
       const parsedParentHeight = yield* parseBoundedIntOption(
@@ -252,7 +242,7 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, interval, quiet, refresh, wait });
+      return yield* run({ store, filter, filterJson, interval, quiet, refresh });
     })
 ).pipe(
   Command.withDescription(
@@ -281,8 +271,7 @@ const jetstreamCommand = Command.make(
     compress: jetstreamOptions.compress,
     maxMessageSize: jetstreamOptions.maxMessageSize,
     strict: strictOption,
-    maxErrors: maxErrorsOption,
-    wait: waitOption
+    maxErrors: maxErrorsOption
   },
   ({
     store,
@@ -296,11 +285,9 @@ const jetstreamCommand = Command.make(
     compress,
     maxMessageSize,
     strict,
-    maxErrors,
-    wait
+    maxErrors
   }) =>
     Effect.gen(function* () {
-      const storeLock = yield* StoreLock;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const storeRef = yield* storeOptions.loadStoreRef(store);
@@ -319,39 +306,31 @@ const jetstreamCommand = Command.make(
         filterHash
       );
       const parsedMaxErrors = yield* parseMaxErrors(maxErrors);
-      const parsedWait = yield* parseOptionalDuration(wait);
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
-      const waitFor = Option.getOrUndefined(parsedWait);
-      return yield* storeLock.withStoreLock(
-        storeRef,
-        Effect.gen(function* () {
-          yield* logInfo("Starting watch", { source: "jetstream", store: storeRef.name });
-          yield* Effect.gen(function* () {
-            const engine = yield* JetstreamSyncEngine;
-            const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
-            const stream = engine.watch({
-              source: selection.source,
-              store: storeRef,
-              filter: expr,
-              command: "watch jetstream",
-              ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {}),
-              ...(strict ? { strict } : {}),
-              ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
-            });
-            const outputStream = stream.pipe(
-              Stream.map((event) => event.result),
-              Stream.provideService(
-                SyncReporter,
-                makeSyncReporter(quiet, monitor, output)
-              )
-            );
-            return yield* writeJsonStream(outputStream);
-          }).pipe(Effect.provide(engineLayer));
-        }),
-        waitFor ? { waitFor } : undefined
-      );
+      yield* logInfo("Starting watch", { source: "jetstream", store: storeRef.name });
+      yield* Effect.gen(function* () {
+        const engine = yield* JetstreamSyncEngine;
+        const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
+        const stream = engine.watch({
+          source: selection.source,
+          store: storeRef,
+          filter: expr,
+          command: "watch jetstream",
+          ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {}),
+          ...(strict ? { strict } : {}),
+          ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
+        });
+        const outputStream = stream.pipe(
+          Stream.map((event) => event.result),
+          Stream.provideService(
+            SyncReporter,
+            makeSyncReporter(quiet, monitor, output)
+          )
+        );
+        return yield* writeJsonStream(outputStream);
+      }).pipe(Effect.provide(engineLayer));
     })
 ).pipe(
   Command.withDescription(

@@ -316,7 +316,10 @@ export const queryCommand = Command.make(
           yield* writeText(renderPostsTable(posts));
           return;
         case "thread": {
-          const doc = renderThread(posts, { compact: false, lineWidth: w });
+          const doc = renderThread(
+            posts,
+            w === undefined ? { compact: false } : { compact: false, lineWidth: w }
+          );
           yield* writeText(ansi ? renderAnsi(doc, w) : renderPlain(doc, w));
           return;
         }

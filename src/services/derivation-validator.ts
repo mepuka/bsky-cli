@@ -34,32 +34,31 @@ export class DerivationValidator extends Context.Tag(
 
             const checkpoint = checkpointOption.value;
 
-            // O(1) optimization: use getLastEventId instead of streaming
+            // O(1) optimization: use getLastEventSeq instead of streaming
             const sourceRefOption = yield* storeManager.getStore(sourceName);
             if (Option.isNone(sourceRefOption)) {
               return false; // Source store deleted
             }
 
             const sourceRef = sourceRefOption.value;
-            const lastSourceIdOption = yield* eventLog.getLastEventId(sourceRef);
+            const lastSourceSeqOption = yield* eventLog.getLastEventSeq(sourceRef);
 
-            if (Option.isNone(lastSourceIdOption)) {
+            if (Option.isNone(lastSourceSeqOption)) {
               return false; // Source has no events
             }
 
-            const lastSourceId = lastSourceIdOption.value;
+            const lastSourceSeq = lastSourceSeqOption.value;
 
-            // Convert checkpoint.lastSourceEventId from EventId | undefined to Option<EventId>
-            const checkpointLastIdOption = Option.fromNullable(
-              checkpoint.lastSourceEventId
+            // Convert checkpoint.lastSourceEventSeq from EventSeq | undefined to Option<EventSeq>
+            const checkpointLastSeqOption = Option.fromNullable(
+              checkpoint.lastSourceEventSeq
             );
 
-            if (Option.isNone(checkpointLastIdOption)) {
+            if (Option.isNone(checkpointLastSeqOption)) {
               return true; // Checkpoint never recorded a last event
             }
 
-            // CRITICAL: use localeCompare for ULID EventId strings
-            return lastSourceId.localeCompare(checkpointLastIdOption.value) > 0;
+            return lastSourceSeq > checkpointLastSeqOption.value;
           })
       );
 

@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Option, Schema } from "effect";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
+import { FileSystem } from "@effect/platform";
+import { BunContext } from "@effect/platform-bun";
 import { buildJetstreamSelection } from "../../src/cli/jetstream.js";
 import { SyncCheckpoint } from "../../src/domain/sync.js";
 import { StoreRef } from "../../src/domain/store.js";
 import { SyncCheckpointStore } from "../../src/services/sync-checkpoint-store.js";
 import { Timestamp } from "../../src/domain/primitives.js";
 import { all, filterExprSignature } from "../../src/domain/filter.js";
+import { StoreDb } from "../../src/services/store-db.js";
+import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 
 const sampleStore = Schema.decodeUnknownSync(StoreRef)({
   name: "jetstream-store",
@@ -15,9 +18,45 @@ const sampleStore = Schema.decodeUnknownSync(StoreRef)({
 
 const filterHash = filterExprSignature(all());
 
-const layer = SyncCheckpointStore.layer.pipe(
-  Layer.provideMerge(KeyValueStore.layerMemory)
-);
+const makeTempDir = () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return yield* fs.makeTempDirectory();
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const removeTempDir = (path: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(path, { recursive: true });
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const buildLayer = (storeRoot: string) => {
+  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const checkpointLayer = SyncCheckpointStore.layer.pipe(
+    Layer.provideMerge(storeDbLayer)
+  );
+  return Layer.mergeAll(
+    appConfigLayer,
+    storeDbLayer,
+    checkpointLayer
+  ).pipe(Layer.provideMerge(BunContext.layer));
+};
+
+const withLayer = async <A>(program: Effect.Effect<A>) => {
+  const tempDir = await makeTempDir();
+  const layer = buildLayer(tempDir);
+  try {
+    return await Effect.runPromise(program.pipe(Effect.provide(layer)));
+  } finally {
+    await removeTempDir(tempDir);
+  }
+};
 
 describe("buildJetstreamSelection", () => {
   test("prefers explicit cursor over checkpoint", async () => {
@@ -59,7 +98,7 @@ describe("buildJetstreamSelection", () => {
       );
     });
 
-    const selection = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+    const selection = await withLayer(program);
 
     expect(selection.cursor).toBe("222");
     expect(selection.config.cursor).toBe(222);
@@ -104,7 +143,7 @@ describe("buildJetstreamSelection", () => {
       );
     });
 
-    const selection = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+    const selection = await withLayer(program);
 
     expect(selection.cursor).toBe("333");
     expect(selection.config.cursor).toBe(333);
@@ -124,9 +163,7 @@ describe("buildJetstreamSelection", () => {
       filterHash
     );
 
-    const result = await Effect.runPromise(
-      program.pipe(Effect.either, Effect.provide(layer))
-    );
+    const result = await withLayer(program.pipe(Effect.either));
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") {
       expect(result.left._tag).toBe("CliInputError");
@@ -147,9 +184,7 @@ describe("buildJetstreamSelection", () => {
       filterHash
     );
 
-    const result = await Effect.runPromise(
-      program.pipe(Effect.either, Effect.provide(layer))
-    );
+    const result = await withLayer(program.pipe(Effect.either));
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") {
       expect(result.left._tag).toBe("CliInputError");
@@ -170,9 +205,7 @@ describe("buildJetstreamSelection", () => {
       filterHash
     );
 
-    const result = await Effect.runPromise(
-      program.pipe(Effect.either, Effect.provide(layer))
-    );
+    const result = await withLayer(program.pipe(Effect.either));
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") {
       expect(result.left._tag).toBe("CliInputError");

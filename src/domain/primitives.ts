@@ -37,6 +37,9 @@ export type Timestamp = typeof Timestamp.Type;
 export const EventId = Schema.ULID.pipe(Schema.brand("EventId"));
 export type EventId = typeof EventId.Type;
 
+export const EventSeq = Schema.NonNegativeInt.pipe(Schema.brand("EventSeq"));
+export type EventSeq = typeof EventSeq.Type;
+
 export const StoreName = Schema.String.pipe(
   Schema.pattern(/^[a-z0-9][a-z0-9-_]{1,63}$/),
   Schema.brand("StoreName")

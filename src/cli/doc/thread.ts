@@ -31,9 +31,11 @@ export const renderThread = (
   sortPosts(roots);
   for (const children of childMap.values()) sortPosts(children);
 
+  const cardOptions =
+    options?.lineWidth === undefined ? undefined : { lineWidth: options.lineWidth };
   const render = options?.compact
     ? renderPostCompact
-    : (post: Post) => renderPostCardLines(post, { lineWidth: options?.lineWidth });
+    : (post: Post) => renderPostCardLines(post, cardOptions);
 
   return renderTree<Post, undefined>(roots, {
     children: (post) =>

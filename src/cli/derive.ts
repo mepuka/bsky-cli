@@ -7,19 +7,16 @@ import { DerivationEngine } from "../services/derivation-engine.js";
 import { StoreManager } from "../services/store-manager.js";
 import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
 import { OutputManager } from "../services/output-manager.js";
-import { StoreLock } from "../services/store-lock.js";
 import { filterJsonDescription } from "./filter-help.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { writeJson } from "./output.js";
 import { storeOptions } from "./store.js";
 import { CliInputError } from "./errors.js";
-import { StoreLockError } from "../domain/errors.js";
 import { logInfo } from "./logging.js";
 import type { FilterEvaluationMode } from "../domain/derivation.js";
 import { CliPreferences } from "./preferences.js";
 import { withExamples } from "./help.js";
-import { filterOption, waitOption } from "./shared-options.js";
-import { parseOptionalDuration } from "./interval.js";
+import { filterOption } from "./shared-options.js";
 
 const sourceArg = Args.text({ name: "source" }).pipe(
   Args.withSchema(StoreName),
@@ -64,19 +61,15 @@ export const deriveCommand = Command.make(
     filterJson: filterJsonOption,
     mode: modeOption,
     reset: resetFlag,
-    yes: yesFlag,
-    wait: waitOption
+    yes: yesFlag
   },
-  ({ source, target, filter, filterJson, mode, reset, yes, wait }) =>
+  ({ source, target, filter, filterJson, mode, reset, yes }) =>
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
       const checkpoints = yield* ViewCheckpointStore;
       const manager = yield* StoreManager;
       const outputManager = yield* OutputManager;
-      const storeLock = yield* StoreLock;
       const preferences = yield* CliPreferences;
-      const parsedWait = yield* parseOptionalDuration(wait);
-      const waitFor = Option.getOrUndefined(parsedWait);
 
       // Parse filter expression
       const filterExpr = yield* parseFilterExpr(filter, filterJson);
@@ -153,62 +146,37 @@ export const deriveCommand = Command.make(
         onSome: Effect.succeed
       });
 
-      const storesToLock = [sourceRef, targetRef]
-        .filter(
-          (store, index, stores) =>
-            stores.findIndex((value) => value.name === store.name) === index
-        )
-        .sort((a, b) => a.name.localeCompare(b.name));
+      // Execute derivation
+      const result = yield* engine.derive(sourceRef, targetRef, filterExpr, {
+        mode: evaluationMode,
+        reset
+      });
 
-      const withStoreLocks = <A, E, R>(
-        effect: Effect.Effect<A, E, R>
-      ): Effect.Effect<A, E | StoreLockError, R> => {
-        let next: Effect.Effect<A, E | StoreLockError, R> = effect;
-        for (let i = storesToLock.length - 1; i >= 0; i -= 1) {
-          const store = storesToLock[i];
-          if (!store) {
-            continue;
-          }
-          next = storeLock.withStoreLock(store, next, waitFor ? { waitFor } : undefined);
-        }
-        return next;
-      };
+      const materialized = yield* outputManager.materializeStore(targetRef);
+      if (materialized.filters.length > 0) {
+        yield* logInfo("Materialized filter outputs", {
+          store: targetRef.name,
+          filters: materialized.filters.map((spec) => spec.name)
+        });
+      }
 
-      return yield* withStoreLocks(
-        Effect.gen(function* () {
-          // Execute derivation
-          const result = yield* engine.derive(sourceRef, targetRef, filterExpr, {
-            mode: evaluationMode,
-            reset
-          });
+      // Output result with context
+      if (preferences.compact) {
+        yield* writeJson({
+          source: sourceRef.name,
+          target: targetRef.name,
+          mode: evaluationMode,
+          ...result
+        });
+        return;
+      }
 
-          const materialized = yield* outputManager.materializeStore(targetRef);
-          if (materialized.filters.length > 0) {
-            yield* logInfo("Materialized filter outputs", {
-              store: targetRef.name,
-              filters: materialized.filters.map((spec) => spec.name)
-            });
-          }
-
-          // Output result with context
-          if (preferences.compact) {
-            yield* writeJson({
-              source: sourceRef.name,
-              target: targetRef.name,
-              mode: evaluationMode,
-              ...result
-            });
-            return;
-          }
-
-          yield* writeJson({
-            source: sourceRef.name,
-            target: targetRef.name,
-            mode: evaluationMode,
-            result
-          });
-        })
-      );
+      yield* writeJson({
+        source: sourceRef.name,
+        target: targetRef.name,
+        mode: evaluationMode,
+        result
+      });
     })
 ).pipe(
   Command.withDescription(

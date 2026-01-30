@@ -9,7 +9,6 @@ import { logInfo, makeSyncReporter } from "./logging.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { OutputManager } from "../services/output-manager.js";
-import { StoreLock } from "../services/store-lock.js";
 import { CliOutput, writeJson } from "./output.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { withExamples } from "./help.js";
@@ -33,8 +32,7 @@ import {
   refreshOption,
   strictOption,
   maxErrorsOption,
-  parseMaxErrors,
-  waitOption
+  parseMaxErrors
 } from "./shared-options.js";
 
 const limitOption = Options.integer("limit").pipe(
@@ -114,7 +112,7 @@ const parseBoundedIntOption = (
 
 const timelineCommand = Command.make(
   "timeline",
-  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, wait: waitOption },
+  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
   makeSyncCommandBody("timeline", () => DataSource.timeline())
 ).pipe(
   Command.withDescription(
@@ -131,7 +129,7 @@ const timelineCommand = Command.make(
 
 const feedCommand = Command.make(
   "feed",
-  { uri: feedUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, wait: waitOption },
+  { uri: feedUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
   ({ uri, ...rest }) => makeSyncCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
 ).pipe(
   Command.withDescription(
@@ -147,7 +145,7 @@ const feedCommand = Command.make(
 
 const listCommand = Command.make(
   "list",
-  { uri: listUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, wait: waitOption },
+  { uri: listUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
   ({ uri, ...rest }) => makeSyncCommandBody("list", () => DataSource.list(uri), { uri })(rest)
 ).pipe(
   Command.withDescription(
@@ -163,7 +161,7 @@ const listCommand = Command.make(
 
 const notificationsCommand = Command.make(
   "notifications",
-  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, wait: waitOption },
+  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
   makeSyncCommandBody("notifications", () => DataSource.notifications())
 ).pipe(
   Command.withDescription(
@@ -185,10 +183,9 @@ const authorCommand = Command.make(
     postFilter: postFilterOption,
     postFilterJson: postFilterJsonOption,
     quiet: quietOption,
-    refresh: refreshOption,
-    wait: waitOption
+    refresh: refreshOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh, wait }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const resolvedActor = yield* decodeActor(actor);
       const apiFilter = Option.getOrUndefined(filter);
@@ -206,8 +203,7 @@ const authorCommand = Command.make(
         filter: postFilter,
         filterJson: postFilterJson,
         quiet,
-        refresh,
-        wait
+        refresh
       });
     })
 ).pipe(
@@ -233,10 +229,9 @@ const threadCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     quiet: quietOption,
-    refresh: refreshOption,
-    wait: waitOption
+    refresh: refreshOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh, wait }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
       const parsedParentHeight = yield* parseBoundedIntOption(
@@ -256,7 +251,7 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, quiet, refresh, wait });
+      return yield* run({ store, filter, filterJson, quiet, refresh });
     })
 ).pipe(
   Command.withDescription(
@@ -287,8 +282,7 @@ const jetstreamCommand = Command.make(
     limit: limitOption,
     duration: durationOption,
     strict: strictOption,
-    maxErrors: maxErrorsOption,
-    wait: waitOption
+    maxErrors: maxErrorsOption
   },
   ({
     store,
@@ -304,11 +298,9 @@ const jetstreamCommand = Command.make(
     limit,
     duration,
     strict,
-    maxErrors,
-    wait
+    maxErrors
   }) =>
     Effect.gen(function* () {
-      const storeLock = yield* StoreLock;
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
@@ -330,7 +322,6 @@ const jetstreamCommand = Command.make(
       const parsedLimit = yield* parseLimit(limit);
       const parsedDuration = yield* parseDuration(duration);
       const parsedMaxErrors = yield* parseMaxErrors(maxErrors);
-      const parsedWait = yield* parseDuration(wait);
       if (Option.isNone(parsedLimit) && Option.isNone(parsedDuration)) {
         return yield* CliInputError.make({
           message:
@@ -341,46 +332,39 @@ const jetstreamCommand = Command.make(
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
-      const waitFor = Option.getOrUndefined(parsedWait);
-      return yield* storeLock.withStoreLock(
-        storeRef,
-        Effect.gen(function* () {
-          yield* logInfo("Starting sync", {
-            source: "jetstream",
-            store: storeRef.name
-          });
-          const result = yield* Effect.gen(function* () {
-            const engine = yield* JetstreamSyncEngine;
-            const limitValue = Option.getOrUndefined(parsedLimit);
-            const durationValue = Option.getOrUndefined(parsedDuration);
-            const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
-            return yield* engine.sync({
-              source: selection.source,
-              store: storeRef,
-              filter: expr,
-              command: "sync jetstream",
-              ...(limitValue !== undefined ? { limit: limitValue } : {}),
-              ...(durationValue !== undefined ? { duration: durationValue } : {}),
-              ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {}),
-              ...(strict ? { strict } : {}),
-              ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
-            });
-          }).pipe(
-            Effect.provide(engineLayer),
-            Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
-          );
-          const materialized = yield* outputManager.materializeStore(storeRef);
-          if (materialized.filters.length > 0) {
-            yield* logInfo("Materialized filter outputs", {
-              store: storeRef.name,
-              filters: materialized.filters.map((spec) => spec.name)
-            });
-          }
-          yield* logInfo("Sync complete", { source: "jetstream", store: storeRef.name });
-          yield* writeJson(result as SyncResult);
-        }),
-        waitFor ? { waitFor } : undefined
+      yield* logInfo("Starting sync", {
+        source: "jetstream",
+        store: storeRef.name
+      });
+      const result = yield* Effect.gen(function* () {
+        const engine = yield* JetstreamSyncEngine;
+        const limitValue = Option.getOrUndefined(parsedLimit);
+        const durationValue = Option.getOrUndefined(parsedDuration);
+        const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
+        return yield* engine.sync({
+          source: selection.source,
+          store: storeRef,
+          filter: expr,
+          command: "sync jetstream",
+          ...(limitValue !== undefined ? { limit: limitValue } : {}),
+          ...(durationValue !== undefined ? { duration: durationValue } : {}),
+          ...(selection.cursor !== undefined ? { cursor: selection.cursor } : {}),
+          ...(strict ? { strict } : {}),
+          ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
+        });
+      }).pipe(
+        Effect.provide(engineLayer),
+        Effect.provideService(SyncReporter, makeSyncReporter(quiet, monitor, output))
       );
+      const materialized = yield* outputManager.materializeStore(storeRef);
+      if (materialized.filters.length > 0) {
+        yield* logInfo("Materialized filter outputs", {
+          store: storeRef.name,
+          filters: materialized.filters.map((spec) => spec.name)
+        });
+      }
+      yield* logInfo("Sync complete", { source: "jetstream", store: storeRef.name });
+      yield* writeJson(result as SyncResult);
     })
 ).pipe(
   Command.withDescription(

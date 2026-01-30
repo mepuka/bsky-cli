@@ -63,7 +63,7 @@ import { PostEventRecord } from "../domain/events.js";
 import type { PostEvent, StoreQuery } from "../domain/events.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { IndexCheckpoint, PostIndexEntry } from "../domain/indexes.js";
-import { EventId, Handle, PostUri, Timestamp } from "../domain/primitives.js";
+import { EventSeq, Handle, PostUri, Timestamp } from "../domain/primitives.js";
 import { Post } from "../domain/post.js";
 import type { StoreRef } from "../domain/store.js";
 import { StoreDb } from "./store-db.js";
@@ -91,7 +91,7 @@ const postEntryRow = Schema.Struct({
 const checkpointRow = Schema.Struct({
   index_name: Schema.String,
   version: Schema.Number,
-  last_event_id: EventId,
+  last_event_seq: EventSeq,
   event_count: Schema.Number,
   updated_at: Schema.String
 });
@@ -118,7 +118,7 @@ const decodeCheckpointRow = (row: typeof checkpointRow.Type) =>
   Schema.decodeUnknown(IndexCheckpoint)({
     index: row.index_name,
     version: row.version,
-    lastEventId: row.last_event_id,
+    lastEventSeq: row.last_event_seq,
     eventCount: row.event_count,
     updatedAt: row.updated_at
   }).pipe(Effect.mapError(toStoreIndexError("StoreIndex.checkpoint decode failed")));
@@ -717,7 +717,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
           Request: Schema.String,
           Result: checkpointRow,
           execute: (name) =>
-            client`SELECT index_name, version, last_event_id, event_count, updated_at
+            client`SELECT index_name, version, last_event_seq, event_count, updated_at
               FROM index_checkpoints
               WHERE index_name = ${name}`
         });
@@ -734,11 +734,11 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
 
       const saveCheckpointWithClient = (client: SqlClient.SqlClient, checkpoint: IndexCheckpoint) => {
         const updatedAt = toIso(checkpoint.updatedAt);
-        return client`INSERT INTO index_checkpoints (index_name, version, last_event_id, event_count, updated_at)
-          VALUES (${checkpoint.index}, ${checkpoint.version}, ${checkpoint.lastEventId}, ${checkpoint.eventCount}, ${updatedAt})
+        return client`INSERT INTO index_checkpoints (index_name, version, last_event_seq, event_count, updated_at)
+          VALUES (${checkpoint.index}, ${checkpoint.version}, ${checkpoint.lastEventSeq}, ${checkpoint.eventCount}, ${updatedAt})
           ON CONFLICT(index_name) DO UPDATE SET
             version = excluded.version,
-            last_event_id = excluded.last_event_id,
+            last_event_seq = excluded.last_event_seq,
             event_count = excluded.event_count,
             updated_at = excluded.updated_at`.pipe(Effect.asVoid);
       };
@@ -757,13 +757,13 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
       const rebuildWithClient = (store: StoreRef, client: SqlClient.SqlClient) =>
         Effect.gen(function* () {
           const checkpoint = yield* loadCheckpointWithClient(client, indexName);
-          const lastEventId = Option.map(checkpoint, (value) => value.lastEventId);
+          const lastEventSeq = Option.map(checkpoint, (value) => value.lastEventSeq);
 
           const stream = eventLog.stream(store).pipe(
-            Stream.filter((record) =>
-              Option.match(lastEventId, {
+            Stream.filter((entry) =>
+              Option.match(lastEventSeq, {
                 onNone: () => true,
-                onSome: (id) => record.id.localeCompare(id) > 0
+                onSome: (seq) => entry.seq > seq
               })
             )
           );
@@ -773,26 +773,26 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
             Stream.runFoldEffect(
               {
                 count: 0,
-                lastId: Option.none<PostEventRecord["id"]>()
+                lastSeq: Option.none<EventSeq>()
               },
               (state, batch) =>
                 client.withTransaction(
                   Effect.gen(function* () {
                     for (const record of batch) {
-                      yield* applyWithClient(client, record);
+                      yield* applyWithClient(client, record.record);
                     }
                     const size = Chunk.size(batch);
-                    const lastRecord = size > 0 ? Option.some(Chunk.unsafeLast(batch).id) : state.lastId;
+                    const lastEntry = size > 0 ? Option.some(Chunk.unsafeLast(batch).seq) : state.lastSeq;
                     return {
                       count: state.count + size,
-                      lastId: lastRecord
+                      lastSeq: lastEntry
                     };
                   })
                 )
             )
           );
 
-          if (state.count === 0 || Option.isNone(state.lastId)) {
+          if (state.count === 0 || Option.isNone(state.lastSeq)) {
             return;
           }
 
@@ -804,7 +804,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
           const nextCheckpoint = IndexCheckpoint.make({
             index: indexName,
             version: 1,
-            lastEventId: state.lastId.value,
+            lastEventSeq: state.lastSeq.value,
             eventCount: Option.match(checkpoint, {
               onNone: () => state.count,
               onSome: (value) => value.eventCount + state.count
@@ -825,8 +825,8 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
             return;
           }
 
-          const lastEventId = yield* eventLog.getLastEventId(store);
-          if (Option.isNone(lastEventId)) {
+          const lastEventSeq = yield* eventLog.getLastEventSeq(store);
+          if (Option.isNone(lastEventSeq)) {
             return;
           }
 

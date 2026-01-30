@@ -12,7 +12,7 @@ import {
 import { logErrorEvent } from "./src/cli/logging.js";
 import { CliOutput } from "./src/cli/output.js";
 import { exitCodeFor, exitCodeFromExit } from "./src/cli/exit-codes.js";
-import { BskyError, StoreLockError, StoreNotFound } from "./src/domain/errors.js";
+import { BskyError, StoreNotFound } from "./src/domain/errors.js";
 
 const cli = Command.run(app, {
   name: "skygent",
@@ -49,9 +49,6 @@ const formatError = (error: unknown, agentPayload?: AgentErrorPayload) => {
   }
   if (error instanceof StoreNotFound) {
     return `Store \"${error.name}\" does not exist.`;
-  }
-  if (error instanceof StoreLockError) {
-    return error.message;
   }
   if (error instanceof Error) {
     return error.message;

@@ -10,7 +10,6 @@ import {
   FilterNotFound,
   StoreIoError,
   StoreIndexError,
-  StoreLockError,
   StoreNotFound
 } from "../domain/errors.js";
 import { SyncError } from "../domain/sync.js";
@@ -24,7 +23,7 @@ export const exitCodeFor = (error: unknown): number => {
   if (error instanceof StoreNotFound) return 3;
   if (error instanceof FilterNotFound) return 2;
   if (error instanceof FilterLibraryError) return 2;
-  if (error instanceof StoreIoError || error instanceof StoreIndexError || error instanceof StoreLockError) return 7;
+  if (error instanceof StoreIoError || error instanceof StoreIndexError) return 7;
   if (error instanceof FilterCompileError || error instanceof FilterEvalError) return 8;
   if (error instanceof DerivationError) return 2;
   if (error instanceof SyncError) {

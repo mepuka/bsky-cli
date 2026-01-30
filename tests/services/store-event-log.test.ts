@@ -64,10 +64,10 @@ const buildLayer = (storeRoot: string) => {
 };
 
 describe("StoreEventLog", () => {
-  test("getLastEventId returns None when no events", async () => {
+  test("getLastEventSeq returns None when no events", async () => {
     const program = Effect.gen(function* () {
       const eventLog = yield* StoreEventLog;
-      return yield* eventLog.getLastEventId(sampleStore);
+      return yield* eventLog.getLastEventSeq(sampleStore);
     });
 
     const tempDir = await makeTempDir();
@@ -80,15 +80,15 @@ describe("StoreEventLog", () => {
     }
   });
 
-  test("getLastEventId returns last event ID after append", async () => {
+  test("getLastEventSeq returns last event seq after append", async () => {
     const program = Effect.gen(function* () {
       const writer = yield* StoreWriter;
       const eventLog = yield* StoreEventLog;
 
-      const record = yield* writer.append(sampleStore, sampleEvent);
-      const lastId = yield* eventLog.getLastEventId(sampleStore);
+      const entry = yield* writer.append(sampleStore, sampleEvent);
+      const lastSeq = yield* eventLog.getLastEventSeq(sampleStore);
 
-      return { record, lastId };
+      return { entry, lastSeq };
     });
 
     const tempDir = await makeTempDir();
@@ -96,26 +96,26 @@ describe("StoreEventLog", () => {
       const layer = buildLayer(tempDir);
       const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-      expect(Option.isSome(result.lastId)).toBe(true);
-      if (Option.isSome(result.lastId)) {
-        expect(result.lastId.value).toEqual(result.record.id);
+      expect(Option.isSome(result.lastSeq)).toBe(true);
+      if (Option.isSome(result.lastSeq)) {
+        expect(result.lastSeq.value).toEqual(result.entry.seq);
       }
     } finally {
       await removeTempDir(tempDir);
     }
   });
 
-  test("getLastEventId returns last event ID after multiple appends", async () => {
+  test("getLastEventSeq returns last event seq after multiple appends", async () => {
     const program = Effect.gen(function* () {
       const writer = yield* StoreWriter;
       const eventLog = yield* StoreEventLog;
 
-      const record1 = yield* writer.append(sampleStore, sampleEvent);
-      const record2 = yield* writer.append(sampleStore, sampleEvent);
-      const record3 = yield* writer.append(sampleStore, sampleEvent);
-      const lastId = yield* eventLog.getLastEventId(sampleStore);
+      const entry1 = yield* writer.append(sampleStore, sampleEvent);
+      const entry2 = yield* writer.append(sampleStore, sampleEvent);
+      const entry3 = yield* writer.append(sampleStore, sampleEvent);
+      const lastSeq = yield* eventLog.getLastEventSeq(sampleStore);
 
-      return { record1, record2, record3, lastId };
+      return { entry1, entry2, entry3, lastSeq };
     });
 
     const tempDir = await makeTempDir();
@@ -123,16 +123,16 @@ describe("StoreEventLog", () => {
       const layer = buildLayer(tempDir);
       const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-      expect(Option.isSome(result.lastId)).toBe(true);
-      if (Option.isSome(result.lastId)) {
-        expect(result.lastId.value).toEqual(result.record3.id);
+      expect(Option.isSome(result.lastSeq)).toBe(true);
+      if (Option.isSome(result.lastSeq)) {
+        expect(result.lastSeq.value).toEqual(result.entry3.seq);
       }
     } finally {
       await removeTempDir(tempDir);
     }
   });
 
-  test("clear removes last event ID", async () => {
+  test("clear removes last event seq", async () => {
     const program = Effect.gen(function* () {
       const writer = yield* StoreWriter;
       const eventLog = yield* StoreEventLog;
@@ -140,11 +140,11 @@ describe("StoreEventLog", () => {
       yield* writer.append(sampleStore, sampleEvent);
       yield* writer.append(sampleStore, sampleEvent);
 
-      const lastIdBefore = yield* eventLog.getLastEventId(sampleStore);
+      const lastSeqBefore = yield* eventLog.getLastEventSeq(sampleStore);
       yield* eventLog.clear(sampleStore);
-      const lastIdAfter = yield* eventLog.getLastEventId(sampleStore);
+      const lastSeqAfter = yield* eventLog.getLastEventSeq(sampleStore);
 
-      return { lastIdBefore, lastIdAfter };
+      return { lastSeqBefore, lastSeqAfter };
     });
 
     const tempDir = await makeTempDir();
@@ -152,8 +152,8 @@ describe("StoreEventLog", () => {
       const layer = buildLayer(tempDir);
       const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-      expect(Option.isSome(result.lastIdBefore)).toBe(true);
-      expect(Option.isNone(result.lastIdAfter)).toBe(true);
+      expect(Option.isSome(result.lastSeqBefore)).toBe(true);
+      expect(Option.isNone(result.lastSeqAfter)).toBe(true);
     } finally {
       await removeTempDir(tempDir);
     }

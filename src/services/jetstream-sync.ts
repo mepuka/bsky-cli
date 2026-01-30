@@ -23,7 +23,7 @@ import { EventMeta, PostDelete, PostUpsert } from "../domain/events.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { filterExprSignature } from "../domain/filter.js";
 import type { Post } from "../domain/post.js";
-import { EventId, PostCid, PostUri, Timestamp } from "../domain/primitives.js";
+import { EventSeq, PostCid, PostUri, Timestamp } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
 import {
   DataSource,
@@ -54,7 +54,7 @@ export type JetstreamSyncConfig = {
 };
 
 type SyncOutcome =
-  | { readonly _tag: "Stored"; readonly eventId: EventId; readonly kind: "upsert" | "delete" }
+  | { readonly _tag: "Stored"; readonly eventSeq: EventSeq; readonly kind: "upsert" | "delete" }
   | { readonly _tag: "Skipped" }
   | { readonly _tag: "Error"; readonly error: SyncError };
 
@@ -74,7 +74,7 @@ type SyncProgressState = {
   readonly skipped: number;
   readonly errors: number;
   readonly lastReportAt: number;
-  readonly lastEventId: Option.Option<EventId>;
+  readonly lastEventSeq: Option.Option<EventSeq>;
   readonly lastCursor: Option.Option<string>;
 };
 
@@ -162,7 +162,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
               Effect.mapError(
                 toSyncError("store", "Failed to append event")
               ),
-              Effect.map((record) => record.id)
+              Effect.map((record) => record.seq)
             );
         });
 
@@ -182,7 +182,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                 toSyncError("store", "Failed to append event")
               )
             );
-          return Option.map(stored, (record) => record.id);
+          return Option.map(stored, (entry) => entry.seq);
         });
 
       const storeDelete = (
@@ -201,7 +201,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
               Effect.mapError(
                 toSyncError("store", "Failed to append event")
               ),
-              Effect.map((record) => record.id)
+              Effect.map((record) => record.seq)
             );
         });
 
@@ -219,8 +219,8 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
             const startTime = yield* Clock.currentTimeMillis;
             const strict = config.strict === true;
             const maxErrors = config.maxErrors;
-            const initialLastEventId = Option.flatMap(activeCheckpoint, (value) =>
-              Option.fromNullable(value.lastEventId)
+            const initialLastEventSeq = Option.flatMap(activeCheckpoint, (value) =>
+              Option.fromNullable(value.lastEventSeq)
             );
             const initialCursor = Option.orElse(
               Option.fromNullable(config.cursor),
@@ -234,7 +234,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
               skipped: 0,
               errors: 0,
               lastReportAt: startTime,
-              lastEventId: initialLastEventId,
+              lastEventSeq: initialLastEventSeq,
               lastCursor: initialCursor
             });
 
@@ -254,7 +254,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                   const checkpoint = SyncCheckpoint.make({
                     source: config.source,
                     cursor: cursorValue,
-                    lastEventId: Option.getOrUndefined(state.lastEventId),
+                    lastEventSeq: Option.getOrUndefined(state.lastEventSeq),
                     filterHash,
                     updatedAt
                   });
@@ -373,9 +373,9 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                               prepared.cid
                             ).pipe(
                               Effect.map(
-                                (eventId): SyncOutcome => ({
+                                (eventSeq): SyncOutcome => ({
                                   _tag: "Stored",
-                                  eventId,
+                                  eventSeq,
                                   kind: "delete"
                                 })
                               )
@@ -391,12 +391,12 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                         filterHash,
                         prepared.post
                       ).pipe(
-                        Effect.map((eventId) =>
-                          Option.match(eventId, {
+                        Effect.map((eventSeq) =>
+                          Option.match(eventSeq, {
                             onNone: () => skippedOutcome,
                             onSome: (value): SyncOutcome => ({
                               _tag: "Stored",
-                              eventId: value,
+                              eventSeq: value,
                               kind: "upsert"
                             })
                           })
@@ -409,9 +409,9 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                         prepared.post
                       ).pipe(
                         Effect.map(
-                          (eventId): SyncOutcome => ({
+                          (eventSeq): SyncOutcome => ({
                             _tag: "Stored",
-                            eventId,
+                            eventSeq,
                             kind: "upsert"
                           })
                         )
@@ -438,7 +438,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                 let deleted = 0;
                 let skipped = 0;
                 const errors: Array<SyncError> = [];
-                let lastEventId = Option.none<EventId>();
+                let lastEventSeq = Option.none<EventSeq>();
                 for (const outcome of outcomes) {
                   switch (outcome._tag) {
                     case "Stored":
@@ -447,7 +447,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                       } else {
                         added += 1;
                       }
-                      lastEventId = Option.some(outcome.eventId);
+                      lastEventSeq = Option.some(outcome.eventSeq);
                       break;
                     case "Skipped":
                       skipped += 1;
@@ -485,9 +485,9 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                       skipped: skippedTotal,
                       errors: errorsTotal,
                       lastReportAt: shouldReport ? now : state.lastReportAt,
-                      lastEventId: Option.isSome(lastEventId)
-                        ? lastEventId
-                        : state.lastEventId,
+                      lastEventSeq: Option.isSome(lastEventSeq)
+                        ? lastEventSeq
+                        : state.lastEventSeq,
                       lastCursor: Option.some(cursor)
                     };
                     return [{ nextState, shouldReport }, nextState];

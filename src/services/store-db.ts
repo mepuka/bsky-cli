@@ -171,6 +171,7 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
           );
 
           // Configure SQLite for optimal performance
+          yield* client`PRAGMA busy_timeout = 5000`;
           yield* client`PRAGMA journal_mode = WAL`;
           yield* client`PRAGMA synchronous = NORMAL`;
           yield* client`PRAGMA temp_store = MEMORY`;

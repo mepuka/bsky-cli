@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { BskyClient } from "../../src/services/bsky-client.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
@@ -74,7 +73,6 @@ const buildLayer = (storeRoot: string) => {
   const syncOverrides = Layer.succeed(SyncSettingsOverrides, {});
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
   const syncSettingsLayer = SyncSettings.layer.pipe(Layer.provide(syncOverrides));
-  const storageLayer = KeyValueStore.layerMemory;
   const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
   const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
@@ -87,7 +85,7 @@ const buildLayer = (storeRoot: string) => {
     Layer.provideMerge(writerLayer)
   );
   const checkpointLayer = SyncCheckpointStore.layer.pipe(
-    Layer.provideMerge(storageLayer)
+    Layer.provideMerge(storeDbLayer)
   );
 
   return SyncEngine.layer.pipe(
@@ -101,7 +99,6 @@ const buildLayer = (storeRoot: string) => {
     Layer.provideMerge(SyncReporter.layer),
     Layer.provideMerge(syncSettingsLayer),
     Layer.provideMerge(appConfigLayer),
-    Layer.provideMerge(storageLayer),
     Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(BunContext.layer)
   );
@@ -242,7 +239,6 @@ describe("SyncEngine", () => {
     const syncOverrides = Layer.succeed(SyncSettingsOverrides, {});
     const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
     const syncSettingsLayer = SyncSettings.layer.pipe(Layer.provide(syncOverrides));
-    const storageLayer = KeyValueStore.layerMemory;
     const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
     const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
     const indexLayer = StoreIndex.layer.pipe(
@@ -255,7 +251,7 @@ describe("SyncEngine", () => {
       Layer.provideMerge(writerLayer)
     );
     const checkpointLayer = SyncCheckpointStore.layer.pipe(
-      Layer.provideMerge(storageLayer)
+      Layer.provideMerge(storeDbLayer)
     );
 
     const layer = SyncEngine.layer.pipe(
@@ -269,7 +265,6 @@ describe("SyncEngine", () => {
       Layer.provideMerge(SyncReporter.layer),
       Layer.provideMerge(syncSettingsLayer),
       Layer.provideMerge(appConfigLayer),
-      Layer.provideMerge(storageLayer),
       Layer.provideMerge(storeDbLayer),
       Layer.provideMerge(BunContext.layer)
     );
@@ -317,7 +312,6 @@ describe("SyncEngine", () => {
     const syncOverrides = Layer.succeed(SyncSettingsOverrides, {});
     const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
     const syncSettingsLayer = SyncSettings.layer.pipe(Layer.provide(syncOverrides));
-    const storageLayer = KeyValueStore.layerMemory;
     const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
     const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
     const indexLayer = StoreIndex.layer.pipe(
@@ -330,7 +324,7 @@ describe("SyncEngine", () => {
       Layer.provideMerge(writerLayer)
     );
     const checkpointLayer = SyncCheckpointStore.layer.pipe(
-      Layer.provideMerge(storageLayer)
+      Layer.provideMerge(storeDbLayer)
     );
 
     const layer = SyncEngine.layer.pipe(
@@ -344,7 +338,6 @@ describe("SyncEngine", () => {
       Layer.provideMerge(SyncReporter.layer),
       Layer.provideMerge(syncSettingsLayer),
       Layer.provideMerge(appConfigLayer),
-      Layer.provideMerge(storageLayer),
       Layer.provideMerge(storeDbLayer),
       Layer.provideMerge(BunContext.layer)
     );

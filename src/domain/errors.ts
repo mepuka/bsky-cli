@@ -52,15 +52,6 @@ export class StoreIndexError extends Schema.TaggedError<StoreIndexError>()(
   { message: Schema.String, cause: Schema.optional(Schema.Unknown) }
 ) {}
 
-export class StoreLockError extends Schema.TaggedError<StoreLockError>()(
-  "StoreLockError",
-  {
-    store: StoreName,
-    path: StorePath,
-    message: Schema.String,
-    cause: Schema.optional(Schema.Unknown)
-  }
-) {}
 
 export class FilterNotFound extends Schema.TaggedError<FilterNotFound>()(
   "FilterNotFound",
@@ -77,4 +68,4 @@ export class FilterLibraryError extends Schema.TaggedError<FilterLibraryError>()
   }
 ) {}
 
-export type StoreError = StoreNotFound | StoreIoError | StoreIndexError | StoreLockError;
+export type StoreError = StoreNotFound | StoreIoError | StoreIndexError;
