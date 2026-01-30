@@ -5,6 +5,21 @@ import type { StoreRef } from "../domain/store.js";
 import { StorePath } from "../domain/primitives.js";
 import { AppConfigService } from "./app-config.js";
 
+const activeLockPaths = new Set<string>();
+
+const cleanupActiveLocks = (fs: FileSystem.FileSystem) =>
+  Effect.forEach(
+    Array.from(activeLockPaths),
+    (lockPath) =>
+      fs.remove(lockPath, { recursive: true }).pipe(
+        Effect.catchTag("SystemError", (error) =>
+          error.reason === "NotFound" ? Effect.void : Effect.fail(error)
+        ),
+        Effect.catchAll(() => Effect.void)
+      ),
+    { discard: true }
+  );
+
 type StoreLockService = {
   readonly withStoreLock: <A, E, R>(
     store: StoreRef,
@@ -24,12 +39,14 @@ export class StoreLock extends Context.Tag("@skygent/StoreLock")<
   StoreLock,
   StoreLockService
 >() {
-  static readonly layer = Layer.effect(
+  static readonly layer = Layer.scoped(
     StoreLock,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const config = yield* AppConfigService;
+
+      yield* Effect.addFinalizer(() => cleanupActiveLocks(fs));
 
       const lockRoot = path.join(config.storeRoot, "locks");
 
@@ -72,9 +89,17 @@ export class StoreLock extends Context.Tag("@skygent/StoreLock")<
             yield* fs.makeDirectory(lockPath, { recursive: false }).pipe(
               Effect.mapError(toStoreLockError(store, lockPath))
             );
+            activeLockPaths.add(lockPath);
             return lockPath;
           }),
-          (lockPath) => releaseLock(store, lockPath)
+          (lockPath) =>
+            releaseLock(store, lockPath).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  activeLockPaths.delete(lockPath);
+                })
+              )
+            )
         );
 
       const isStoreLockError = (error: unknown): error is StoreLockError =>
