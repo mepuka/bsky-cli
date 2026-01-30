@@ -209,6 +209,186 @@ type OptionValue = {
 const normalizeOptionKey = (key: string) =>
   key.trim().toLowerCase().replace(/[-_]/g, "");
 
+const normalizeFilterKey = (key: string) => key.trim().toLowerCase();
+
+const unsupportedFilterKeys = new Map<string, string>([
+  ["label", "Label filters are not supported yet."]
+]);
+
+const filterKeyHints = new Map<string, string>([
+  ["author", "author:handle"],
+  ["from", "author:handle"],
+  ["hashtag", "hashtag:#ai"],
+  ["tag", "hashtag:#ai"],
+  ["text", "text:\"hello\""],
+  ["contains", "text:\"hello\""],
+  ["regex", "regex:/hello/i"],
+  ["date", "date:2024-01-01..2024-01-31"],
+  ["range", "date:2024-01-01..2024-01-31"],
+  ["daterange", "date:2024-01-01..2024-01-31"],
+  ["trending", "trending:#ai"],
+  ["trend", "trending:#ai"],
+  ["language", "language:en"],
+  ["lang", "language:en"],
+  ["authorin", "authorin:alice,bob"],
+  ["authors", "authorin:alice,bob"],
+  ["hashtagin", "hashtagin:#ai,#ml"],
+  ["tags", "hashtagin:#ai,#ml"],
+  ["hashtags", "hashtagin:#ai,#ml"],
+  ["engagement", "engagement:minLikes=100"]
+]);
+
+type FilterSuggestion = {
+  readonly keys: ReadonlyArray<string>;
+  readonly suggestions: ReadonlyArray<string>;
+};
+
+const filterSuggestions: ReadonlyArray<FilterSuggestion> = [
+  {
+    keys: ["author", "from"],
+    suggestions: ["author:handle"]
+  },
+  {
+    keys: ["hashtag", "tag", "hashtags"],
+    suggestions: ["hashtag:#ai"]
+  },
+  {
+    keys: ["contains", "text"],
+    suggestions: ["text:\"hello\""]
+  },
+  {
+    keys: ["regex"],
+    suggestions: ["regex:/hello/i"]
+  },
+  {
+    keys: ["date", "range", "daterange"],
+    suggestions: ["date:2024-01-01..2024-01-31"]
+  },
+  {
+    keys: ["has", "hasimage", "hasimages", "image", "images"],
+    suggestions: ["has:images"]
+  },
+  {
+    keys: ["hasvideo", "hasvideos", "video", "videos"],
+    suggestions: ["has:video"]
+  },
+  {
+    keys: ["haslinks", "links", "link"],
+    suggestions: ["has:links"]
+  },
+  {
+    keys: ["hasmedia", "media"],
+    suggestions: ["has:media"]
+  },
+  {
+    keys: ["hasembed", "embed", "embeds"],
+    suggestions: ["has:embed"]
+  },
+  {
+    keys: ["language", "lang"],
+    suggestions: ["language:en"]
+  },
+  {
+    keys: ["trending", "trend"],
+    suggestions: ["trending:#ai"]
+  },
+  {
+    keys: ["engagement"],
+    suggestions: ["engagement:minLikes=100"]
+  },
+  {
+    keys: ["authorin", "authors"],
+    suggestions: ["authorin:alice,bob"]
+  },
+  {
+    keys: ["hashtagin", "tags"],
+    suggestions: ["hashtagin:#ai,#ml"]
+  },
+  {
+    keys: ["is", "type", "reply", "quote", "repost", "original"],
+    suggestions: ["is:reply"]
+  }
+];
+
+const defaultFilterExamples = [
+  "author:handle",
+  "hashtag:#ai",
+  "text:\"hello\""
+];
+
+const uniqueSuggestions = (items: ReadonlyArray<string>) =>
+  Array.from(new Set(items));
+
+const editDistance = (left: string, right: string) => {
+  const a = normalizeFilterKey(left);
+  const b = normalizeFilterKey(right);
+  const aLen = a.length;
+  const bLen = b.length;
+  if (aLen === 0) {
+    return bLen;
+  }
+  if (bLen === 0) {
+    return aLen;
+  }
+  const prev = Array.from({ length: bLen + 1 }, (_, index) => index);
+  for (let i = 0; i < aLen; i += 1) {
+    let current = i + 1;
+    const prevRow = prev.slice();
+    prev[0] = current;
+    for (let j = 0; j < bLen; j += 1) {
+      const cost = a[i] === b[j] ? 0 : 1;
+      const insert = (prev[j] ?? 0) + 1;
+      const remove = (prevRow[j + 1] ?? 0) + 1;
+      const replace = (prevRow[j] ?? 0) + cost;
+      current = Math.min(insert, remove, replace);
+      prev[j + 1] = current;
+    }
+  }
+  return prev[bLen] ?? 0;
+};
+
+const findFilterSuggestions = (rawKey: string) => {
+  const key = normalizeFilterKey(rawKey);
+  const prefixMatches = filterSuggestions.filter((entry) =>
+    entry.keys.some((candidate) =>
+      candidate.startsWith(key) || key.startsWith(candidate)
+    )
+  );
+  if (prefixMatches.length > 0) {
+    return uniqueSuggestions(
+      prefixMatches.flatMap((entry) => entry.suggestions)
+    ).slice(0, 3);
+  }
+  const scored = filterSuggestions
+    .map((entry) => ({
+      entry,
+      distance: Math.min(
+        ...entry.keys.map((candidate) => editDistance(key, candidate))
+      )
+    }))
+    .filter((item) => item.distance <= 2)
+    .sort((a, b) => a.distance - b.distance);
+  if (scored.length === 0) {
+    return [];
+  }
+  return uniqueSuggestions(
+    scored.flatMap((item) => item.entry.suggestions)
+  ).slice(0, 3);
+};
+
+const formatSuggestionHint = (suggestions: ReadonlyArray<string>) => {
+  if (suggestions.length === 0) {
+    return "";
+  }
+  if (suggestions.length === 1) {
+    return ` Did you mean "${suggestions[0]}"?`;
+  }
+  if (suggestions.length === 2) {
+    return ` Did you mean "${suggestions[0]}" or "${suggestions[1]}"?`;
+  }
+  return ` Did you mean "${suggestions[0]}", "${suggestions[1]}", or "${suggestions[2]}"?`;
+};
+
 const splitOptionSegments = (
   raw: string,
   position: number
@@ -794,10 +974,10 @@ class Parser {
       if (lower === "original" || lower === "isoriginal") {
         return { _tag: "IsOriginal" };
       }
-      if (lower === "hasimages" || lower === "images" || lower === "image") {
+      if (lower === "hasimages" || lower === "hasimage" || lower === "images" || lower === "image") {
         return { _tag: "HasImages" };
       }
-      if (lower === "hasvideo" || lower === "video" || lower === "videos") {
+      if (lower === "hasvideo" || lower === "hasvideos" || lower === "video" || lower === "videos") {
         return { _tag: "HasVideo" };
       }
       if (lower === "hasmedia" || lower === "media") {
@@ -815,16 +995,39 @@ class Parser {
 
       const colonIndex = value.indexOf(":");
       if (colonIndex === -1) {
+        const unsupported = unsupportedFilterKeys.get(lower);
+        if (unsupported) {
+          return yield* self.fail(
+            `Unknown filter type "${value}". ${unsupported}`,
+            token.position
+          );
+        }
+        const hint = filterKeyHints.get(lower);
+        if (hint) {
+          return yield* self.fail(
+            `Missing ":" after "${value}". Try "${hint}".`,
+            token.position
+          );
+        }
         return yield* self.fail(
           "Expected a filter expression like 'hashtag:#ai' or 'author:handle'.",
           token.position
         );
       }
 
-      const key = value.slice(0, colonIndex).toLowerCase();
+      const rawKey = value.slice(0, colonIndex);
+      const key = rawKey.toLowerCase();
       let rawValue = value.slice(colonIndex + 1);
       let valuePosition = token.position + colonIndex + 1;
       if (rawValue.length === 0) {
+        const next = self.peek();
+        if (next && next._tag === "Word") {
+          rawValue = next.value;
+          valuePosition = next.position;
+          self.advance();
+        }
+      }
+      if (key === "text" && normalizeFilterKey(rawValue) === "contains") {
         const next = self.peek();
         if (next && next._tag === "Word") {
           rawValue = next.value;
@@ -1104,8 +1307,23 @@ class Parser {
           yield* ensureNoUnknownOptions(options, self.input);
           return { _tag: "Trending", tag, onError: policy };
         }
-        default:
-          return yield* self.fail(`Unknown filter type "${key}".`, token.position);
+        default: {
+          const unsupported = unsupportedFilterKeys.get(key);
+          if (unsupported) {
+            return yield* self.fail(
+              `Unknown filter type "${rawKey}". ${unsupported}`,
+              token.position
+            );
+          }
+          const suggestions = findFilterSuggestions(key);
+          const hint = suggestions.length > 0
+            ? formatSuggestionHint(suggestions)
+            : ` Try "${defaultFilterExamples[0]}", "${defaultFilterExamples[1]}", or "${defaultFilterExamples[2]}".`;
+          return yield* self.fail(
+            `Unknown filter type "${rawKey}".${hint}`,
+            token.position
+          );
+        }
       }
     });
   }
