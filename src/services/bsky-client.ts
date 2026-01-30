@@ -965,11 +965,28 @@ const toRawPost = (post: PostView, feed?: FeedContext) =>
   });
 
 const toRawPostsFromFeed = (feed: ReadonlyArray<FeedViewPost>) =>
-  Effect.forEach(feed, (item) =>
+  Effect.partition(feed, (item, index) =>
     Effect.gen(function* () {
       const context = yield* mapFeedContext(item);
       return yield* toRawPost(item.post, context);
-    })
+    }).pipe(
+      Effect.tapError((error) =>
+        Effect.logWarning(`Skipping malformed feed item at index ${index}`, {
+          uri: item.post?.uri,
+          error: error.message
+        })
+      )
+    )
+  ).pipe(
+    Effect.tap(([errors, successes]) => {
+      if (errors.length > 0) {
+        return Effect.log(
+          `Feed sync: processed ${successes.length} posts, skipped ${errors.length} malformed items`
+        );
+      }
+      return Effect.void;
+    }),
+    Effect.map(([_, successes]) => successes)
   );
 
 const chunkArray = <A>(
