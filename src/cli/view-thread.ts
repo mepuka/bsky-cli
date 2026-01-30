@@ -117,7 +117,7 @@ export const threadCommand = Command.make(
         return;
       }
 
-      const doc = renderThread(posts, { compact });
+      const doc = renderThread(posts, { compact, lineWidth: w });
       yield* writeText(ansi ? renderAnsi(doc, w) : renderPlain(doc, w));
     })
 ).pipe(

@@ -23,6 +23,25 @@ const ensureNonEmpty = (value: string, message: string, cause: unknown) => {
   return Effect.void;
 };
 
+const scalarFieldHeads = new Set([
+  "uri",
+  "cid",
+  "author",
+  "authorDid",
+  "text",
+  "createdAt",
+  "hashtags",
+  "mentions",
+  "mentionDids",
+  "links",
+  "facets",
+  "langs",
+  "tags",
+  "selfLabels",
+  "labels",
+  "indexedAt"
+]);
+
 const parseFieldToken = (token: string) =>
   Effect.gen(function* () {
     const parts = token.split(".").map((segment) => segment.trim());
@@ -38,6 +57,19 @@ const parseFieldToken = (token: string) =>
         `Invalid field token "${token}".`,
         token
       );
+    }
+    if (parts.length > 1) {
+      const head = parts[0] ?? "";
+      if (scalarFieldHeads.has(head)) {
+        const suggestion =
+          head === "author"
+            ? ' Use "author" or "authorProfile.handle".'
+            : " Remove the dot path.";
+        return yield* CliInputError.make({
+          message: `Field "${token}" is not a valid path. "${head}" is a scalar field.${suggestion}`,
+          cause: token
+        });
+      }
     }
     const wildcardIndex = parts.indexOf("*");
     if (wildcardIndex >= 0 && wildcardIndex !== parts.length - 1) {

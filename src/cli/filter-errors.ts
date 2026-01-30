@@ -22,6 +22,7 @@ const validFilterTags = [
   "HasVideo",
   "HasLinks",
   "HasMedia",
+  "HasEmbed",
   "Language",
   "Regex",
   "DateRange",

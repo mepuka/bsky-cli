@@ -24,6 +24,7 @@ const conditionLine = (condition: FilterCondition): string => {
     case "HasVideo":      return `${prefix}include video`;
     case "HasLinks":      return `${prefix}include links`;
     case "HasMedia":      return `${prefix}include media`;
+    case "HasEmbed":      return `${prefix}include embeds`;
     case "Language":      return `${prefix}be in: ${condition.value}`;
     case "Regex":         return `${prefix}match regex: ${condition.value}`;
     case "DateRange":     return `${prefix}be in date range: ${condition.value}`;

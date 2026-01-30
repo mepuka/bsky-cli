@@ -42,6 +42,8 @@ Each entry shows a DSL example and the equivalent JSON.
   - `{"_tag":"HasLinks"}`
 - Media: `hasmedia`
   - `{"_tag":"HasMedia"}`
+- Embed: `hasembed`
+  - `{"_tag":"HasEmbed"}`
 - Language: `language:en,es`
   - `{"_tag":"Language","langs":["en","es"]}`
 
@@ -81,8 +83,18 @@ Defaults:
 - NOT: `NOT expr`
   - `{"_tag":"Not","expr":{...}}`
 
+## Aliases
+
+- `from:alice` → `author:alice`
+- `tag:#ai` → `hashtag:#ai`
+- `text:"hello"` → `contains:"hello"`
+- `lang:en` → `language:en`
+- `authors:alice,bob` → `authorin:alice,bob`
+- `tags:#ai,#ml` → `hashtagin:#ai,#ml`
+- `is:reply|quote|repost|original`
+- `has:images|video|links|media|embed`
+
 ## Named filters
 
 - Save: `skygent filter create tech --filter 'hashtag:#tech'`
 - Use: `@tech AND author:user.bsky.social`
-

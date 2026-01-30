@@ -28,6 +28,39 @@ const renderEmbedSummary = (embed: PostEmbed): SDoc => {
   }
 };
 
+const wrapText = (text: string, maxWidth?: number): ReadonlyArray<string> => {
+  const normalized = normalizeWhitespace(text);
+  if (!maxWidth || maxWidth <= 0) {
+    return [normalized];
+  }
+  const words = normalized.split(" ");
+  if (words.length === 0) {
+    return [normalized];
+  }
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    if (current.length === 0) {
+      if (word.length > maxWidth) {
+        lines.push(word);
+      } else {
+        current = word;
+      }
+      continue;
+    }
+    if (current.length + 1 + word.length <= maxWidth) {
+      current = `${current} ${word}`;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current.length > 0) {
+    lines.push(current);
+  }
+  return lines.length > 0 ? lines : [normalized];
+};
+
 export const renderPostCompact = (post: Post): SDoc => {
   const parts: SDoc[] = [
     ann("author", Doc.text(`@${post.author}`)),
@@ -58,6 +91,40 @@ export const renderPostCard = (post: Post): ReadonlyArray<SDoc> => {
   lines.push(Doc.reflow(normalizeWhitespace(post.text)));
 
   if (post.embed) lines.push(ann("embed", renderEmbedSummary(post.embed)));
+
+  if (post.metrics) {
+    const parts: SDoc[] = [];
+    const m = post.metrics;
+    if (m.likeCount != null && m.likeCount > 0) parts.push(metric("♥", m.likeCount));
+    if (m.repostCount != null && m.repostCount > 0) parts.push(metric("↻", m.repostCount));
+    if (m.replyCount != null && m.replyCount > 0) parts.push(metric("💬", m.replyCount));
+    if (m.quoteCount != null && m.quoteCount > 0) parts.push(metric("❝", m.quoteCount));
+    if (parts.length > 0) lines.push(Doc.hsep(parts));
+  }
+
+  return lines;
+};
+
+export const renderPostCardLines = (
+  post: Post,
+  options?: { lineWidth?: number }
+): ReadonlyArray<SDoc> => {
+  const lines: SDoc[] = [];
+
+  lines.push(Doc.hsep([
+    ann("author", Doc.text(`@${post.author}`)),
+    ann("dim", Doc.text("·")),
+    ann("timestamp", Doc.text(post.createdAt.toISOString()))
+  ]));
+
+  const textLines = wrapText(post.text, options?.lineWidth);
+  for (const line of textLines) {
+    lines.push(Doc.text(line));
+  }
+
+  if (post.embed) {
+    lines.push(ann("embed", renderEmbedSummary(post.embed)));
+  }
 
   if (post.metrics) {
     const parts: SDoc[] = [];

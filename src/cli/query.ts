@@ -67,7 +67,7 @@ const widthOption = Options.integer("width").pipe(
 );
 const fieldsOption = Options.text("fields").pipe(
   Options.withDescription(
-    "Comma-separated fields to include (supports dot notation and presets: @minimal, @social, @full)"
+    "Comma-separated fields to include (supports dot notation and presets: @minimal, @social, @full). Use author or authorProfile.handle for handles."
   ),
   Options.optional
 );
@@ -316,7 +316,7 @@ export const queryCommand = Command.make(
           yield* writeText(renderPostsTable(posts));
           return;
         case "thread": {
-          const doc = renderThread(posts, { compact: false });
+          const doc = renderThread(posts, { compact: false, lineWidth: w });
           yield* writeText(ansi ? renderAnsi(doc, w) : renderPlain(doc, w));
           return;
         }

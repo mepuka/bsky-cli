@@ -239,6 +239,13 @@ export interface FilterHasMedia {
 }
 
 /**
+ * Filter posts containing any embed (media, records, or external links).
+ */
+export interface FilterHasEmbed {
+  readonly _tag: "HasEmbed";
+}
+
+/**
  * Filter posts by language codes.
  *
  * Matches posts that have any of the specified languages in their `langs` field.
@@ -366,6 +373,7 @@ export type FilterExpr =
   | FilterHasVideo
   | FilterHasLinks
   | FilterHasMedia
+  | FilterHasEmbed
   | FilterLanguage
   | FilterRegex
   | FilterDateRange
@@ -443,6 +451,9 @@ interface FilterHasLinksEncoded {
 interface FilterHasMediaEncoded {
   readonly _tag: "HasMedia";
 }
+interface FilterHasEmbedEncoded {
+  readonly _tag: "HasEmbed";
+}
 interface FilterLanguageEncoded {
   readonly _tag: "Language";
   readonly langs: ReadonlyArray<string>;
@@ -488,6 +499,7 @@ type FilterExprEncoded =
   | FilterHasVideoEncoded
   | FilterHasLinksEncoded
   | FilterHasMediaEncoded
+  | FilterHasEmbedEncoded
   | FilterLanguageEncoded
   | FilterRegexEncoded
   | FilterDateRangeEncoded
@@ -584,6 +596,10 @@ const FilterHasMediaSchema: Schema.Schema<FilterHasMedia, FilterHasMediaEncoded,
   "HasMedia",
   {}
 );
+const FilterHasEmbedSchema: Schema.Schema<FilterHasEmbed, FilterHasEmbedEncoded, never> = Schema.TaggedStruct(
+  "HasEmbed",
+  {}
+);
 const LanguageList = Schema.Array(Schema.NonEmptyString).pipe(Schema.minItems(1));
 const FilterLanguageSchema: Schema.Schema<FilterLanguage, FilterLanguageEncoded, never> = Schema.TaggedStruct(
   "Language",
@@ -661,6 +677,7 @@ const FilterExprInternal: Schema.Schema<FilterExpr, FilterExprEncoded, never> = 
   FilterHasVideoSchema,
   FilterHasLinksSchema,
   FilterHasMediaSchema,
+  FilterHasEmbedSchema,
   FilterLanguageSchema,
   FilterRegexSchema,
   FilterDateRangeSchema,

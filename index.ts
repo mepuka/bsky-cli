@@ -94,11 +94,8 @@ const errorDetails = (
     return {
       error: {
         _tag: "BskyError",
-        message: error.message,
         ...(error.operation ? { operation: error.operation } : {}),
-        ...(typeof error.status === "number" ? { status: error.status } : {}),
-        ...(error.error ? { error: error.error } : {}),
-        ...(error.detail ? { detail: error.detail } : {})
+        ...(typeof error.status === "number" ? { status: error.status } : {})
       }
     };
   }

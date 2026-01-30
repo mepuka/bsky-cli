@@ -113,6 +113,8 @@ const formatLeafValue = (expr: FilterExpr): string => {
       return "links";
     case "HasMedia":
       return "media";
+    case "HasEmbed":
+      return "embed";
     case "Language":
       return expr.langs.join(", ");
     case "Regex": {
@@ -166,6 +168,8 @@ const formatLeafPhrase = (expr: FilterExpr): string => {
       return "with links";
     case "HasMedia":
       return "with media";
+    case "HasEmbed":
+      return "with embeds";
     case "Language":
       return `in ${expr.langs.join(", ")} language`;
     case "Regex": {
@@ -261,6 +265,8 @@ export const formatFilterExpr = (expr: FilterExpr, parentPrec = 0): string => {
       return "haslinks";
     case "HasMedia":
       return "hasmedia";
+    case "HasEmbed":
+      return "hasembed";
     case "Language":
       return `language:${expr.langs.join(",")}`;
     case "Regex": {
@@ -379,7 +385,30 @@ const describeClause = (expr: FilterExpr): FilterCondition => {
 
 const clausePhrase = (expr: FilterExpr): string => {
   if (expr._tag === "Not") {
-    return `not ${clausePhrase(expr.expr)}`;
+    const base = clausePhrase(expr.expr);
+    const normalized = base.trim();
+    if (normalized.startsWith("that are ")) {
+      return `that are not ${normalized.slice("that are ".length)}`;
+    }
+    if (normalized.startsWith("that is ")) {
+      return `that is not ${normalized.slice("that is ".length)}`;
+    }
+    if (normalized.startsWith("with ")) {
+      return `without ${normalized.slice("with ".length)}`;
+    }
+    if (normalized.startsWith("containing ")) {
+      return `not containing ${normalized.slice("containing ".length)}`;
+    }
+    if (normalized.startsWith("matching ")) {
+      return `not matching ${normalized.slice("matching ".length)}`;
+    }
+    if (normalized.startsWith("from ")) {
+      return `not from ${normalized.slice("from ".length)}`;
+    }
+    if (normalized.startsWith("in ")) {
+      return `not in ${normalized.slice("in ".length)}`;
+    }
+    return `not ${normalized}`;
   }
   if (expr._tag === "Or") {
     const terms = flattenOr(expr);
@@ -410,7 +439,14 @@ const summaryFor = (expr: FilterExpr): string => {
   if (expr._tag === "None") return "No posts";
   const clauses = flattenAnd(expr);
   const phrases = clauses.map(clausePhrase);
-  return `Posts ${phrases.join(" and ")}`;
+  const summary = phrases.reduce((acc, phrase, index) => {
+    if (index === 0) return phrase;
+    if (phrase.startsWith("that ")) {
+      return `${acc} ${phrase}`;
+    }
+    return `${acc} and ${phrase}`;
+  }, "");
+  return `Posts ${summary}`;
 };
 
 export const describeFilter = (expr: FilterExpr): FilterDescription => {
@@ -468,6 +504,8 @@ const conditionLine = (condition: FilterCondition) => {
       return `${prefix}include links`;
     case "HasMedia":
       return `${prefix}include media`;
+    case "HasEmbed":
+      return `${prefix}include embeds`;
     case "Language":
       return `${prefix}be in: ${condition.value}`;
     case "Regex":
