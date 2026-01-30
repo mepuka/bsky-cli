@@ -37,10 +37,11 @@ const testLayers = (storeRoot: string) => {
   );
   const lineageLayer = LineageStore.layer.pipe(Layer.provide(kvLayer));
   const syncCheckpointLayer = SyncCheckpointStore.layer.pipe(
-    Layer.provide(kvLayer)
+    Layer.provideMerge(storeDbLayer)
   );
   const viewCheckpointLayer = ViewCheckpointStore.layer.pipe(
-    Layer.provide(kvLayer)
+    Layer.provideMerge(storeDbLayer),
+    Layer.provideMerge(managerLayer)
   );
   const derivationValidatorLayer = DerivationValidator.layer.pipe(
     Layer.provideMerge(viewCheckpointLayer),
@@ -124,8 +125,8 @@ describe("StoreStats", () => {
         store,
         PostUpsert.make({ post: samplePostLater, meta: sampleMeta })
       );
-      yield* index.apply(store, record1);
-      yield* index.apply(store, record2);
+      yield* index.apply(store, record1.record);
+      yield* index.apply(store, record2.record);
 
       return yield* stats.stats(store);
     });

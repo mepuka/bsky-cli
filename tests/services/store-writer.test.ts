@@ -69,12 +69,12 @@ describe("StoreWriter", () => {
       const writer = yield* StoreWriter;
       const eventLog = yield* StoreEventLog;
 
-      const record = yield* writer.append(sampleStore, sampleEvent);
+      const entry = yield* writer.append(sampleStore, sampleEvent);
       const events = yield* eventLog
         .stream(sampleStore)
         .pipe(Stream.runCollect);
 
-      return { record, events };
+      return { entry, events };
     });
 
     const tempDir = await makeTempDir();
@@ -84,21 +84,21 @@ describe("StoreWriter", () => {
       const events = Chunk.toReadonlyArray(result.events);
 
       expect(events.length).toBe(1);
-      expect(events[0]!.id).toEqual(result.record.id);
+      expect(events[0]!.record.id).toEqual(result.entry.record.id);
     } finally {
       await removeTempDir(tempDir);
     }
   });
 
-  test("append updates last event ID", async () => {
+  test("append updates last event seq", async () => {
     const program = Effect.gen(function* () {
       const writer = yield* StoreWriter;
       const eventLog = yield* StoreEventLog;
 
-      const record = yield* writer.append(sampleStore, sampleEvent);
-      const lastId = yield* eventLog.getLastEventId(sampleStore);
+      const entry = yield* writer.append(sampleStore, sampleEvent);
+      const lastSeq = yield* eventLog.getLastEventSeq(sampleStore);
 
-      return { record, lastId };
+      return { entry, lastSeq };
     });
 
     const tempDir = await makeTempDir();
@@ -106,26 +106,26 @@ describe("StoreWriter", () => {
       const layer = buildLayer(tempDir);
       const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-      expect(Option.isSome(result.lastId)).toBe(true);
-      if (Option.isSome(result.lastId)) {
-        expect(result.lastId.value).toEqual(result.record.id);
+      expect(Option.isSome(result.lastSeq)).toBe(true);
+      if (Option.isSome(result.lastSeq)) {
+        expect(result.lastSeq.value).toEqual(result.entry.seq);
       }
     } finally {
       await removeTempDir(tempDir);
     }
   });
 
-  test("append updates last event ID with multiple events", async () => {
+  test("append updates last event seq with multiple events", async () => {
     const program = Effect.gen(function* () {
       const writer = yield* StoreWriter;
       const eventLog = yield* StoreEventLog;
 
-      const record1 = yield* writer.append(sampleStore, sampleEvent);
-      const record2 = yield* writer.append(sampleStore, sampleEvent);
-      const record3 = yield* writer.append(sampleStore, sampleEvent);
-      const lastId = yield* eventLog.getLastEventId(sampleStore);
+      const entry1 = yield* writer.append(sampleStore, sampleEvent);
+      const entry2 = yield* writer.append(sampleStore, sampleEvent);
+      const entry3 = yield* writer.append(sampleStore, sampleEvent);
+      const lastSeq = yield* eventLog.getLastEventSeq(sampleStore);
 
-      return { record1, record2, record3, lastId };
+      return { entry1, entry2, entry3, lastSeq };
     });
 
     const tempDir = await makeTempDir();
@@ -133,9 +133,9 @@ describe("StoreWriter", () => {
       const layer = buildLayer(tempDir);
       const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
-      expect(Option.isSome(result.lastId)).toBe(true);
-      if (Option.isSome(result.lastId)) {
-        expect(result.lastId.value).toEqual(result.record3.id);
+      expect(Option.isSome(result.lastSeq)).toBe(true);
+      if (Option.isSome(result.lastSeq)) {
+        expect(result.lastSeq.value).toEqual(result.entry3.seq);
       }
     } finally {
       await removeTempDir(tempDir);
@@ -152,7 +152,7 @@ describe("StoreWriter", () => {
         { concurrency: "unbounded" }
       );
 
-      return records.map((record) => record.id);
+      return records.map((record) => record.record.id);
     });
 
     const tempDir = await makeTempDir();

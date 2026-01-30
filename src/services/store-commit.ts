@@ -15,7 +15,7 @@ import { Context, Effect, Layer, Option } from "effect";
 import { StoreIoError } from "../domain/errors.js";
 import type { StorePath } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
-import { PostDelete, PostEventRecord, PostUpsert } from "../domain/events.js";
+import { type EventLogEntry, PostDelete, PostUpsert } from "../domain/events.js";
 import { StoreDb } from "./store-db.js";
 import { StoreWriter } from "./store-writer.js";
 import { deletePost, insertPostIfMissing, upsertPost } from "./store-index-sql.js";
@@ -66,7 +66,7 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
     readonly appendUpsert: (
       store: StoreRef,
       event: PostUpsert
-    ) => Effect.Effect<PostEventRecord, StoreIoError>;
+    ) => Effect.Effect<EventLogEntry, StoreIoError>;
 
     /**
      * Append an upsert event only if the post doesn't already exist.
@@ -83,7 +83,7 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
     readonly appendUpsertIfMissing: (
       store: StoreRef,
       event: PostUpsert
-    ) => Effect.Effect<Option.Option<PostEventRecord>, StoreIoError>;
+    ) => Effect.Effect<Option.Option<EventLogEntry>, StoreIoError>;
 
     /**
      * Append a delete event to the store, removing the post.
@@ -102,7 +102,7 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
     readonly appendDelete: (
       store: StoreRef,
       event: PostDelete
-    ) => Effect.Effect<PostEventRecord, StoreIoError>;
+    ) => Effect.Effect<EventLogEntry, StoreIoError>;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -134,10 +134,10 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
               Effect.gen(function* () {
                 const inserted = yield* insertPostIfMissing(client, event.post);
                 if (!inserted) {
-                  return Option.none<PostEventRecord>();
+                  return Option.none<EventLogEntry>();
                 }
-                const record = yield* writer.appendWithClient(client, event);
-                return Option.some(record);
+                const entry = yield* writer.appendWithClient(client, event);
+                return Option.some(entry);
               })
             )
           )

@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { Jetstream, JetstreamMessage } from "effect-jetstream";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
@@ -158,7 +157,6 @@ const makeTestLayer = (
 ) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
-  const storageLayer = KeyValueStore.layerMemory;
   const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
   const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
@@ -171,7 +169,7 @@ const makeTestLayer = (
     Layer.provideMerge(writerLayer)
   );
   const checkpointLayer = SyncCheckpointStore.layer.pipe(
-    Layer.provideMerge(storageLayer)
+    Layer.provideMerge(storeDbLayer)
   );
 
   return JetstreamSyncEngine.layer.pipe(
@@ -185,7 +183,6 @@ const makeTestLayer = (
     Layer.provideMerge(checkpointLayer),
     Layer.provideMerge(SyncReporter.layer),
     Layer.provideMerge(appConfigLayer),
-    Layer.provideMerge(storageLayer),
     Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(BunContext.layer)
   );

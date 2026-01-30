@@ -69,7 +69,7 @@ import type { FilterExpr } from "../domain/filter.js";
 import { filterExprSignature } from "../domain/filter.js";
 import { EventMeta, PostUpsert } from "../domain/events.js";
 import type { Post } from "../domain/post.js";
-import { EventId, Timestamp } from "../domain/primitives.js";
+import { EventSeq, Timestamp } from "../domain/primitives.js";
 import type { RawPost } from "../domain/raw.js";
 import type { StoreRef, SyncUpsertPolicy } from "../domain/store.js";
 import {
@@ -94,7 +94,7 @@ type PreparedOutcome =
 
 
 type SyncOutcome =
-  | { readonly _tag: "Stored"; readonly eventId: EventId }
+  | { readonly _tag: "Stored"; readonly eventSeq: EventSeq }
   | { readonly _tag: "Skipped" }
   | { readonly _tag: "Error"; readonly error: SyncError };
 
@@ -212,7 +212,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                         toSyncError("store", "Failed to append event")
                       )
                     );
-                  return Option.some(record.id);
+                  return Option.some(record.seq);
                 }
                 const stored = yield* committer
                   .appendUpsertIfMissing(target, event)
@@ -221,7 +221,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       toSyncError("store", "Failed to append event")
                     )
                   );
-                return Option.map(stored, (record) => record.id);
+                return Option.map(stored, (entry) => entry.seq);
               });
 
             const prepareRaw = (raw: RawPost): Effect.Effect<PreparedOutcome, SyncError> =>
@@ -257,7 +257,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                     const stored = yield* storePost(prepared.post);
                     return Option.match(stored, {
                       onNone: () => skippedOutcome,
-                      onSome: (eventId) => ({ _tag: "Stored", eventId } as const)
+                      onSome: (eventSeq) => ({ _tag: "Stored", eventSeq } as const)
                     });
                   }
                 }
@@ -350,7 +350,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
 
             type SyncState = {
               readonly result: SyncResult;
-              readonly lastEventId: Option.Option<EventId>;
+              readonly lastEventSeq: Option.Option<EventSeq>;
               readonly latestCursor: Option.Option<string>;
               readonly processed: number;
               readonly stored: number;
@@ -360,19 +360,19 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               readonly lastCheckpointAt: number;
             };
 
-            const resolveLastEventId = (candidate: Option.Option<EventId>) =>
+            const resolveLastEventSeq = (candidate: Option.Option<EventSeq>) =>
               Option.match(candidate, {
                 onNone: () =>
                   Option.flatMap(activeCheckpoint, (value) =>
-                    Option.fromNullable(value.lastEventId)
+                    Option.fromNullable(value.lastEventSeq)
                   ),
                 onSome: Option.some
               });
 
             const saveCheckpoint = (state: SyncState, now: number) => {
-              const lastEventId = resolveLastEventId(state.lastEventId);
+              const lastEventSeq = resolveLastEventSeq(state.lastEventSeq);
               const shouldSave =
-                Option.isSome(lastEventId) ||
+                Option.isSome(lastEventSeq) ||
                 Option.isSome(state.latestCursor) ||
                 Option.isSome(activeCheckpoint);
               if (!shouldSave) {
@@ -387,7 +387,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                   const checkpoint = SyncCheckpoint.make({
                     source,
                     cursor: Option.getOrUndefined(effectiveCursor),
-                    lastEventId: Option.getOrUndefined(lastEventId),
+                    lastEventSeq: Option.getOrUndefined(lastEventSeq),
                     filterHash,
                     updatedAt
                   });
@@ -405,7 +405,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
             const startTime = yield* Clock.currentTimeMillis;
             const initialState: SyncState = {
               result: initial,
-              lastEventId: Option.none<EventId>(),
+              lastEventSeq: Option.none<EventSeq>(),
               latestCursor: Option.none<string>(),
               processed: 0,
               stored: 0,
@@ -482,10 +482,10 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
 
                     const nextState: SyncState = {
                       result: SyncResultMonoid.combine(state.result, delta),
-                      lastEventId:
+                      lastEventSeq:
                         outcome._tag === "Stored"
-                          ? Option.some(outcome.eventId)
-                          : state.lastEventId,
+                          ? Option.some(outcome.eventSeq)
+                          : state.lastEventSeq,
                       latestCursor: nextCursor,
                       processed,
                       stored,

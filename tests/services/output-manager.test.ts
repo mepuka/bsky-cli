@@ -127,8 +127,8 @@ describe("OutputManager", () => {
 
       const record1 = yield* writer.append(storeRef, upsert1);
       const record2 = yield* writer.append(storeRef, upsert2);
-      yield* index.apply(storeRef, record1);
-      yield* index.apply(storeRef, record2);
+      yield* index.apply(storeRef, record1.record);
+      yield* index.apply(storeRef, record2.record);
 
       const result = yield* output.materializeStore(storeRef);
 

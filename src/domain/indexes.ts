@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { EventId, Handle, Hashtag, PostUri, Timestamp } from "./primitives.js";
+import { EventSeq, Handle, Hashtag, PostUri, Timestamp } from "./primitives.js";
 
 export class PostIndexEntry extends Schema.Class<PostIndexEntry>("PostIndexEntry")({
   uri: PostUri,
@@ -11,7 +11,7 @@ export class PostIndexEntry extends Schema.Class<PostIndexEntry>("PostIndexEntry
 export class IndexCheckpoint extends Schema.Class<IndexCheckpoint>("IndexCheckpoint")({
   index: Schema.String,
   version: Schema.NonNegativeInt,
-  lastEventId: EventId,
+  lastEventSeq: EventSeq,
   eventCount: Schema.NonNegativeInt,
   updatedAt: Timestamp
 }) {}

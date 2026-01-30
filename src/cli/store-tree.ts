@@ -108,8 +108,8 @@ const resolveSyncInfo = (
   checkpoints: SyncCheckpointStoreService
 ) =>
   Effect.gen(function* () {
-    const lastEventIdOption = yield* eventLog.getLastEventId(storeRef);
-    if (Option.isNone(lastEventIdOption)) {
+    const lastEventSeqOption = yield* eventLog.getLastEventSeq(storeRef);
+    if (Option.isNone(lastEventSeqOption)) {
       return { syncStatus: "empty" as const };
     }
     const [timelineCheckpoint, notificationsCheckpoint] = yield* Effect.all([
@@ -129,7 +129,7 @@ const resolveSyncInfo = (
       return { syncStatus: "unknown" as const };
     }
     const current =
-      latest.lastEventId && latest.lastEventId === lastEventIdOption.value
+      latest.lastEventSeq && latest.lastEventSeq === lastEventSeqOption.value
         ? ("current" as const)
         : ("stale" as const);
     return { syncStatus: current, lastSync: latest.updatedAt.toISOString() };

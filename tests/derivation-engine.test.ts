@@ -10,6 +10,7 @@ import { StoreWriter } from "../src/services/store-writer.js";
 import { StoreIndex } from "../src/services/store-index.js";
 import { StoreDb } from "../src/services/store-db.js";
 import { StoreCommitter } from "../src/services/store-commit.js";
+import { StoreManager } from "../src/services/store-manager.js";
 import { FilterRuntime } from "../src/services/filter-runtime.js";
 import { FilterCompiler } from "../src/services/filter-compiler.js";
 import { ViewCheckpointStore } from "../src/services/view-checkpoint-store.js";
@@ -23,6 +24,7 @@ import { Hashtag, PostCid, PostUri, Timestamp } from "../src/domain/primitives.j
 import { LinkValidator } from "../src/services/link-validator.js";
 import { TrendingTopics } from "../src/services/trending-topics.js";
 import { AppConfigService, ConfigOverrides } from "../src/services/app-config.js";
+import { defaultStoreConfig } from "../src/domain/defaults.js";
 
 // Mock services
 const MockLinkValidator = Layer.succeed(LinkValidator, {
@@ -54,11 +56,15 @@ const removeTempDir = (path: string) =>
     }).pipe(Effect.provide(BunContext.layer))
   );
 
+const sourceRef = StoreRef.make({ name: "source", root: "stores/source" });
+const targetRef = StoreRef.make({ name: "target", root: "stores/target" });
+
 const buildTestLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
   const storageLayer = KeyValueStore.layerMemory;
   const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const storeManagerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer));
   const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
     Layer.provideMerge(storeDbLayer),
@@ -69,12 +75,17 @@ const buildTestLayer = (storeRoot: string) => {
     Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(writerLayer)
   );
+  const checkpointLayer = ViewCheckpointStore.layer.pipe(
+    Layer.provideMerge(storeDbLayer),
+    Layer.provideMerge(storeManagerLayer)
+  );
+  const lineageLayer = LineageStore.layer.pipe(Layer.provideMerge(storageLayer));
   const otherStorage = Layer.mergeAll(
     writerLayer,
     committerLayer,
-    ViewCheckpointStore.layer,
-    LineageStore.layer
-  ).pipe(Layer.provideMerge(storageLayer));
+    checkpointLayer,
+    lineageLayer
+  );
   const filterServices = Layer.mergeAll(
     FilterRuntime.layer,
     FilterCompiler.layer
@@ -87,6 +98,7 @@ const buildTestLayer = (storeRoot: string) => {
     appConfigLayer,
     storageLayer,
     storeDbLayer,
+    storeManagerLayer,
     eventLogLayer,
     indexLayer,
     otherStorage,
@@ -105,7 +117,14 @@ const withTestLayer = async <A>(program: Effect.Effect<A>) => {
   const tempDir = await makeTempDir();
   const layer = buildTestLayer(tempDir);
   try {
-    return await Effect.runPromise(program.pipe(Effect.provide(layer)));
+    return await Effect.runPromise(
+      Effect.gen(function* () {
+        const manager = yield* StoreManager;
+        yield* manager.createStore(sourceRef.name, defaultStoreConfig);
+        yield* manager.createStore(targetRef.name, defaultStoreConfig);
+        return yield* program;
+      }).pipe(Effect.provide(layer))
+    );
   } finally {
     await removeTempDir(tempDir);
   }
@@ -132,9 +151,6 @@ const createTestMeta = (): EventMeta =>
   });
 
 describe("DerivationEngine", () => {
-  const sourceRef = StoreRef.make({ name: "source", root: "stores/source" });
-  const targetRef = StoreRef.make({ name: "target", root: "stores/target" });
-
   test("rejects when source and target are the same store", () => withTestLayer(
     Effect.gen(function* () {
       const engine = yield* DerivationEngine;
@@ -170,7 +186,7 @@ describe("DerivationEngine", () => {
       for (const post of posts) {
         const event = PostUpsert.make({ post, meta: createTestMeta() });
         const record = yield* writer.append(sourceRef, event);
-        yield* index.apply(sourceRef, record);
+        yield* index.apply(sourceRef, record.record);
       }
 
       const result = yield* engine.derive(sourceRef, targetRef, filter, {
@@ -193,7 +209,7 @@ describe("DerivationEngine", () => {
       const post = createTestPost("at://test/post1", "Test");
       const upsertEvent = PostUpsert.make({ post, meta: createTestMeta() });
       const upsertRecord = yield* writer.append(sourceRef, upsertEvent);
-      yield* index.apply(sourceRef, upsertRecord);
+      yield* index.apply(sourceRef, upsertRecord.record);
 
       const deleteEvent = PostDelete.make({
         uri: post.uri,
@@ -201,7 +217,7 @@ describe("DerivationEngine", () => {
         meta: createTestMeta()
       });
       const deleteRecord = yield* writer.append(sourceRef, deleteEvent);
-      yield* index.apply(sourceRef, deleteRecord);
+      yield* index.apply(sourceRef, deleteRecord.record);
 
       const result = yield* engine.derive(sourceRef, targetRef, filter, {
         mode: "EventTime",
@@ -230,7 +246,7 @@ describe("DerivationEngine", () => {
       for (const post of posts) {
         const event = PostUpsert.make({ post, meta: createTestMeta() });
         const record = yield* writer.append(sourceRef, event);
-        yield* index.apply(sourceRef, record);
+        yield* index.apply(sourceRef, record.record);
       }
 
       const result = yield* engine.derive(sourceRef, targetRef, filter, {
@@ -279,7 +295,7 @@ describe("DerivationEngine", () => {
       const existingPost = createTestPost("at://test/existing", "Existing");
       const existingEvent = PostUpsert.make({ post: existingPost, meta: createTestMeta() });
       const existingRecord = yield* writer.append(targetRef, existingEvent);
-      yield* index.apply(targetRef, existingRecord);
+      yield* index.apply(targetRef, existingRecord.record);
 
       // Verify it exists
       const beforeReset = yield* index.hasUri(targetRef, existingPost.uri);
@@ -289,7 +305,7 @@ describe("DerivationEngine", () => {
       const post = createTestPost("at://test/post1", "New");
       const event = PostUpsert.make({ post, meta: createTestMeta() });
       const record = yield* writer.append(sourceRef, event);
-      yield* index.apply(sourceRef, record);
+      yield* index.apply(sourceRef, record.record);
 
       // Derive with reset
       yield* engine.derive(sourceRef, targetRef, filter, {
@@ -320,7 +336,7 @@ describe("DerivationEngine", () => {
       for (const post of posts) {
         const event = PostUpsert.make({ post, meta: createTestMeta() });
         const record = yield* writer.append(sourceRef, event);
-        yield* index.apply(sourceRef, record);
+        yield* index.apply(sourceRef, record.record);
       }
 
       // First derivation
@@ -362,7 +378,7 @@ describe("DerivationEngine", () => {
       const post = createTestPost("at://test/post1", "Hello #one", ["#one"]);
       const event = PostUpsert.make({ post, meta: createTestMeta() });
       const record = yield* writer.append(sourceRef, event);
-      yield* index.apply(sourceRef, record);
+      yield* index.apply(sourceRef, record.record);
 
       yield* engine.derive(sourceRef, targetRef, all(), {
         mode: "EventTime",
@@ -396,7 +412,7 @@ describe("DerivationEngine", () => {
       const targetPost = createTestPost("at://test/target1", "Existing");
       const targetEvent = PostUpsert.make({ post: targetPost, meta: createTestMeta() });
       const targetRecord = yield* writer.append(targetRef, targetEvent);
-      yield* index.apply(targetRef, targetRecord);
+      yield* index.apply(targetRef, targetRecord.record);
 
       const result = yield* engine.derive(sourceRef, targetRef, all(), {
         mode: "EventTime",
@@ -430,7 +446,7 @@ describe("DerivationEngine", () => {
       for (const post of initialPosts) {
         const event = PostUpsert.make({ post, meta: createTestMeta() });
         const record = yield* writer.append(sourceRef, event);
-        yield* index.apply(sourceRef, record);
+        yield* index.apply(sourceRef, record.record);
       }
 
       // First derivation
@@ -451,7 +467,7 @@ describe("DerivationEngine", () => {
       for (const post of newPosts) {
         const event = PostUpsert.make({ post, meta: createTestMeta() });
         const record = yield* writer.append(sourceRef, event);
-        yield* index.apply(sourceRef, record);
+        yield* index.apply(sourceRef, record.record);
       }
 
       // Second derivation (incremental)
@@ -491,12 +507,12 @@ describe("DerivationEngine", () => {
       // Add matching post
       const event1 = PostUpsert.make({ post: matchingPost, meta: createTestMeta() });
       const record1 = yield* writer.append(sourceRef, event1);
-      yield* index.apply(sourceRef, record1);
+      yield* index.apply(sourceRef, record1.record);
 
       // Add non-matching post
       const event2 = PostUpsert.make({ post: nonMatchingPost, meta: createTestMeta() });
       const record2 = yield* writer.append(sourceRef, event2);
-      yield* index.apply(sourceRef, record2);
+      yield* index.apply(sourceRef, record2.record);
 
       // Add delete event
       const deleteEvent = PostDelete.make({
@@ -505,7 +521,7 @@ describe("DerivationEngine", () => {
         meta: createTestMeta()
       });
       const deleteRecord = yield* writer.append(sourceRef, deleteEvent);
-      yield* index.apply(sourceRef, deleteRecord);
+      yield* index.apply(sourceRef, deleteRecord.record);
 
       const result = yield* engine.derive(sourceRef, targetRef, filter, {
         mode: "EventTime",
@@ -535,7 +551,7 @@ describe("DerivationEngine", () => {
       const post = createTestPost("at://test/post1", "First");
       const event = PostUpsert.make({ post, meta: createTestMeta() });
       const record = yield* writer.append(sourceRef, event);
-      yield* index.apply(sourceRef, record);
+      yield* index.apply(sourceRef, record.record);
 
       // First derivation to create checkpoint
       const first = yield* engine.derive(sourceRef, targetRef, filter, {

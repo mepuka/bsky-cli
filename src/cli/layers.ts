@@ -33,7 +33,6 @@ import { FilterLibrary } from "../services/filter-library.js";
 import { StoreStats } from "../services/store-stats.js";
 import { ProfileResolver } from "../services/profile-resolver.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
-import { StoreLock } from "../services/store-lock.js";
 
 const appConfigLayer = AppConfigService.layer;
 const credentialLayer = CredentialStore.layer.pipe(Layer.provideMerge(appConfigLayer));
@@ -69,7 +68,7 @@ const cleanerLayer = StoreCleaner.layer.pipe(
   Layer.provideMerge(storeDbLayer)
 );
 const checkpointLayer = SyncCheckpointStore.layer.pipe(
-  Layer.provideMerge(storageLayer)
+  Layer.provideMerge(storeDbLayer)
 );
 const linkValidatorLayer = LinkValidator.layer.pipe(
   Layer.provideMerge(storageLayer),
@@ -105,11 +104,9 @@ const profileResolverLayer = ProfileResolver.layer.pipe(
   Layer.provideMerge(bskyLayer),
   Layer.provideMerge(identityResolverLayer)
 );
-const storeLockLayer = StoreLock.layer.pipe(
-  Layer.provideMerge(appConfigLayer)
-);
 const viewCheckpointLayer = ViewCheckpointStore.layer.pipe(
-  Layer.provideMerge(storageLayer)
+  Layer.provideMerge(storeDbLayer),
+  Layer.provideMerge(managerLayer)
 );
 const lineageLayer = LineageStore.layer.pipe(
   Layer.provideMerge(storageLayer)
@@ -174,6 +171,5 @@ export const CliLive = Layer.mergeAll(
   postParserLayer,
   filterLibraryLayer,
   profileResolverLayer,
-  identityResolverLayer,
-  storeLockLayer
+  identityResolverLayer
 );

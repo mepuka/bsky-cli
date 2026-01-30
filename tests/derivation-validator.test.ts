@@ -2,7 +2,6 @@ import { test, expect, describe } from "bun:test";
 import { Effect, Layer, Option, Schema } from "effect";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import { DerivationValidator } from "../src/services/derivation-validator.js";
 import { ViewCheckpointStore } from "../src/services/view-checkpoint-store.js";
 import { StoreEventLog } from "../src/services/store-event-log.js";
@@ -77,23 +76,28 @@ const removeTempDir = (path: string) =>
 const buildTestLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
-  const storageLayer = KeyValueStore.layerMemory;
   const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+  const storeManagerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer));
   const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
     Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(eventLogLayer)
   );
+  const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
+  const checkpointLayer = ViewCheckpointStore.layer.pipe(
+    Layer.provideMerge(storeDbLayer),
+    Layer.provideMerge(storeManagerLayer)
+  );
   const storageServices = Layer.mergeAll(
-    StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer)),
-    StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer)),
-    ViewCheckpointStore.layer
-  ).pipe(Layer.provideMerge(storageLayer));
+    writerLayer,
+    storeManagerLayer,
+    checkpointLayer
+  );
 
   return Layer.mergeAll(
     appConfigLayer,
-    storageLayer,
     storeDbLayer,
+    storeManagerLayer,
     eventLogLayer,
     indexLayer,
     storageServices,
@@ -131,8 +135,11 @@ describe("DerivationValidator", () => {
     Effect.gen(function* () {
       const validator = yield* DerivationValidator;
       const checkpoints = yield* ViewCheckpointStore;
+      const manager = yield* StoreManager;
       const viewName = createTestStoreName("view-store");
       const sourceName = createTestStoreName("nonexistent-source");
+
+      yield* manager.createStore(viewName, defaultStoreConfig);
 
       // Create a checkpoint
       const checkpoint = DerivationCheckpoint.make({
@@ -162,6 +169,8 @@ describe("DerivationValidator", () => {
       const viewName = createTestStoreName("view-store");
       const sourceName = createTestStoreName("empty-source");
 
+      yield* manager.createStore(viewName, defaultStoreConfig);
+
       // Create the source store (empty)
       yield* manager.createStore(
         sourceName,
@@ -188,7 +197,7 @@ describe("DerivationValidator", () => {
     }))
   );
 
-  test("returns true when checkpoint has no lastSourceEventId", () => withTestLayer(
+  test("returns true when checkpoint has no lastSourceEventSeq", () => withTestLayer(
     Effect.gen(function* () {
       const validator = yield* DerivationValidator;
       const checkpoints = yield* ViewCheckpointStore;
@@ -198,6 +207,8 @@ describe("DerivationValidator", () => {
       const viewName = createTestStoreName("view-store");
       const sourceName = createTestStoreName("source-store");
 
+      yield* manager.createStore(viewName, defaultStoreConfig);
+
       // Create source store with an event
       yield* manager.createStore(
         sourceName,
@@ -206,10 +217,10 @@ describe("DerivationValidator", () => {
       const sourceRef = yield* getStoreRef(manager, sourceName);
       const post = createTestPost("at://test/post1", "Test post");
       const event = PostUpsert.make({ post, meta: createTestMeta() });
-      const record = yield* writer.append(sourceRef, event);
-      yield* index.apply(sourceRef, record);
+      const entry = yield* writer.append(sourceRef, event);
+      yield* index.apply(sourceRef, entry.record);
 
-      // Create checkpoint without lastSourceEventId
+      // Create checkpoint without lastSourceEventSeq
       const checkpoint = DerivationCheckpoint.make({
         viewName,
         sourceStore: sourceName,
@@ -220,7 +231,7 @@ describe("DerivationValidator", () => {
         eventsMatched: 0,
         deletesPropagated: 0,
         updatedAt: createTestTimestamp()
-        // lastSourceEventId is undefined
+        // lastSourceEventSeq is undefined
       });
       yield* checkpoints.save(checkpoint);
 
@@ -240,6 +251,8 @@ describe("DerivationValidator", () => {
       const viewName = createTestStoreName("view-store");
       const sourceName = createTestStoreName("source-store");
 
+      yield* manager.createStore(viewName, defaultStoreConfig);
+
       // Create source store with an event
       yield* manager.createStore(
         sourceName,
@@ -248,17 +261,17 @@ describe("DerivationValidator", () => {
       const sourceRef = yield* getStoreRef(manager, sourceName);
       const post = createTestPost("at://test/post1", "Test post");
       const event = PostUpsert.make({ post, meta: createTestMeta() });
-      const record = yield* writer.append(sourceRef, event);
-      yield* index.apply(sourceRef, record);
+      const entry = yield* writer.append(sourceRef, event);
+      yield* index.apply(sourceRef, entry.record);
 
-      // Create checkpoint with the same lastSourceEventId
+      // Create checkpoint with the same lastSourceEventSeq
       const checkpoint = DerivationCheckpoint.make({
         viewName,
         sourceStore: sourceName,
         targetStore: viewName,
         filterHash: "abc123",
         evaluationMode: "EventTime",
-        lastSourceEventId: record.id,
+        lastSourceEventSeq: entry.seq,
         eventsProcessed: 1,
         eventsMatched: 1,
         deletesPropagated: 0,
@@ -282,6 +295,8 @@ describe("DerivationValidator", () => {
       const viewName = createTestStoreName("view-store");
       const sourceName = createTestStoreName("source-store");
 
+      yield* manager.createStore(viewName, defaultStoreConfig);
+
       // Create source store with first event
       yield* manager.createStore(
         sourceName,
@@ -290,8 +305,8 @@ describe("DerivationValidator", () => {
       const sourceRef = yield* getStoreRef(manager, sourceName);
       const post1 = createTestPost("at://test/post1", "First post");
       const event1 = PostUpsert.make({ post: post1, meta: createTestMeta() });
-      const record1 = yield* writer.append(sourceRef, event1);
-      yield* index.apply(sourceRef, record1);
+      const entry1 = yield* writer.append(sourceRef, event1);
+      yield* index.apply(sourceRef, entry1.record);
 
       // Create checkpoint tracking first event
       const checkpoint = DerivationCheckpoint.make({
@@ -300,7 +315,7 @@ describe("DerivationValidator", () => {
         targetStore: viewName,
         filterHash: "abc123",
         evaluationMode: "EventTime",
-        lastSourceEventId: record1.id,
+        lastSourceEventSeq: entry1.seq,
         eventsProcessed: 1,
         eventsMatched: 1,
         deletesPropagated: 0,
@@ -311,8 +326,8 @@ describe("DerivationValidator", () => {
       // Add a second event to source (making it stale)
       const post2 = createTestPost("at://test/post2", "Second post");
       const event2 = PostUpsert.make({ post: post2, meta: createTestMeta() });
-      const record2 = yield* writer.append(sourceRef, event2);
-      yield* index.apply(sourceRef, record2);
+      const entry2 = yield* writer.append(sourceRef, event2);
+      yield* index.apply(sourceRef, entry2.record);
 
       const isStale = yield* validator.isStale(viewName, sourceName);
 

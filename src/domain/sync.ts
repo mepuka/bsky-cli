@@ -5,7 +5,7 @@ import { MonoidSum } from "@effect/typeclass/data/Number";
 import { AuthorFeedFilter } from "./bsky.js";
 import { FilterExprSchema } from "./filter.js";
 import { StoreRef, SyncUpsertPolicy } from "./store.js";
-import { EventId, Timestamp } from "./primitives.js";
+import { EventSeq, Timestamp } from "./primitives.js";
 
 export const SyncStage = Schema.Literal("source", "parse", "filter", "store");
 export type SyncStage = typeof SyncStage.Type;
@@ -166,7 +166,7 @@ export class SyncProgress extends Schema.Class<SyncProgress>("SyncProgress")({
 export class SyncCheckpoint extends Schema.Class<SyncCheckpoint>("SyncCheckpoint")({
   source: DataSourceSchema,
   cursor: Schema.optional(Schema.String),
-  lastEventId: Schema.optional(EventId),
+  lastEventSeq: Schema.optional(EventSeq),
   filterHash: Schema.optional(Schema.String),
   updatedAt: Timestamp
 }) {}

@@ -56,12 +56,6 @@ export const maxErrorsOption = Options.integer("max-errors").pipe(
   Options.optional
 );
 
-/** --wait option (optional) */
-export const waitOption = Options.text("wait").pipe(
-  Options.withDescription("Wait up to duration for store locks (e.g. \"30 seconds\")"),
-  Options.optional
-);
-
 /** Positional arg for feed URI */
 export const feedUriArg = Args.text({ name: "uri" }).pipe(
   Args.withDescription("Bluesky feed URI (at://...)")

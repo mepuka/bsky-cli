@@ -1,9 +1,9 @@
-import { Clock, Context, Effect, Layer, Random, Schema, SynchronizedRef } from "effect";
+import { Clock, Context, Effect, Layer, Option, Random, Schema, SynchronizedRef } from "effect";
 import type * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import { StoreIoError } from "../domain/errors.js";
-import { PostEvent, PostEventRecord } from "../domain/events.js";
-import { EventId, PostUri } from "../domain/primitives.js";
+import { type EventLogEntry, PostEvent, PostEventRecord } from "../domain/events.js";
+import { EventId, EventSeq, PostUri } from "../domain/primitives.js";
 import type { StorePath } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
 import { StoreDb } from "./store-db.js";
@@ -49,8 +49,6 @@ const incrementRandomDigits = (digits: ReadonlyArray<number>) => {
   return { digits: next, overflow: true } as const;
 };
 
-const eventLogMetaKey = "last_event_id";
-
 const eventLogInsertRow = Schema.Struct({
   event_id: EventId,
   event_type: Schema.String,
@@ -60,9 +58,8 @@ const eventLogInsertRow = Schema.Struct({
   source: Schema.String
 });
 
-const eventLogMetaRow = Schema.Struct({
-  key: Schema.String,
-  value: Schema.String
+const eventLogSeqRow = Schema.Struct({
+  event_seq: EventSeq
 });
 
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
@@ -74,11 +71,11 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
     readonly append: (
       store: StoreRef,
       event: PostEvent
-    ) => Effect.Effect<PostEventRecord, StoreIoError>;
+    ) => Effect.Effect<EventLogEntry, StoreIoError>;
     readonly appendWithClient: (
       client: SqlClient.SqlClient,
       event: PostEvent
-    ) => Effect.Effect<PostEventRecord, unknown>;
+    ) => Effect.Effect<EventLogEntry, unknown>;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -148,32 +145,31 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
                 ? record.event.meta.createdAt.toISOString()
                 : new Date(record.event.meta.createdAt).toISOString();
 
-            const insertEvent = SqlSchema.void({
+            const insertEvent = SqlSchema.findOne({
               Request: eventLogInsertRow,
+              Result: eventLogSeqRow,
               execute: (row) =>
-                client`INSERT INTO event_log ${client.insert(row)}`
-            });
-            const upsertMeta = SqlSchema.void({
-              Request: eventLogMetaRow,
-              execute: (row) =>
-                client`INSERT INTO event_log_meta (key, value)
-                  VALUES (${row.key}, ${row.value})
-                  ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+                client`INSERT INTO event_log ${client.insert(row)}
+                  RETURNING event_seq`
             });
 
-            yield* insertEvent({
+            const inserted = yield* insertEvent({
               event_id: record.id,
               event_type: record.event._tag,
               post_uri: postUri,
               payload_json: payloadJson,
               created_at: createdAt,
               source: record.event.meta.source
-            });
-            yield* upsertMeta({
-              key: eventLogMetaKey,
-              value: record.id
-            });
-            return record;
+            }).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onNone: () =>
+                    Effect.dieMessage("Expected event_seq from event_log insert."),
+                  onSome: (row) => Effect.succeed(row)
+                })
+              )
+            );
+            return { seq: inserted.event_seq, record } satisfies EventLogEntry;
           })
       );
 

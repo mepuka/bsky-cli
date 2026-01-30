@@ -83,8 +83,9 @@ import {
   StoreLineage,
   StoreSource
 } from "../domain/derivation.js";
-import { EventMeta, PostDelete, PostEventRecord, PostUpsert } from "../domain/events.js";
-import { EventId, Timestamp } from "../domain/primitives.js";
+import { EventMeta, PostDelete, PostUpsert } from "../domain/events.js";
+import type { EventLogEntry } from "../domain/events.js";
+import { EventSeq, Timestamp } from "../domain/primitives.js";
 import type { FilterCompileError, FilterEvalError, StoreIndexError, StoreIoError } from "../domain/errors.js";
 
 /**
@@ -253,8 +254,8 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             const filterHash = filterExprSignature(filterExpr);
 
             if (!options.reset && Option.isNone(checkpointOption)) {
-              const lastTargetId = yield* eventLog.getLastEventId(targetRef);
-              if (Option.isSome(lastTargetId)) {
+              const lastTargetSeq = yield* eventLog.getLastEventSeq(targetRef);
+              if (Option.isSome(lastTargetSeq)) {
                 return yield* DerivationError.make({
                   reason:
                     "Target store has existing data but no derivation checkpoint. Use --reset to rebuild or choose a new target store.",
@@ -277,10 +278,10 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             }
 
             // Check if checkpoint is valid (matching filter and mode)
-            // Schema.optional makes lastSourceEventId EventId | undefined
-            const startAfter: Option.Option<EventId> = Option.flatMap(checkpointOption, (cp) => {
+            // Schema.optional makes lastSourceEventSeq EventSeq | undefined
+            const startAfter: Option.Option<EventSeq> = Option.flatMap(checkpointOption, (cp) => {
               if (cp.filterHash === filterHash && cp.evaluationMode === options.mode) {
-                return Option.fromNullable(cp.lastSourceEventId);
+                return Option.fromNullable(cp.lastSourceEventSeq);
               }
               return Option.none();
             });
@@ -290,7 +291,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
               readonly matched: number;
               readonly skipped: number;
               readonly deletes: number;
-              readonly lastSourceId: Option.Option<EventId>;
+              readonly lastSourceSeq: Option.Option<EventSeq>;
               readonly lastCheckpointAt: number;
             };
 
@@ -303,7 +304,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
                     targetStore: targetRef.name,
                     filterHash,
                     evaluationMode: options.mode,
-                    lastSourceEventId: Option.getOrUndefined(state.lastSourceId),
+                    lastSourceEventSeq: Option.getOrUndefined(state.lastSourceSeq),
                     eventsProcessed: state.processed,
                     eventsMatched: state.matched,
                     deletesPropagated: state.deletes,
@@ -324,7 +325,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
               matched: 0,
               skipped: 0,
               deletes: 0,
-              lastSourceId: Option.none<EventId>(),
+              lastSourceSeq: Option.none<EventSeq>(),
               lastCheckpointAt: startTimeMillis
             };
 
@@ -343,17 +344,17 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
                 return nextState;
               });
 
-            const processRecord = (state: DerivationState, record: PostEventRecord) =>
+            const processRecord = (state: DerivationState, entry: EventLogEntry) =>
               Effect.gen(function* () {
-                const event = record.event;
-                const nextLast = Option.some(record.id);
+                const event = entry.record.event;
+                const nextLast = Option.some(entry.seq);
 
                 const baseState: DerivationState = {
                   processed: state.processed + 1,
                   matched: state.matched,
                   skipped: state.skipped,
                   deletes: state.deletes,
-                  lastSourceId: nextLast,
+                  lastSourceSeq: nextLast,
                   lastCheckpointAt: state.lastCheckpointAt
                 };
 
@@ -415,10 +416,10 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
 
             // Event streaming with runFoldEffect + periodic checkpoints
             const fold = eventLog.stream(sourceRef).pipe(
-              Stream.filter((record) =>
+              Stream.filter((entry) =>
                 Option.match(startAfter, {
                   onNone: () => true,
-                  onSome: (id: EventId) => record.id.localeCompare(id) > 0
+                  onSome: (seq: EventSeq) => entry.seq > seq
                 })
               ),
               Stream.runFoldEffect(initialState, processRecord)
@@ -450,16 +451,16 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             );
 
             // Checkpoint saving: always record materialization attempt
-            const lastSourceIdOption = Option.isSome(result.lastSourceId)
-              ? result.lastSourceId
-              : yield* eventLog.getLastEventId(sourceRef);
+            const lastSourceSeqOption = Option.isSome(result.lastSourceSeq)
+              ? result.lastSourceSeq
+              : yield* eventLog.getLastEventSeq(sourceRef);
             const checkpoint = DerivationCheckpoint.make({
               viewName: targetRef.name,
               sourceStore: sourceRef.name,
               targetStore: targetRef.name,
               filterHash,
               evaluationMode: options.mode,
-              lastSourceEventId: Option.getOrUndefined(lastSourceIdOption),
+              lastSourceEventSeq: Option.getOrUndefined(lastSourceSeqOption),
               eventsProcessed: result.processed,
               eventsMatched: result.matched,
               deletesPropagated: result.deletes,

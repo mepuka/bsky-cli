@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { Post } from "./post.js";
-import { EventId, PostCid, PostUri, Timestamp, StoreName } from "./primitives.js";
+import { EventId, EventSeq, PostCid, PostUri, Timestamp, StoreName } from "./primitives.js";
 import { FilterExprSchema } from "./filter.js";
 
 export const StoreQueryOrder = Schema.Literal("asc", "desc");
@@ -41,6 +41,11 @@ export class PostEventRecord extends Schema.Class<PostEventRecord>("PostEventRec
   version: Schema.Literal(1),
   event: PostEvent
 }) {}
+
+export type EventLogEntry = {
+  readonly seq: EventSeq;
+  readonly record: PostEventRecord;
+};
 
 export class StoreQuery extends Schema.Class<StoreQuery>("StoreQuery")({
   range: Schema.optional(Schema.Struct({ start: Timestamp, end: Timestamp })),
