@@ -46,6 +46,32 @@ describe("filter DSL", () => {
     });
   });
 
+  test("parses from: alias for author", async () => {
+    const result = await Effect.runPromise(
+      parseFilterDsl("from:alice.bsky.social").pipe(
+        Effect.provide(emptyLibraryLayer)
+      )
+    );
+
+    expect(result).toMatchObject({
+      _tag: "Author",
+      handle: "alice.bsky.social"
+    });
+  });
+
+  test("parses text:contains alias", async () => {
+    const result = await Effect.runPromise(
+      parseFilterDsl("text:contains \"hello\"").pipe(
+        Effect.provide(emptyLibraryLayer)
+      )
+    );
+
+    expect(result).toMatchObject({
+      _tag: "Contains",
+      text: "hello"
+    });
+  });
+
   test("rejects unknown filter type", async () => {
     const result = await Effect.runPromise(
       Effect.either(
@@ -56,6 +82,19 @@ describe("filter DSL", () => {
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") {
       expect(result.left.message).toContain("Unknown filter type");
+    }
+  });
+
+  test("rejects label filter with guidance", async () => {
+    const result = await Effect.runPromise(
+      Effect.either(
+        parseFilterDsl("label:nsfw").pipe(Effect.provide(emptyLibraryLayer))
+      )
+    );
+
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left.message).toContain("not supported");
     }
   });
 
