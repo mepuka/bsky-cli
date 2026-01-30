@@ -1,5 +1,5 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Chunk, Clock, Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Chunk, Clock, Context, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import { StoreQuery } from "../domain/events.js";
 import type { Post } from "../domain/post.js";
 import { Post as PostSchema } from "../domain/post.js";
@@ -10,7 +10,7 @@ import { StoreIndex } from "./store-index.js";
 import { StoreManager } from "./store-manager.js";
 import { AppConfigService } from "./app-config.js";
 import { traverseFilterEffect } from "../typeclass/chunk.js";
-import { renderPostsMarkdown } from "../domain/format.js";
+import { renderPostMarkdownRow, renderPostsMarkdownHeader } from "../domain/format.js";
 import {
   FilterCompileError,
   FilterEvalError,
@@ -19,6 +19,7 @@ import {
 } from "../domain/errors.js";
 import { defaultStoreConfig } from "../domain/defaults.js";
 import { StorePath, Timestamp } from "../domain/primitives.js";
+import { FilterSettings } from "./filter-settings.js";
 
 export interface MaterializedFilterOutput {
   readonly name: string;
@@ -43,39 +44,20 @@ const toStoreIoError = (path: string) => (cause: unknown) =>
 const ensureTrailingNewline = (value: string) =>
   value.endsWith("\n") ? value : `${value}\n`;
 
-const encodePostsJson = (posts: ReadonlyArray<Post>) =>
-  Schema.encodeSync(Schema.parseJson(Schema.Array(PostSchema)))(posts);
+const encodePostJson = (post: Post) =>
+  Schema.encodeSync(Schema.parseJson(PostSchema))(post);
 
 const encodeManifestJson = (manifest: unknown) =>
   Schema.encodeSync(Schema.parseJson(Schema.Unknown))(manifest);
 
-const materializePosts = (
-  posts: ReadonlyArray<Post>,
-  outputDir: string,
-  output: FilterSpec["output"],
+const appendFileString = (
   fs: FileSystem.FileSystem,
-  path: Path.Path
+  targetPath: string,
+  value: string
 ) =>
-  Effect.gen(function* () {
-    const jsonPath = output.json ? path.join(outputDir, "posts.json") : undefined;
-    const markdownPath = output.markdown ? path.join(outputDir, "posts.md") : undefined;
-
-    if (jsonPath) {
-      const json = ensureTrailingNewline(encodePostsJson(posts));
-      yield* fs
-        .writeFileString(jsonPath, json)
-        .pipe(Effect.mapError(toStoreIoError(jsonPath)));
-    }
-
-    if (markdownPath) {
-      const markdown = ensureTrailingNewline(renderPostsMarkdown(posts));
-      yield* fs
-        .writeFileString(markdownPath, markdown)
-        .pipe(Effect.mapError(toStoreIoError(markdownPath)));
-    }
-
-    return { jsonPath, markdownPath } as const;
-  });
+  fs
+    .writeFileString(targetPath, value, { flag: "a" })
+    .pipe(Effect.mapError(toStoreIoError(targetPath)));
 
 const resolveOutputDir = (
   path: Path.Path,
@@ -98,6 +80,7 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
       const compiler = yield* FilterCompiler;
       const runtime = yield* FilterRuntime;
       const index = yield* StoreIndex;
+      const filterSettings = yield* FilterSettings;
 
       const outputDir = resolveOutputDir(path, config.storeRoot, store, spec.output.path);
       yield* fs
@@ -111,22 +94,67 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
         Stream.grouped(50),
         Stream.mapEffect((batch) =>
           traverseFilterEffect(batch, predicate, {
-            concurrency: "unbounded",
+            concurrency: filterSettings.concurrency,
             batching: true
           }).pipe(Effect.withRequestBatching(true))
         ),
         Stream.mapConcat((chunk) => Chunk.toReadonlyArray(chunk))
       );
-      const collected = yield* Stream.runCollect(filtered);
-      const posts = Chunk.toReadonlyArray(collected);
+      const jsonPath = spec.output.json ? path.join(outputDir, "posts.json") : undefined;
+      const markdownPath = spec.output.markdown ? path.join(outputDir, "posts.md") : undefined;
 
-      const { jsonPath, markdownPath } = yield* materializePosts(
-        posts,
-        outputDir,
-        spec.output,
-        fs,
-        path
-      );
+      if (jsonPath) {
+        yield* fs
+          .writeFileString(jsonPath, "[")
+          .pipe(Effect.mapError(toStoreIoError(jsonPath)));
+      }
+      if (markdownPath) {
+        const header = `${renderPostsMarkdownHeader()}\n`;
+        yield* fs
+          .writeFileString(markdownPath, header)
+          .pipe(Effect.mapError(toStoreIoError(markdownPath)));
+      }
+
+      const countRef = yield* Ref.make(0);
+      const jsonFirstRef = jsonPath ? yield* Ref.make(true) : undefined;
+
+      const writeBatch = (batch: Chunk.Chunk<Post>) =>
+        Effect.gen(function* () {
+          const posts = Chunk.toReadonlyArray(batch);
+          if (posts.length === 0) {
+            return;
+          }
+          if (jsonPath && jsonFirstRef) {
+            const isFirst = yield* Ref.get(jsonFirstRef);
+            let first = isFirst;
+            const jsonChunk = posts
+              .map((post) => {
+                const prefix = first ? "" : ",";
+                first = false;
+                return `${prefix}${encodePostJson(post)}`;
+              })
+              .join("");
+            yield* appendFileString(fs, jsonPath, jsonChunk);
+            if (isFirst) {
+              yield* Ref.set(jsonFirstRef, false);
+            }
+          }
+          if (markdownPath) {
+            const markdownChunk = posts
+              .map((post) => `${renderPostMarkdownRow(post)}\n`)
+              .join("");
+            yield* appendFileString(fs, markdownPath, markdownChunk);
+          }
+          yield* Ref.update(countRef, (count) => count + posts.length);
+        });
+
+      yield* filtered.pipe(Stream.grouped(50), Stream.runForEach(writeBatch));
+
+      if (jsonPath && jsonFirstRef) {
+        yield* appendFileString(fs, jsonPath, "]\n");
+      }
+
+      const postsCount = yield* Ref.get(countRef);
 
       const updatedAt = yield* Clock.currentTimeMillis.pipe(
         Effect.flatMap((now) =>
@@ -137,7 +165,7 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
 
       const manifest = {
         name: spec.name,
-        count: posts.length,
+        count: postsCount,
         updatedAt: updatedAt.toISOString(),
         output: {
           json: jsonPath ? path.basename(jsonPath) : undefined,
@@ -157,7 +185,7 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
         outputPath: outputDir,
         jsonPath,
         markdownPath,
-        count: posts.length,
+        count: postsCount,
         updatedAt
       } satisfies MaterializedFilterOutput;
     })
@@ -196,6 +224,7 @@ export class OutputManager extends Context.Tag("@skygent/OutputManager")<
       const runtime = yield* FilterRuntime;
       const index = yield* StoreIndex;
       const manager = yield* StoreManager;
+      const filterSettings = yield* FilterSettings;
 
       type OutputManagerDeps =
         | AppConfigService
@@ -203,7 +232,8 @@ export class OutputManager extends Context.Tag("@skygent/OutputManager")<
         | Path.Path
         | FilterCompiler
         | FilterRuntime
-        | StoreIndex;
+        | StoreIndex
+        | FilterSettings;
 
       const provideDeps = <A, E>(effect: Effect.Effect<A, E, OutputManagerDeps>) =>
         effect.pipe(
@@ -212,7 +242,8 @@ export class OutputManager extends Context.Tag("@skygent/OutputManager")<
           Effect.provideService(Path.Path, path),
           Effect.provideService(FilterCompiler, compiler),
           Effect.provideService(FilterRuntime, runtime),
-          Effect.provideService(StoreIndex, index)
+          Effect.provideService(StoreIndex, index),
+          Effect.provideService(FilterSettings, filterSettings)
         );
 
       const materializeStore = Effect.fn("OutputManager.materializeStore")(

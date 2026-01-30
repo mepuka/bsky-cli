@@ -418,7 +418,10 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
 
             const state = yield* stream.pipe(
               Stream.mapError(toSyncError("source", "Source stream failed")),
-              Stream.mapEffect(prepareRaw, { concurrency: settings.concurrency }),
+              Stream.mapEffect(prepareRaw, {
+                concurrency: settings.concurrency,
+                unordered: false
+              }),
               Stream.runFoldEffect(
                 initialState,
                 (state, prepared) =>

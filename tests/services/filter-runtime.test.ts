@@ -4,6 +4,7 @@ import { FilterExprSchema } from "../../src/domain/filter.js";
 import { Post } from "../../src/domain/post.js";
 import { EmbedExternal, EmbedRecord, EmbedRecordUnknown } from "../../src/domain/bsky.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
+import { FilterSettings } from "../../src/services/filter-settings.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
 import { TrendingTopics } from "../../src/services/trending-topics.js";
 
@@ -95,6 +96,7 @@ const trendingLayer = Layer.succeed(
 );
 
 const runtimeLayer = FilterRuntime.layer.pipe(
+  Layer.provideMerge(FilterSettings.layer),
   Layer.provideMerge(linkValidatorLayer),
   Layer.provideMerge(trendingLayer)
 );

@@ -67,3 +67,6 @@ Sync settings:
 - `SKYGENT_SYNC_CHECKPOINT_EVERY` -- persist a checkpoint after this many ingested items. Must be a positive integer. Default: `100`.
 - `SKYGENT_SYNC_CHECKPOINT_INTERVAL_MS` -- minimum milliseconds between time-based checkpoints. Must be non-negative. Default: `5000`.
 
+Filter settings:
+
+- `SKYGENT_FILTER_CONCURRENCY` -- number of concurrent filter evaluations per batch. Must be a positive integer. Default: `10`.

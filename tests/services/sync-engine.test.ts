@@ -4,6 +4,7 @@ import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { BskyClient } from "../../src/services/bsky-client.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
+import { FilterSettings } from "../../src/services/filter-settings.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
 import { PostParser } from "../../src/services/post-parser.js";
 import { StoreEventLog } from "../../src/services/store-event-log.js";
@@ -48,6 +49,7 @@ const bskyLayer = Layer.succeed(
 );
 
 const filterRuntimeLayer = FilterRuntime.layer.pipe(
+  Layer.provideMerge(FilterSettings.layer),
   Layer.provideMerge(LinkValidator.testLayer),
   Layer.provideMerge(TrendingTopics.testLayer)
 );

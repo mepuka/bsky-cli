@@ -87,6 +87,7 @@ const regexMatches = (regex: RegExp, text: string) => {
 };
 import { LinkValidator } from "./link-validator.js";
 import { TrendingTopics } from "./trending-topics.js";
+import { FilterSettings } from "./filter-settings.js";
 
 type Predicate = (post: Post) => Effect.Effect<boolean, FilterEvalError>;
 type Explainer = (post: Post) => Effect.Effect<FilterExplanation, FilterEvalError>;
@@ -784,6 +785,7 @@ export class FilterRuntime extends Context.Tag("@skygent/FilterRuntime")<
     Effect.gen(function* () {
       const links = yield* LinkValidator;
       const trending = yield* TrendingTopics;
+      const settings = yield* FilterSettings;
       const evaluate = Effect.fn("FilterRuntime.evaluate")((expr: FilterExpr) =>
         buildPredicate(links, trending)(expr)
       );
@@ -801,7 +803,7 @@ export class FilterRuntime extends Context.Tag("@skygent/FilterRuntime")<
           Effect.map((predicate) => (posts: Chunk.Chunk<Post>) =>
             Effect.all(Array.from(posts, (post) => predicate(post)), {
               batching: true,
-              concurrency: "unbounded"
+              concurrency: settings.concurrency
             }).pipe(
               Effect.map(Chunk.fromIterable),
               Effect.withRequestBatching(true)

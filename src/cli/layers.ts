@@ -28,6 +28,7 @@ import { DerivationSettings } from "../services/derivation-settings.js";
 import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
 import { LineageStore } from "../services/lineage-store.js";
 import { FilterCompiler } from "../services/filter-compiler.js";
+import { FilterSettings } from "../services/filter-settings.js";
 import { OutputManager } from "../services/output-manager.js";
 import { FilterLibrary } from "../services/filter-library.js";
 import { StoreStats } from "../services/store-stats.js";
@@ -81,7 +82,9 @@ const trendingTopicsLayer = TrendingTopics.layer.pipe(
 const resourceMonitorLayer = ResourceMonitor.layer.pipe(
   Layer.provideMerge(appConfigLayer)
 );
+const filterSettingsLayer = FilterSettings.layer;
 const runtimeLayer = FilterRuntime.layer.pipe(
+  Layer.provideMerge(filterSettingsLayer),
   Layer.provideMerge(linkValidatorLayer),
   Layer.provideMerge(trendingTopicsLayer)
 );
@@ -133,6 +136,7 @@ const outputManagerLayer = OutputManager.layer.pipe(
   Layer.provideMerge(managerLayer),
   Layer.provideMerge(indexLayer),
   Layer.provideMerge(runtimeLayer),
+  Layer.provideMerge(filterSettingsLayer),
   Layer.provideMerge(compilerLayer)
 );
 const filterLibraryLayer = FilterLibrary.layer.pipe(
@@ -151,6 +155,7 @@ const storeStatsLayer = StoreStats.layer.pipe(
 
 export const CliLive = Layer.mergeAll(
   appConfigLayer,
+  filterSettingsLayer,
   credentialLayer,
   CliOutput.layer,
   resourceMonitorLayer,

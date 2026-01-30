@@ -12,6 +12,7 @@ import {
 import { Post } from "../../src/domain/post.js";
 import { Handle, Hashtag, PostUri, Timestamp } from "../../src/domain/primitives.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
+import { FilterSettings } from "../../src/services/filter-settings.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
 import { TrendingTopics } from "../../src/services/trending-topics.js";
 
@@ -64,6 +65,7 @@ const failingLinkLayer = Layer.succeed(
 
 const runtimeLayerForLinks = (linkLayer: Layer.Layer<never, never, LinkValidator>) =>
   FilterRuntime.layer.pipe(
+    Layer.provideMerge(FilterSettings.layer),
     Layer.provideMerge(TrendingTopics.testLayer),
     Layer.provideMerge(linkLayer)
   );

@@ -12,6 +12,7 @@ import { StoreDb } from "../src/services/store-db.js";
 import { StoreCommitter } from "../src/services/store-commit.js";
 import { StoreManager } from "../src/services/store-manager.js";
 import { FilterRuntime } from "../src/services/filter-runtime.js";
+import { FilterSettings } from "../src/services/filter-settings.js";
 import { FilterCompiler } from "../src/services/filter-compiler.js";
 import { ViewCheckpointStore } from "../src/services/view-checkpoint-store.js";
 import { LineageStore } from "../src/services/lineage-store.js";
@@ -87,7 +88,8 @@ const buildTestLayer = (storeRoot: string) => {
     lineageLayer
   );
   const filterServices = Layer.mergeAll(
-    FilterRuntime.layer,
+    FilterRuntime.layer.pipe(Layer.provideMerge(FilterSettings.layer)),
+    FilterSettings.layer,
     FilterCompiler.layer
   ).pipe(
     Layer.provideMerge(MockLinkValidator),

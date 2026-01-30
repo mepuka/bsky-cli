@@ -11,12 +11,14 @@ import {
   Timestamp
 } from "../../src/domain/index.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
+import { FilterSettings } from "../../src/services/filter-settings.js";
 import { LinkValidator } from "../../src/services/link-validator.js";
 import { TrendingTopics } from "../../src/services/trending-topics.js";
 import { SyncError, SyncResult, SyncResultMonoid } from "../../src/domain/sync.js";
 import type { FilterExpr } from "../../src/domain/filter.js";
 
 const runtimeLayer = FilterRuntime.layer.pipe(
+  Layer.provideMerge(FilterSettings.layer),
   Layer.provideMerge(LinkValidator.testLayer),
   Layer.provideMerge(TrendingTopics.testLayer)
 );

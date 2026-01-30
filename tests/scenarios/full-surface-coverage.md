@@ -75,9 +75,6 @@ skygent sync timeline --store flag-test --quiet
 # --refresh
 skygent sync timeline --store flag-test --refresh
 
-# --wait
-skygent sync timeline --store flag-test --wait "10 seconds"
-
 # --filter (DSL)
 skygent sync timeline --store flag-test --filter "has:images"
 
