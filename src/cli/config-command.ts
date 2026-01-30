@@ -1,8 +1,10 @@
 import { Command } from "@effect/cli";
 import { FileSystem, Path } from "@effect/platform";
+import { Options } from "@effect/cli";
 import { Clock, Effect, Option, Stream } from "effect";
 import { withExamples } from "./help.js";
-import { writeJson } from "./output.js";
+import { writeJson, writeText } from "./output.js";
+import { renderTableLegacy } from "./doc/table.js";
 import { AppConfigService } from "../services/app-config.js";
 import { CredentialStore } from "../services/credential-store.js";
 import { BskyClient } from "../services/bsky-client.js";
@@ -30,7 +32,12 @@ const checkError = (name: string, message: string): CheckResult => ({
   message
 });
 
-const configCheckCommand = Command.make("check", {}, () =>
+const checkFormatOption = Options.choice("format", ["json", "table"]).pipe(
+  Options.withDescription("Output format (default: json)"),
+  Options.optional
+);
+
+const configCheckCommand = Command.make("check", { format: checkFormatOption }, ({ format }) =>
   Effect.gen(function* () {
     const results: Array<CheckResult> = [];
 
@@ -100,6 +107,19 @@ const configCheckCommand = Command.make("check", {}, () =>
     }
 
     const ok = results.every((result) => result.status !== "error");
+    const outputFormat = Option.getOrElse(format, () => "json" as const);
+    
+    if (outputFormat === "table") {
+      const rows = results.map((r) => [
+        r.status === "ok" ? "✓" : r.status === "warn" ? "⚠" : "✗",
+        r.name,
+        r.message || r.status
+      ]);
+      const table = renderTableLegacy(["STATUS", "CHECK", "DETAILS"], rows);
+      yield* writeText(`${ok ? "✓ Config valid" : "✗ Config has errors"}\n\n${table}`);
+      return;
+    }
+    
     yield* writeJson({ ok, checks: results });
   })
 ).pipe(
