@@ -1,5 +1,6 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Option, Stream } from "effect";
+import { renderTableLegacy } from "./doc/table.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { PostParser } from "../services/post-parser.js";
 import { StoreIndex } from "../services/store-index.js";
@@ -104,23 +105,6 @@ const formatOption = Options.choice("format", ["json", "ndjson", "table"]).pipe(
 
 type LocalSort = "relevance" | "newest" | "oldest";
 
-const renderTable = (
-  headers: ReadonlyArray<string>,
-  rows: ReadonlyArray<ReadonlyArray<string>>
-) => {
-  const widths = headers.map((header, i) => {
-    const values = rows.map((row) => row[i] ?? "");
-    return Math.max(header.length, ...values.map((value) => value.length));
-  });
-  const line = (cells: ReadonlyArray<string>) =>
-    cells
-      .map((cell, i) => (cell ?? "").padEnd(widths[i] ?? 0))
-      .join("  ")
-      .trimEnd();
-  const separator = widths.map((width) => "-".repeat(width)).join("  ").trimEnd();
-  return [line(headers), separator, ...rows.map(line)].join("\n");
-};
-
 const renderProfileTable = (
   actors: ReadonlyArray<ProfileView>,
   cursor: string | undefined
@@ -130,7 +114,7 @@ const renderProfileTable = (
     actor.displayName ?? "",
     actor.did
   ]);
-  const table = renderTable(["HANDLE", "DISPLAY NAME", "DID"], rows);
+  const table = renderTableLegacy(["HANDLE", "DISPLAY NAME", "DID"], rows);
   return cursor ? `${table}\n\nCursor: ${cursor}` : table;
 };
 
@@ -144,7 +128,7 @@ const renderFeedTable = (
     feed.uri,
     typeof feed.likeCount === "number" ? String(feed.likeCount) : ""
   ]);
-  const table = renderTable(["NAME", "CREATOR", "URI", "LIKES"], rows);
+  const table = renderTableLegacy(["NAME", "CREATOR", "URI", "LIKES"], rows);
   return cursor ? `${table}\n\nCursor: ${cursor}` : table;
 };
 

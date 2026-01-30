@@ -19,6 +19,7 @@ import { storeOptions } from "./store.js";
 import { describeFilter, formatFilterExpr } from "../domain/filter-describe.js";
 import { renderFilterDescriptionDoc } from "./doc/filter.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
+import { renderTableLegacy } from "./doc/table.js";
 import { withExamples } from "./help.js";
 import { filterOption, filterJsonOption } from "./shared-options.js";
 
@@ -49,6 +50,10 @@ const describeFormatOption = Options.choice("format", ["text", "json"]).pipe(
 );
 const testFormatOption = Options.choice("format", ["text", "json"]).pipe(
   Options.withDescription("Output format for filter tests (default: text)"),
+  Options.optional
+);
+const listFormatOption = Options.choice("format", ["json", "table"]).pipe(
+  Options.withDescription("Output format (default: json)"),
   Options.optional
 );
 const describeAnsiOption = Options.boolean("ansi").pipe(
@@ -139,10 +144,22 @@ const loadPost = (
     });
   });
 
-export const filterList = Command.make("list", {}, () =>
+export const filterList = Command.make("list", { format: listFormatOption }, ({ format }) =>
   Effect.gen(function* () {
     const library = yield* FilterLibrary;
     const names = yield* library.list();
+    const outputFormat = Option.getOrElse(format, () => "json" as const);
+    
+    if (outputFormat === "table") {
+      const filters = yield* Effect.forEach(names, (name) =>
+        library.get(name as StoreName).pipe(Effect.map((expr) => ({ name, expr: formatFilterExpr(expr) })))
+      );
+      const rows = filters.map((f) => [f.name, f.expr]);
+      const table = renderTableLegacy(["NAME", "EXPRESSION"], rows);
+      yield* writeText(table);
+      return;
+    }
+    
     yield* writeJson(names);
   })
 ).pipe(

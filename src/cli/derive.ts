@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Effect, Option } from "effect";
+import { Clock, Effect, Option } from "effect";
 import { filterExprSignature, isEffectfulFilter } from "../domain/filter.js";
 import { defaultStoreConfig } from "../domain/defaults.js";
 import { StoreName } from "../domain/primitives.js";
@@ -65,6 +65,7 @@ export const deriveCommand = Command.make(
   },
   ({ source, target, filter, filterJson, mode, reset, yes }) =>
     Effect.gen(function* () {
+      const startTime = yield* Clock.currentTimeMillis;
       const engine = yield* DerivationEngine;
       const checkpoints = yield* ViewCheckpointStore;
       const manager = yield* StoreManager;
@@ -159,6 +160,18 @@ export const deriveCommand = Command.make(
           filters: materialized.filters.map((spec) => spec.name)
         });
       }
+
+      // Calculate duration and percentage
+      const endTime = yield* Clock.currentTimeMillis;
+      const duration = (endTime - startTime) / 1000;
+      const percentage = result.eventsProcessed > 0 
+        ? ((result.eventsMatched / result.eventsProcessed) * 100).toFixed(1)
+        : "0.0";
+      
+      // Human-friendly summary (always shown)
+      yield* logInfo(
+        `Derived ${result.eventsMatched} posts (${percentage}%) from ${sourceRef.name} → ${targetRef.name} in ${duration.toFixed(1)}s`
+      );
 
       // Output result with context
       if (preferences.compact) {

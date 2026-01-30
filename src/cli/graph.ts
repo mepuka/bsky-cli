@@ -7,6 +7,7 @@ import { decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
+import { renderTableLegacy } from "./doc/table.js";
 
 const actorArg = Args.text({ name: "actor" }).pipe(
   Args.withDescription("Bluesky handle or DID")
@@ -54,23 +55,6 @@ const parseLimit = (limit: Option.Option<number>) =>
         : Effect.succeed(value)
   });
 
-const renderTable = (
-  headers: ReadonlyArray<string>,
-  rows: ReadonlyArray<ReadonlyArray<string>>
-) => {
-  const widths = headers.map((header, i) => {
-    const values = rows.map((row) => row[i] ?? "");
-    return Math.max(header.length, ...values.map((value) => value.length));
-  });
-  const line = (cells: ReadonlyArray<string>) =>
-    cells
-      .map((cell, i) => (cell ?? "").padEnd(widths[i] ?? 0))
-      .join("  ")
-      .trimEnd();
-  const separator = widths.map((width) => "-".repeat(width)).join("  ").trimEnd();
-  return [line(headers), separator, ...rows.map(line)].join("\n");
-};
-
 const renderProfileTable = (
   actors: ReadonlyArray<ProfileView>,
   cursor: string | undefined
@@ -80,7 +64,7 @@ const renderProfileTable = (
     actor.displayName ?? "",
     actor.did
   ]);
-  const table = renderTable(["HANDLE", "DISPLAY NAME", "DID"], rows);
+  const table = renderTableLegacy(["HANDLE", "DISPLAY NAME", "DID"], rows);
   return cursor ? `${table}\n\nCursor: ${cursor}` : table;
 };
 
@@ -95,7 +79,7 @@ const renderListTable = (
     list.uri,
     typeof list.listItemCount === "number" ? String(list.listItemCount) : ""
   ]);
-  const table = renderTable(["NAME", "PURPOSE", "CREATOR", "URI", "ITEMS"], rows);
+  const table = renderTableLegacy(["NAME", "PURPOSE", "CREATOR", "URI", "ITEMS"], rows);
   return cursor ? `${table}\n\nCursor: ${cursor}` : table;
 };
 
@@ -123,7 +107,7 @@ const renderRelationshipsTable = (relationships: ReadonlyArray<RelationshipView>
       relationship.blockedByList ? "yes" : ""
     ];
   });
-  return renderTable(
+  return renderTableLegacy(
     [
       "DID",
       "FOLLOWING",
@@ -143,7 +127,7 @@ const renderListItemsTable = (items: ReadonlyArray<ListItemView>, cursor: string
     item.subject.displayName ?? "",
     item.subject.did
   ]);
-  const table = renderTable(["HANDLE", "DISPLAY NAME", "DID"], rows);
+  const table = renderTableLegacy(["HANDLE", "DISPLAY NAME", "DID"], rows);
   return cursor ? `${table}\n\nCursor: ${cursor}` : table;
 };
 

@@ -1,5 +1,6 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Option, Stream } from "effect";
+import { renderTableLegacy } from "./doc/table.js";
 import { BskyClient } from "../services/bsky-client.js";
 import type { FeedGeneratorView } from "../domain/bsky.js";
 import { decodeActor } from "./shared-options.js";
@@ -49,23 +50,6 @@ const parseLimit = (limit: Option.Option<number>) =>
         : Effect.succeed(value)
   });
 
-const renderTable = (
-  headers: ReadonlyArray<string>,
-  rows: ReadonlyArray<ReadonlyArray<string>>
-) => {
-  const widths = headers.map((header, i) => {
-    const values = rows.map((row) => row[i] ?? "");
-    return Math.max(header.length, ...values.map((value) => value.length));
-  });
-  const line = (cells: ReadonlyArray<string>) =>
-    cells
-      .map((cell, i) => (cell ?? "").padEnd(widths[i] ?? 0))
-      .join("  ")
-      .trimEnd();
-  const separator = widths.map((width) => "-".repeat(width)).join("  ").trimEnd();
-  return [line(headers), separator, ...rows.map(line)].join("\n");
-};
-
 const renderFeedTable = (
   feeds: ReadonlyArray<FeedGeneratorView>,
   cursor: string | undefined
@@ -76,7 +60,7 @@ const renderFeedTable = (
     feed.uri,
     typeof feed.likeCount === "number" ? String(feed.likeCount) : ""
   ]);
-  const table = renderTable(["NAME", "CREATOR", "URI", "LIKES"], rows);
+  const table = renderTableLegacy(["NAME", "CREATOR", "URI", "LIKES"], rows);
   return cursor ? `${table}\n\nCursor: ${cursor}` : table;
 };
 
@@ -85,7 +69,7 @@ const renderFeedInfoTable = (
   isOnline: boolean,
   isValid: boolean
 ) =>
-  renderTable(
+  renderTableLegacy(
     ["NAME", "CREATOR", "URI", "ONLINE", "VALID"],
     [[view.displayName, view.creator.handle, view.uri, String(isOnline), String(isValid)]]
   );
