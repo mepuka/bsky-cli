@@ -228,11 +228,20 @@ export const storeDelete = Command.make(
         const confirmed = normalized === "y" || normalized === "yes";
         if (!confirmed) {
           yield* writeJson({ deleted: false, reason: "cancelled" });
-          return;
+          return yield* CliInputError.make({
+            message: `Store "${name}" was not deleted (cancelled by user).`,
+            cause: { deleted: false, reason: "cancelled" }
+          });
         }
       }
       const cleaner = yield* StoreCleaner;
       const result = yield* cleaner.deleteStore(name);
+      if (!result.deleted) {
+        return yield* CliInputError.make({
+          message: `Store "${name}" was not deleted.`,
+          cause: result
+        });
+      }
       yield* writeJson(result);
     })
 ).pipe(
