@@ -1,7 +1,7 @@
 import * as Doc from "@effect/printer/Doc";
 import type { Annotation } from "./annotation.js";
 import { ann, metric } from "./primitives.js";
-import { normalizeWhitespace, truncate } from "../../domain/format.js";
+import { collapseWhitespace, normalizeWhitespace, truncate } from "../../domain/format.js";
 import type { Post } from "../../domain/post.js";
 import type { PostEmbed } from "../../domain/bsky.js";
 
@@ -31,42 +31,54 @@ const renderEmbedSummary = (embed: PostEmbed): SDoc => {
 const wrapText = (text: string, maxWidth?: number): ReadonlyArray<string> => {
   const normalized = normalizeWhitespace(text);
   if (!maxWidth || maxWidth <= 0) {
-    return [normalized];
-  }
-  const words = normalized.split(" ");
-  if (words.length === 0) {
-    return [normalized];
+    const lines = normalized.split("\n");
+    return lines.length > 0 ? lines : [normalized];
   }
   const lines: string[] = [];
-  let current = "";
-  for (const word of words) {
-    if (current.length === 0) {
-      if (word.length > maxWidth) {
-        lines.push(word);
-      } else {
-        current = word;
-      }
+  const paragraphs = normalized.split("\n");
+  for (const paragraph of paragraphs) {
+    if (paragraph.length === 0) {
+      lines.push("");
       continue;
     }
-    if (current.length + 1 + word.length <= maxWidth) {
-      current = `${current} ${word}`;
-    } else {
-      lines.push(current);
-      current = word;
+    const words = paragraph.split(" ");
+    let current = "";
+    const flushCurrent = () => {
+      if (current.length > 0) {
+        lines.push(current);
+        current = "";
+      }
+    };
+    for (let word of words) {
+      while (word.length > maxWidth && maxWidth > 1) {
+        const chunk = word.slice(0, maxWidth - 1);
+        flushCurrent();
+        lines.push(`${chunk}-`);
+        word = word.slice(maxWidth - 1);
+      }
+      if (current.length === 0) {
+        current = word;
+        continue;
+      }
+      if (current.length + 1 + word.length <= maxWidth) {
+        current = `${current} ${word}`;
+      } else {
+        lines.push(current);
+        current = word;
+      }
     }
-  }
-  if (current.length > 0) {
-    lines.push(current);
+    flushCurrent();
   }
   return lines.length > 0 ? lines : [normalized];
 };
 
 export const renderPostCompact = (post: Post): SDoc => {
+  const text = post.text ?? "";
   const parts: SDoc[] = [
     ann("author", Doc.text(`@${post.author}`)),
     ann("dim", Doc.text("·")),
     ann("timestamp", Doc.text(post.createdAt.toISOString().slice(0, 10))),
-    Doc.text(truncate(normalizeWhitespace(post.text), 60))
+    Doc.text(truncate(collapseWhitespace(text), 60))
   ];
   if (post.metrics) {
     const m = post.metrics;
@@ -80,6 +92,7 @@ export const renderPostCompact = (post: Post): SDoc => {
 /** Returns an array of Doc lines suitable for multi-line tree rendering.
  *  When used standalone, combine with `Doc.vsep(renderPostCard(post))`. */
 export const renderPostCard = (post: Post): ReadonlyArray<SDoc> => {
+  const text = post.text ?? "";
   const lines: SDoc[] = [];
 
   lines.push(Doc.hsep([
@@ -88,7 +101,8 @@ export const renderPostCard = (post: Post): ReadonlyArray<SDoc> => {
     ann("timestamp", Doc.text(post.createdAt.toISOString()))
   ]));
 
-  lines.push(Doc.reflow(normalizeWhitespace(post.text)));
+  const paragraphs = normalizeWhitespace(text).split("\n");
+  lines.push(Doc.vsep(paragraphs.map((paragraph) => Doc.reflow(paragraph))));
 
   if (post.embed) lines.push(ann("embed", renderEmbedSummary(post.embed)));
 
@@ -109,6 +123,7 @@ export const renderPostCardLines = (
   post: Post,
   options?: { lineWidth?: number }
 ): ReadonlyArray<SDoc> => {
+  const text = post.text ?? "";
   const lines: SDoc[] = [];
 
   lines.push(Doc.hsep([
@@ -117,7 +132,7 @@ export const renderPostCardLines = (
     ann("timestamp", Doc.text(post.createdAt.toISOString()))
   ]));
 
-  const textLines = wrapText(post.text, options?.lineWidth);
+  const textLines = wrapText(text, options?.lineWidth);
   for (const line of textLines) {
     lines.push(Doc.text(line));
   }

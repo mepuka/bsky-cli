@@ -3,6 +3,7 @@ import { pipe } from "effect/Function";
 import type { Annotation } from "./annotation.js";
 import { renderAnsi, renderPlain } from "./render.js";
 import { ann, label, value } from "./primitives.js";
+import { displayWidth } from "../../domain/text-width.js";
 
 export type SDoc = Doc.Doc<Annotation>;
 
@@ -22,8 +23,8 @@ export const calculateColumnWidths = (
   rows: ReadonlyArray<ReadonlyArray<string>>
 ): ReadonlyArray<number> => {
   return columns.map((column, index) => {
-    const contentWidths = rows.map((row) => (row[index] ?? "").length);
-    return Math.max(column.header.length, ...contentWidths);
+    const contentWidths = rows.map((row) => displayWidth(row[index] ?? ""));
+    return Math.max(displayWidth(column.header), ...contentWidths);
   });
 };
 

@@ -1,9 +1,20 @@
 import { Post } from "./post.js";
+import { displayWidth, padEndDisplay } from "./text-width.js";
 
 const headers = ["Created At", "Author", "Text", "URI"];
 const textLimit = 80;
 
-export const normalizeWhitespace = (text: string) => text.replace(/\s+/g, " ").trim();
+export const normalizeWhitespace = (text: string) =>
+  text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
+    .trim();
+
+export const collapseWhitespace = (text: string) =>
+  normalizeWhitespace(text).replace(/\n+/g, " ").trim();
 
 export const truncate = (text: string, max: number) => {
   if (text.length <= max) return text;
@@ -11,9 +22,10 @@ export const truncate = (text: string, max: number) => {
   return `${text.slice(0, max - 3)}...`;
 };
 
-const sanitizeText = (text: string) => truncate(normalizeWhitespace(text), textLimit);
+const sanitizeText = (text: string) => truncate(collapseWhitespace(text), textLimit);
 
-const sanitizeMarkdown = (text: string) => sanitizeText(text).replace(/\|/g, "\\|");
+const sanitizeMarkdown = (text: string) =>
+  sanitizeText(text).replace(/[\\|*_`\[\]]/g, "\\$&");
 
 const postToRow = (post: Post) => [
   post.createdAt.toISOString(),
@@ -35,14 +47,14 @@ const renderTable = (
 ) => {
   const widths = head.map((value, index) =>
     Math.max(
-      value.length,
-      ...rows.map((row) => (row[index] ?? "").length)
+      displayWidth(value),
+      ...rows.map((row) => displayWidth(row[index] ?? ""))
     )
   );
 
   const formatRow = (row: ReadonlyArray<string>) =>
     row
-      .map((cell, index) => (cell ?? "").padEnd(widths[index] ?? 0))
+      .map((cell, index) => padEndDisplay(cell ?? "", widths[index] ?? 0))
       .join("  ");
 
   const header = formatRow(head);
