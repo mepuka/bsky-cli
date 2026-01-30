@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Effect, Option, Schema, Stream } from "effect";
+import { Chunk, Console, Effect, Option, Schema, Stream } from "effect";
 import { PostUri, StoreName } from "../domain/primitives.js";
 import type { Post } from "../domain/post.js";
 import { all } from "../domain/filter.js";
@@ -103,6 +103,10 @@ export const threadCommand = Command.make(
             message: `Thread not found for ${uri}.`,
             cause: { uri, store: storeRef.name }
           });
+        }
+        // B1: Hint when only root post exists in store
+        if (threadPosts.length === 1 && threadPosts[0]?.uri === targetUri) {
+          yield* Console.log("\nℹ️  Only root post found in store. Use --no-store to fetch full thread from API.\n");
         }
         posts = threadPosts;
       } else {

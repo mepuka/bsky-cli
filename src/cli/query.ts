@@ -167,7 +167,7 @@ export const queryCommand = Command.make(
       if (defaultScanLimit !== undefined) {
         yield* output
           .writeStderr(
-            `Warning: applying default --scan-limit ${defaultScanLimit} for filtered query. Results may be incomplete; set --scan-limit to override.`
+            `ℹ️  Scanning up to ${defaultScanLimit} posts (filtered query). Use --scan-limit to scan more.`
           )
           .pipe(Effect.catchAll(() => Effect.void));
       }
@@ -316,6 +316,14 @@ export const queryCommand = Command.make(
           yield* writeText(renderPostsTable(posts));
           return;
         case "thread": {
+          // B3: Warn if query doesn't have thread relationships
+          if (!hasFilter) {
+            yield* output
+              .writeStderr(
+                "ℹ️  Query results don't have thread relationships. Posts will display in chronological order.\n"
+              )
+              .pipe(Effect.catchAll(() => Effect.void));
+          }
           const doc = renderThread(
             posts,
             w === undefined ? { compact: false } : { compact: false, lineWidth: w }
