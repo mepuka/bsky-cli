@@ -16,6 +16,7 @@ import type { Annotation } from "./doc/annotation.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
 import { ann, label, field } from "./doc/primitives.js";
 import { renderTree } from "./doc/tree.js";
+import { renderTableLegacy } from "./doc/table.js";
 
 export type StoreTreeFormat = "tree" | "table" | "json";
 
@@ -307,35 +308,16 @@ export const renderStoreTree = (
   options?: StoreTreeRenderOptions
 ): string => renderPlain(buildStoreTreeDoc(data), options?.width);
 
-const renderTable = (
-  headers: ReadonlyArray<string>,
-  rows: ReadonlyArray<ReadonlyArray<string>>
-) => {
-  const widths = headers.map((value, index) =>
-    Math.max(
-      value.length,
-      ...rows.map((row) => (row[index] ?? "").length)
-    )
-  );
-  const formatRow = (row: ReadonlyArray<string>) =>
-    row
-      .map((cell, index) => (cell ?? "").padEnd(widths[index] ?? 0))
-      .join("  ");
-  const header = formatRow(headers);
-  const separator = widths.map((width) => "-".repeat(width)).join("  ");
-  const body = rows.map(formatRow);
-  return [header, separator, ...body].join("\n");
-};
-
 const renderTableSection = (
-  label: string,
+  sectionLabel: string,
   headers: ReadonlyArray<string>,
   rows: ReadonlyArray<ReadonlyArray<string>>
 ) => {
   if (rows.length === 0) {
-    return `${label}\n(no rows)`;
+    return `${sectionLabel}\n(no rows)`;
   }
-  return `${label}\n${renderTable(headers, rows)}`;
+  // Note: store-tree uses trimEnd: false to preserve trailing whitespace for alignment
+  return `${sectionLabel}\n${renderTableLegacy(headers, rows, false)}`;
 };
 
 export const renderStoreTreeTable = (data: StoreTreeData): string => {
