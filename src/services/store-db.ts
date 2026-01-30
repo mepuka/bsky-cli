@@ -144,7 +144,13 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
       });
 
       const optimizeClient = (client: SqlClient.SqlClient) =>
-        client`PRAGMA optimize`.pipe(Effect.catchAll(() => Effect.void));
+        client`PRAGMA optimize`.pipe(
+          Effect.catchAll((error) =>
+            Effect.logWarning("PRAGMA optimize failed", {
+              error: error instanceof Error ? error.message : String(error)
+            })
+          )
+        );
 
       const closeCachedClient = ({ client, scope }: CachedClient) =>
         optimizeClient(client).pipe(Effect.zipRight(Scope.close(scope, Exit.void)));

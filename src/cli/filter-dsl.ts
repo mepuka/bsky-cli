@@ -818,6 +818,10 @@ const parseRegexValue = (raw: string) => {
 
 class Parser {
   private index = 0;
+  private readonly resolving = new Set<string>();
+  private static readonly maxNamedDepth = 50;
+  private static readonly maxParseDepth = 200;
+  private parseDepth = 0;
 
   constructor(
     private readonly input: string,
@@ -859,6 +863,19 @@ class Parser {
           )
         )
       );
+      if (self.resolving.has(name)) {
+        return yield* self.fail(
+          `Cycle detected while resolving "@${nameRaw}".`,
+          position
+        );
+      }
+      if (self.resolving.size >= Parser.maxNamedDepth) {
+        return yield* self.fail(
+          `Named filter nesting exceeded ${Parser.maxNamedDepth} levels.`,
+          position
+        );
+      }
+      self.resolving.add(name);
       const expr = yield* self.library.get(name).pipe(
         Effect.mapError((error) => {
           if (error instanceof FilterNotFound) {
@@ -880,7 +897,12 @@ class Parser {
             position,
             `Failed to load "@${nameRaw}": ${String(error)}`
           );
-        })
+        }),
+        Effect.ensuring(
+          Effect.sync(() => {
+            self.resolving.delete(name);
+          })
+        )
       );
       return expr;
     });
@@ -930,7 +952,18 @@ class Parser {
       }
       if (current._tag === "LParen") {
         self.advance();
-        const expr = yield* self.parseOr();
+        if (self.parseDepth >= Parser.maxParseDepth) {
+          return yield* self.fail(
+            `Filter nesting exceeded ${Parser.maxParseDepth} levels.`,
+            current.position
+          );
+        }
+        self.parseDepth += 1;
+        const expr = yield* self
+          .parseOr()
+          .pipe(Effect.ensuring(Effect.sync(() => {
+            self.parseDepth -= 1;
+          })));
         const closing = self.peek();
         if (!closing || closing._tag !== "RParen") {
           return yield* self.fail("Expected ')'.", self.input.length);

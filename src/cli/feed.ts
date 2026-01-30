@@ -3,10 +3,12 @@ import { Effect, Option, Stream } from "effect";
 import { renderTableLegacy } from "./doc/table.js";
 import { BskyClient } from "../services/bsky-client.js";
 import type { FeedGeneratorView } from "../domain/bsky.js";
-import { decodeActor } from "./shared-options.js";
+import { AppConfigService } from "../services/app-config.js";
+import { decodeActor, parseLimit } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
+import { jsonNdjsonTableFormats, resolveOutputFormat } from "./output-format.js";
 
 const feedUriArg = Args.text({ name: "uri" }).pipe(
   Args.withDescription("Bluesky feed URI (at://...)")
@@ -31,24 +33,10 @@ const cursorOption = Options.text("cursor").pipe(
   Options.optional
 );
 
-const formatOption = Options.choice("format", ["json", "ndjson", "table"]).pipe(
+const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
   Options.withDescription("Output format (default: json)"),
   Options.optional
 );
-
-const parseLimit = (limit: Option.Option<number>) =>
-  Option.match(limit, {
-    onNone: () => Effect.void.pipe(Effect.as(undefined)),
-    onSome: (value) =>
-      value <= 0
-        ? Effect.fail(
-            CliInputError.make({
-              message: "--limit must be a positive integer.",
-              cause: { limit: value }
-            })
-          )
-        : Effect.succeed(value)
-  });
 
 const renderFeedTable = (
   feeds: ReadonlyArray<FeedGeneratorView>,
@@ -79,9 +67,15 @@ const showCommand = Command.make(
   { uri: feedUriArg, format: formatOption },
   ({ uri, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const result = yield* client.getFeedGenerator(uri);
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "table") {
         yield* writeText(renderFeedInfoTable(result.view, result.isOnline, result.isValid));
         return;
@@ -101,6 +95,7 @@ const batchCommand = Command.make(
   { uris: feedUrisArg, format: formatOption },
   ({ uris, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       if (uris.length === 0) {
         return yield* CliInputError.make({
@@ -109,7 +104,12 @@ const batchCommand = Command.make(
         });
       }
       const result = yield* client.getFeedGenerators(uris);
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.feeds));
         return;
@@ -133,14 +133,20 @@ const byActorCommand = Command.make(
   { actor: actorArg, limit: limitOption, cursor: cursorOption, format: formatOption },
   ({ actor, limit, cursor, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const parsedLimit = yield* parseLimit(limit);
       const resolvedActor = yield* decodeActor(actor);
       const result = yield* client.getActorFeeds(resolvedActor, {
-        ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
         ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
       });
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.feeds));
         return;

@@ -106,6 +106,22 @@ const decodePostJson = (raw: string) =>
     Effect.mapError(toStoreIndexError("StoreIndex.post decode failed"))
   );
 
+const ftsOperatorPattern = /\b(AND|OR|NOT|NEAR)\b/i;
+const ftsSyntaxPattern = /["*():^]/;
+
+const hasFtsSyntax = (query: string) =>
+  ftsOperatorPattern.test(query) || ftsSyntaxPattern.test(query);
+
+const buildLiteralFtsQuery = (query: string) => {
+  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return "";
+  }
+  return tokens
+    .map((token) => `"${token.replaceAll("\"", "\"\"")}"`)
+    .join(" AND ");
+};
+
 const decodeEntryRow = (row: typeof postEntryRow.Type) =>
   Schema.decodeUnknown(PostIndexEntry)({
     uri: row.uri,
@@ -631,7 +647,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
      *
      * @param store - Store reference to search
      * @param input - Search configuration
-     * @param input.query - Search query string (FTS5 syntax supported)
+     * @param input.query - Search query string (FTS5 syntax supported; plain text is sanitized)
      * @param input.limit - Maximum results to return (default: 25)
      * @param input.cursor - Offset for pagination (default: 0)
      * @param input.sort - Sort order: "relevance" | "newest" | "oldest"
@@ -1012,10 +1028,13 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         (store: StoreRef, input: { readonly query: string; readonly limit?: number; readonly cursor?: number; readonly sort?: SearchSort }) =>
           withClient(store, "StoreIndex.searchPosts failed", (client) =>
             Effect.gen(function* () {
-              const query = input.query.trim();
-              if (query.length === 0) {
+              const rawQuery = input.query.trim();
+              if (rawQuery.length === 0) {
                 return { posts: [] as ReadonlyArray<Post> };
               }
+              const literalQuery = buildLiteralFtsQuery(rawQuery);
+              const useRaw = hasFtsSyntax(rawQuery);
+              const query = useRaw ? rawQuery : literalQuery;
               const limit = input.limit && input.limit > 0 ? input.limit : 25;
               const offset = input.cursor && input.cursor > 0 ? input.cursor : 0;
               const sort = input.sort ?? "relevance";
@@ -1026,11 +1045,20 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
                     ? "p.created_at ASC, p.uri ASC"
                     : "p.created_at DESC, p.uri DESC";
 
-              const rows = yield* client`SELECT p.post_json FROM posts_fts
-                JOIN posts p ON p.rowid = posts_fts.rowid
-                WHERE posts_fts MATCH ${query}
-                ORDER BY ${client.unsafe(orderBy)}
-                LIMIT ${limit} OFFSET ${offset}`;
+              const runSearch = (ftsQuery: string) =>
+                client`SELECT p.post_json FROM posts_fts
+                  JOIN posts p ON p.rowid = posts_fts.rowid
+                  WHERE posts_fts MATCH ${ftsQuery}
+                  ORDER BY ${client.unsafe(orderBy)}
+                  LIMIT ${limit} OFFSET ${offset}`;
+
+              const rows = yield* runSearch(query).pipe(
+                Effect.catchAll((error) =>
+                  useRaw && literalQuery !== query
+                    ? runSearch(literalQuery)
+                    : Effect.fail(error)
+                )
+              );
 
               const decoded = yield* Schema.decodeUnknown(
                 Schema.Array(postJsonRow)

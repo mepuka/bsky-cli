@@ -13,7 +13,6 @@ import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { makeWatchCommandBody } from "./sync-factory.js";
-import { CliInputError } from "./errors.js";
 import {
   feedUriArg,
   listUriArg,
@@ -31,7 +30,8 @@ import {
   refreshOption,
   strictOption,
   maxErrorsOption,
-  parseMaxErrors
+  parseMaxErrors,
+  parseBoundedIntOption
 } from "./shared-options.js";
 
 const intervalOption = Options.text("interval").pipe(
@@ -48,25 +48,6 @@ const parentHeightOption = Options.integer("parent-height").pipe(
   Options.withDescription("Thread parent height to include (0-1000, default 80)"),
   Options.optional
 );
-
-const parseBoundedIntOption = (
-  value: Option.Option<number>,
-  name: string,
-  min: number,
-  max: number
-) =>
-  Option.match(value, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (raw) =>
-      raw < min || raw > max
-        ? Effect.fail(
-            CliInputError.make({
-              message: `${name} must be between ${min} and ${max}.`,
-              cause: raw
-            })
-          )
-        : Effect.succeed(Option.some(raw))
-  });
 
 const timelineCommand = Command.make(
   "timeline",

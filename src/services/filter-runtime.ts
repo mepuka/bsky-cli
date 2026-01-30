@@ -78,6 +78,13 @@ import type { Post } from "../domain/post.js";
 import type { FilterExplanation } from "../domain/filter-explain.js";
 import type { LinkValidatorService } from "./link-validator.js";
 import type { TrendingTopicsService } from "./trending-topics.js";
+
+const regexMatches = (regex: RegExp, text: string) => {
+  if (regex.global || regex.sticky) {
+    return new RegExp(regex.source, regex.flags).test(text);
+  }
+  return regex.test(text);
+};
 import { LinkValidator } from "./link-validator.js";
 import { TrendingTopics } from "./trending-topics.js";
 
@@ -410,12 +417,7 @@ const buildExplanation = (
             })
         );
         return (post: Post) => {
-          const matched = compiled.find((regex) => {
-            if (regex.global || regex.sticky) {
-              regex.lastIndex = 0;
-            }
-            return regex.test(post.text);
-          });
+          const matched = compiled.find((regex) => regexMatches(regex, post.text));
           return Effect.succeed({
             _tag: "Regex",
             ok: matched !== undefined,
@@ -639,12 +641,7 @@ const buildPredicate = (
         );
         return (post: Post) =>
           Effect.succeed(
-            compiled.some((regex) => {
-              if (regex.global || regex.sticky) {
-                regex.lastIndex = 0;
-              }
-              return regex.test(post.text);
-            })
+            compiled.some((regex) => regexMatches(regex, post.text))
           );
       }
       case "DateRange":

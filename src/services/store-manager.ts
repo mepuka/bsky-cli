@@ -86,6 +86,11 @@ const storeRow = Schema.Struct({
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
   StoreIoError.make({ path, cause });
 
+const decodeStorePath = (path: string) =>
+  Schema.decodeUnknown(StorePath)(path).pipe(
+    Effect.mapError(toStoreIoError(manifestPath))
+  );
+
 const storeRefFromMetadata = (metadata: StoreMetadata) =>
   StoreRef.make({ name: metadata.name, root: metadata.root });
 
@@ -263,62 +268,73 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
       });
 
       const createStore = Effect.fn("StoreManager.createStore")(
-        (name: StoreName, config: StoreConfig) => {
-          const root = Schema.decodeUnknownSync(StorePath)(storeRootKey(name));
-          return Effect.gen(function* () {
-            const existingRows = yield* findStore(name);
-            if (existingRows.length > 0) {
-              const existing = yield* decodeMetadataRow(existingRows[0]!);
-              return storeRefFromMetadata(existing);
-            }
+        (name: StoreName, config: StoreConfig) =>
+          decodeStorePath(storeRootKey(name)).pipe(
+            Effect.flatMap((root) =>
+              Effect.gen(function* () {
+                const existingRows = yield* findStore(name);
+                if (existingRows.length > 0) {
+                  const existing = yield* decodeMetadataRow(existingRows[0]!);
+                  return storeRefFromMetadata(existing);
+                }
 
-            const nowMillis = yield* Clock.currentTimeMillis;
-            const now = new Date(nowMillis).toISOString();
-            const configJson = yield* encodeConfigJson(config);
-            yield* insertStore({
-              name,
-              root,
-              created_at: now,
-              updated_at: now,
-              config_json: configJson
-            });
+                const nowMillis = yield* Clock.currentTimeMillis;
+                const now = new Date(nowMillis).toISOString();
+                const configJson = yield* encodeConfigJson(config);
+                yield* insertStore({
+                  name,
+                  root,
+                  created_at: now,
+                  updated_at: now,
+                  config_json: configJson
+                });
 
-            return StoreRef.make({ name, root });
-          }).pipe(Effect.mapError(toStoreIoError(root)));
-        }
+                return StoreRef.make({ name, root });
+              }).pipe(Effect.mapError(toStoreIoError(root)))
+            )
+          )
       );
 
       const getStore = Effect.fn("StoreManager.getStore")((name: StoreName) => {
-        const root = Schema.decodeUnknownSync(StorePath)(storeRootKey(name));
-        return findStore(name).pipe(
-          Effect.flatMap((rows) =>
-            rows.length === 0
-              ? Effect.succeed(Option.none())
-              : decodeMetadataRow(rows[0]!).pipe(
-                  Effect.map((metadata) =>
-                    Option.some(storeRefFromMetadata(metadata))
-                  )
-                )
-          ),
-          Effect.mapError(toStoreIoError(root))
+        return decodeStorePath(storeRootKey(name)).pipe(
+          Effect.flatMap((root) =>
+            findStore(name).pipe(
+              Effect.flatMap((rows) =>
+                rows.length === 0
+                  ? Effect.succeed(Option.none())
+                  : decodeMetadataRow(rows[0]!).pipe(
+                      Effect.map((metadata) =>
+                        Option.some(storeRefFromMetadata(metadata))
+                      )
+                    )
+              ),
+              Effect.mapError(toStoreIoError(root))
+            )
+          )
         );
       });
 
       const getConfig = Effect.fn("StoreManager.getConfig")((name: StoreName) => {
-        const root = Schema.decodeUnknownSync(StorePath)(storeRootKey(name));
-        return findStore(name).pipe(
-          Effect.flatMap((rows) =>
-            rows.length === 0
-              ? Effect.succeed(Option.none())
-              : decodeConfigRow(rows[0]!).pipe(Effect.map(Option.some))
-          ),
-          Effect.mapError(toStoreIoError(root))
+        return decodeStorePath(storeRootKey(name)).pipe(
+          Effect.flatMap((root) =>
+            findStore(name).pipe(
+              Effect.flatMap((rows) =>
+                rows.length === 0
+                  ? Effect.succeed(Option.none())
+                  : decodeConfigRow(rows[0]!).pipe(Effect.map(Option.some))
+              ),
+              Effect.mapError(toStoreIoError(root))
+            )
+          )
         );
       });
 
       const deleteStore = Effect.fn("StoreManager.deleteStore")((name: StoreName) => {
-        const root = Schema.decodeUnknownSync(StorePath)(storeRootKey(name));
-        return deleteStoreSql(name).pipe(Effect.mapError(toStoreIoError(root)));
+        return decodeStorePath(storeRootKey(name)).pipe(
+          Effect.flatMap((root) =>
+            deleteStoreSql(name).pipe(Effect.mapError(toStoreIoError(root)))
+          )
+        );
       });
 
       const listStores = Effect.fn("StoreManager.listStores")(() =>
