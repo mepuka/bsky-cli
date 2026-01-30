@@ -64,14 +64,24 @@ const renderTable = (
   return [header, separator, ...body].join("\n");
 };
 
+const renderMarkdownHeader = (head: ReadonlyArray<string>) => {
+  const header = `| ${head.join(" | ")} |`;
+  const separator = `| ${head.map((label) => "-".repeat(Math.max(label.length, 3))).join(" | ")} |`;
+  return `${header}\n${separator}`;
+};
+
+export const renderPostsMarkdownHeader = () => renderMarkdownHeader(headers);
+
+export const renderPostMarkdownRow = (post: Post) =>
+  `| ${postToMarkdownRow(post).join(" | ")} |`;
+
 const renderMarkdownTable = (
   head: ReadonlyArray<string>,
   rows: ReadonlyArray<ReadonlyArray<string>>
 ) => {
-  const header = `| ${head.join(" | ")} |`;
-  const separator = `| ${head.map((label) => "-".repeat(Math.max(label.length, 3))).join(" | ")} |`;
+  const header = renderMarkdownHeader(head);
   const body = rows.map((row) => `| ${row.join(" | ")} |`);
-  return [header, separator, ...body].join("\n");
+  return [header, ...body].join("\n");
 };
 
 export const renderPostsTable = (posts: ReadonlyArray<Post>) =>
