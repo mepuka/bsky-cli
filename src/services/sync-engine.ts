@@ -59,7 +59,7 @@
  * @module services/sync-engine
  */
 
-import { Clock, Context, Duration, Effect, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
+import { Clock, Context, Duration, Effect, Fiber, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
 import { messageFromCause } from "./shared.js";
 import { FilterRuntime } from "./filter-runtime.js";
 import { PostParser } from "./post-parser.js";
@@ -403,6 +403,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
             };
 
             const startTime = yield* Clock.currentTimeMillis;
+            const progressIntervalMs = 5000;
             const initialState: SyncState = {
               result: initial,
               lastEventSeq: Option.none<EventSeq>(),
@@ -415,6 +416,33 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               lastCheckpointAt: startTime
             };
             const stateRef = yield* Ref.make(initialState);
+            const heartbeat = Effect.gen(function* () {
+              while (true) {
+                yield* Effect.sleep(Duration.millis(progressIntervalMs));
+                const now = yield* Clock.currentTimeMillis;
+                const state = yield* Ref.get(stateRef);
+                if (now - state.lastReportAt < progressIntervalMs) {
+                  continue;
+                }
+                const elapsedMs = now - startTime;
+                const rate = elapsedMs > 0 ? state.processed / (elapsedMs / 1000) : 0;
+                yield* reporter.report(
+                  SyncProgress.make({
+                    processed: state.processed,
+                    stored: state.stored,
+                    skipped: state.skipped,
+                    errors: state.errors,
+                    elapsedMs,
+                    rate
+                  })
+                );
+                yield* Ref.update(stateRef, (current) => ({
+                  ...current,
+                  lastReportAt: now
+                }));
+              }
+            });
+            const heartbeatFiber = yield* Effect.fork(heartbeat);
 
             const state = yield* stream.pipe(
               Stream.mapError(toSyncError("source", "Source stream failed")),
@@ -462,7 +490,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       state.errors + (outcome._tag === "Error" ? 1 : 0);
                     const now = yield* Clock.currentTimeMillis;
                     const shouldReport =
-                      processed % 100 === 0 || now - state.lastReportAt >= 5000;
+                      processed % 100 === 0 || now - state.lastReportAt >= progressIntervalMs;
                     if (shouldReport) {
                       const elapsedMs = now - startTime;
                       const rate =
@@ -516,6 +544,9 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                   })
               ),
               Effect.withRequestBatching(true),
+              Effect.ensuring(
+                Fiber.interrupt(heartbeatFiber)
+              ),
               Effect.ensuring(
                 Ref.get(stateRef).pipe(
                   Effect.flatMap((state) =>

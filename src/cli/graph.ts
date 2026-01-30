@@ -398,6 +398,10 @@ const blocksCommand = Command.make(
         "json"
       );
       if (outputFormat === "ndjson") {
+        if (result.blocks.length === 0) {
+          yield* writeText("[]");
+          return;
+        }
         yield* writeJsonStream(Stream.fromIterable(result.blocks));
         return;
       }
@@ -435,6 +439,10 @@ const mutesCommand = Command.make(
         "json"
       );
       if (outputFormat === "ndjson") {
+        if (result.mutes.length === 0) {
+          yield* writeText("[]");
+          return;
+        }
         yield* writeJsonStream(Stream.fromIterable(result.mutes));
         return;
       }

@@ -100,6 +100,18 @@ const tagOption = Options.text("tag").pipe(
   Options.optional
 );
 
+const requireNonEmptyQuery = (raw: string) =>
+  Effect.gen(function* () {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) {
+      return yield* CliInputError.make({
+        message: "Search query must be non-empty.",
+        cause: { query: raw }
+      });
+    }
+    return trimmed;
+  });
+
 
 type LocalSort = "relevance" | "newest" | "oldest";
 
@@ -142,6 +154,7 @@ const handlesCommand = Command.make(
   ({ query, limit, cursor, typeahead, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      const queryValue = yield* requireNonEmptyQuery(query);
       if (typeahead && Option.isSome(cursor)) {
         return yield* CliInputError.make({
           message: "--cursor is not supported with --typeahead.",
@@ -154,7 +167,7 @@ const handlesCommand = Command.make(
         ...(Option.isSome(cursor) ? { cursor: cursor.value } : {}),
         ...(typeahead ? { typeahead: true } : {})
       };
-      const result = yield* client.searchActors(query, options);
+      const result = yield* client.searchActors(queryValue, options);
       const outputFormat = resolveOutputFormat(
         format,
         appConfig.outputFormat,
@@ -186,12 +199,13 @@ const feedsCommand = Command.make(
   ({ query, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      const queryValue = yield* requireNonEmptyQuery(query);
       const client = yield* BskyClient;
       const options = {
         ...(Option.isSome(limit) ? { limit: limit.value } : {}),
         ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
       };
-      const result = yield* client.searchFeedGenerators(query, options);
+      const result = yield* client.searchFeedGenerators(queryValue, options);
       const outputFormat = resolveOutputFormat(
         format,
         appConfig.outputFormat,
@@ -238,6 +252,7 @@ const postsCommand = Command.make(
   ({ query, store, network, limit, cursor, sort, since, until, mentions, author, lang, domain, url, tag, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      const queryValue = yield* requireNonEmptyQuery(query);
       if (Option.isSome(limit) && limit.value <= 0) {
         return yield* CliInputError.make({
           message: "--limit must be a positive integer.",
@@ -331,13 +346,13 @@ const postsCommand = Command.make(
               return String(decoded);
             })
         });
-        const parsedAuthor = yield* authorValue;
-        const parsedMentions = yield* mentionsValue;
-        const result = yield* client.searchPosts(query, {
-          ...(Option.isSome(limit) ? { limit: limit.value } : {}),
-          ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
-          ...(sortValue ? { sort: sortValue } : {}),
-          ...(Option.isSome(since) ? { since: since.value } : {}),
+      const parsedAuthor = yield* authorValue;
+      const parsedMentions = yield* mentionsValue;
+      const result = yield* client.searchPosts(queryValue, {
+        ...(Option.isSome(limit) ? { limit: limit.value } : {}),
+        ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
+        ...(sortValue ? { sort: sortValue } : {}),
+        ...(Option.isSome(since) ? { since: since.value } : {}),
           ...(Option.isSome(until) ? { until: until.value } : {}),
           ...(parsedMentions ? { mentions: parsedMentions } : {}),
           ...(parsedAuthor ? { author: parsedAuthor } : {}),
@@ -368,7 +383,7 @@ const postsCommand = Command.make(
           return;
         }
         yield* writeJson({
-          query,
+          query: queryValue,
           cursor: result.cursor,
           hitsTotal: result.hitsTotal,
           count: posts.length,
@@ -419,7 +434,7 @@ const postsCommand = Command.make(
         });
       }
       const input = {
-        query,
+        query: queryValue,
         ...(Option.isSome(limit) ? { limit: limit.value } : {}),
         ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
         ...(localSort ? { sort: localSort } : {})
@@ -436,7 +451,7 @@ const postsCommand = Command.make(
         return;
       }
       yield* writeJson({
-        query,
+        query: queryValue,
         cursor: result.cursor,
         count: result.posts.length,
         posts: result.posts
