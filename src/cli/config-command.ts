@@ -8,6 +8,7 @@ import { renderTableLegacy } from "./doc/table.js";
 import { AppConfigService } from "../services/app-config.js";
 import { CredentialStore } from "../services/credential-store.js";
 import { BskyClient } from "../services/bsky-client.js";
+import { jsonTableFormats, resolveOutputFormat } from "./output-format.js";
 
 type CheckStatus = "ok" | "warn" | "error";
 
@@ -32,7 +33,7 @@ const checkError = (name: string, message: string): CheckResult => ({
   message
 });
 
-const checkFormatOption = Options.choice("format", ["json", "table"]).pipe(
+const checkFormatOption = Options.choice("format", jsonTableFormats).pipe(
   Options.withDescription("Output format (default: json)"),
   Options.optional
 );
@@ -107,7 +108,12 @@ const configCheckCommand = Command.make("check", { format: checkFormatOption }, 
     }
 
     const ok = results.every((result) => result.status !== "error");
-    const outputFormat = Option.getOrElse(format, () => "json" as const);
+    const outputFormat = resolveOutputFormat(
+      format,
+      config.outputFormat,
+      jsonTableFormats,
+      "json"
+    );
     
     if (outputFormat === "table") {
       const rows = results.map((r) => [

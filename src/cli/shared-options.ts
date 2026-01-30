@@ -134,3 +134,36 @@ export const decodeActor = (actor: string) => {
     )
   );
 };
+
+export const parseLimit = (limit: Option.Option<number>) =>
+  Option.match(limit, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (value) =>
+      value <= 0
+        ? Effect.fail(
+            CliInputError.make({
+              message: "--limit must be a positive integer.",
+              cause: value
+            })
+          )
+        : Effect.succeed(Option.some(value))
+  });
+
+export const parseBoundedIntOption = (
+  value: Option.Option<number>,
+  name: string,
+  min: number,
+  max: number
+) =>
+  Option.match(value, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (raw) =>
+      raw < min || raw > max
+        ? Effect.fail(
+            CliInputError.make({
+              message: `${name} must be between ${min} and ${max}.`,
+              cause: raw
+            })
+          )
+        : Effect.succeed(Option.some(raw))
+  });

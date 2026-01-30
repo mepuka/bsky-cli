@@ -1,13 +1,15 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Option, Stream } from "effect";
 import { BskyClient } from "../services/bsky-client.js";
+import { AppConfigService } from "../services/app-config.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import type { ListItemView, ListView, ProfileView, RelationshipView } from "../domain/bsky.js";
-import { decodeActor } from "./shared-options.js";
+import { decodeActor, parseLimit } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { renderTableLegacy } from "./doc/table.js";
+import { jsonNdjsonTableFormats, resolveOutputFormat } from "./output-format.js";
 
 const actorArg = Args.text({ name: "actor" }).pipe(
   Args.withDescription("Bluesky handle or DID")
@@ -27,7 +29,7 @@ const cursorOption = Options.text("cursor").pipe(
   Options.optional
 );
 
-const formatOption = Options.choice("format", ["json", "ndjson", "table"]).pipe(
+const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
   Options.withDescription("Output format (default: json)"),
   Options.optional
 );
@@ -40,20 +42,6 @@ const purposeOption = Options.choice("purpose", ["modlist", "curatelist"]).pipe(
 const othersOption = Options.text("others").pipe(
   Options.withDescription("Comma-separated list of actors to compare" )
 );
-
-const parseLimit = (limit: Option.Option<number>) =>
-  Option.match(limit, {
-    onNone: () => Effect.void.pipe(Effect.as(undefined)),
-    onSome: (value) =>
-      value <= 0
-        ? Effect.fail(
-            CliInputError.make({
-              message: "--limit must be a positive integer.",
-              cause: { limit: value }
-            })
-          )
-        : Effect.succeed(value)
-  });
 
 const renderProfileTable = (
   actors: ReadonlyArray<ProfileView>,
@@ -136,15 +124,21 @@ const followersCommand = Command.make(
   { actor: actorArg, limit: limitOption, cursor: cursorOption, format: formatOption },
   ({ actor, limit, cursor, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const parsedLimit = yield* parseLimit(limit);
       const options = {
-        ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
         ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
       };
       const result = yield* client.getFollowers(resolvedActor, options);
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.followers));
         return;
@@ -169,15 +163,21 @@ const followsCommand = Command.make(
   { actor: actorArg, limit: limitOption, cursor: cursorOption, format: formatOption },
   ({ actor, limit, cursor, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const parsedLimit = yield* parseLimit(limit);
       const options = {
-        ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
         ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
       };
       const result = yield* client.getFollows(resolvedActor, options);
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.follows));
         return;
@@ -202,15 +202,21 @@ const knownFollowersCommand = Command.make(
   { actor: actorArg, limit: limitOption, cursor: cursorOption, format: formatOption },
   ({ actor, limit, cursor, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const parsedLimit = yield* parseLimit(limit);
       const options = {
-        ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
         ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
       };
       const result = yield* client.getKnownFollowers(resolvedActor, options);
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.followers));
         return;
@@ -234,6 +240,7 @@ const relationshipsCommand = Command.make(
   { actor: actorArg, others: othersOption, format: formatOption },
   ({ actor, others, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const identities = yield* IdentityResolver;
       const resolveDid = (value: string) =>
@@ -268,7 +275,12 @@ const relationshipsCommand = Command.make(
         { concurrency: "unbounded" }
       );
       const result = yield* client.getRelationships(resolvedActor, resolvedOthers);
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.relationships));
         return;
@@ -292,16 +304,22 @@ const listsCommand = Command.make(
   { actor: actorArg, limit: limitOption, cursor: cursorOption, purpose: purposeOption, format: formatOption },
   ({ actor, limit, cursor, purpose, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const parsedLimit = yield* parseLimit(limit);
       const options = {
-        ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
         ...(Option.isSome(cursor) ? { cursor: cursor.value } : {}),
         ...(Option.isSome(purpose) ? { purposes: [purpose.value] } : {})
       };
       const result = yield* client.getLists(resolvedActor, options);
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.lists));
         return;
@@ -326,14 +344,20 @@ const listCommand = Command.make(
   { uri: listUriArg, limit: limitOption, cursor: cursorOption, format: formatOption },
   ({ uri, limit, cursor, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const parsedLimit = yield* parseLimit(limit);
       const options = {
-        ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
         ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
       };
       const result = yield* client.getList(uri, options);
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.items));
         return;
@@ -359,14 +383,20 @@ const blocksCommand = Command.make(
   { limit: limitOption, cursor: cursorOption, format: formatOption },
   ({ limit, cursor, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const parsedLimit = yield* parseLimit(limit);
       const options = {
-        ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
         ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
       };
       const result = yield* client.getBlocks(options);
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.blocks));
         return;
@@ -390,14 +420,20 @@ const mutesCommand = Command.make(
   { limit: limitOption, cursor: cursorOption, format: formatOption },
   ({ limit, cursor, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const parsedLimit = yield* parseLimit(limit);
       const options = {
-        ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
         ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
       };
       const result = yield* client.getMutes(options);
-      const outputFormat = Option.getOrElse(format, () => "json" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json"
+      );
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(Stream.fromIterable(result.mutes));
         return;

@@ -1,6 +1,7 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Chunk, Effect, Option } from "effect";
 import { StoreManager } from "../services/store-manager.js";
+import { AppConfigService } from "../services/app-config.js";
 import { Terminal } from "@effect/platform";
 import { StoreNotFound } from "../domain/errors.js";
 import { StoreName } from "../domain/primitives.js";
@@ -18,6 +19,7 @@ import { formatFilterExpr } from "../domain/filter-describe.js";
 import { CliPreferences } from "./preferences.js";
 import { StoreStats } from "../services/store-stats.js";
 import { withExamples } from "./help.js";
+import { resolveOutputFormat, treeTableJsonFormats } from "./output-format.js";
 import {
   buildStoreTreeData,
   renderStoreTree,
@@ -43,7 +45,7 @@ const filterNameOption = Options.text("filter").pipe(
   Options.withDescription("Filter spec name to materialize"),
   Options.optional
 );
-const treeFormatOption = Options.choice("format", ["tree", "table", "json"]).pipe(
+const treeFormatOption = Options.choice("format", treeTableJsonFormats).pipe(
   Options.withDescription("Output format for store tree (default: tree)"),
   Options.optional
 );
@@ -337,8 +339,14 @@ export const storeTree = Command.make(
   { format: treeFormatOption, ansi: treeAnsiOption, width: treeWidthOption },
   ({ format, ansi, width }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       const data = yield* buildStoreTreeData;
-      const outputFormat = Option.getOrElse(format, () => "tree" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        treeTableJsonFormats,
+        "tree"
+      );
       const renderOptions: StoreTreeRenderOptions | undefined = Option.match(width, {
         onNone: () => undefined,
         onSome: (value) => ({ width: value })

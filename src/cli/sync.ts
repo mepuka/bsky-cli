@@ -32,7 +32,9 @@ import {
   refreshOption,
   strictOption,
   maxErrorsOption,
-  parseMaxErrors
+  parseMaxErrors,
+  parseLimit,
+  parseBoundedIntOption
 } from "./shared-options.js";
 
 const limitOption = Options.integer("limit").pipe(
@@ -51,20 +53,6 @@ const parentHeightOption = Options.integer("parent-height").pipe(
   Options.withDescription("Thread parent height to include (0-1000, default 80)"),
   Options.optional
 );
-
-const parseLimit = (limit: Option.Option<number>) =>
-  Option.match(limit, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (value) =>
-      value <= 0
-        ? Effect.fail(
-            CliInputError.make({
-              message: "Limit must be a positive integer.",
-              cause: value
-            })
-          )
-        : Effect.succeed(Option.some(value))
-  });
 
 const parseDuration = (value: Option.Option<string>) =>
   Option.match(value, {
@@ -89,25 +77,6 @@ const parseDuration = (value: Option.Option<string>) =>
             : Effect.succeed(Option.some(duration))
         )
       )
-  });
-
-const parseBoundedIntOption = (
-  value: Option.Option<number>,
-  name: string,
-  min: number,
-  max: number
-) =>
-  Option.match(value, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (raw) =>
-      raw < min || raw > max
-        ? Effect.fail(
-            CliInputError.make({
-              message: `${name} must be between ${min} and ${max}.`,
-              cause: raw
-            })
-          )
-        : Effect.succeed(Option.some(raw))
   });
 
 const timelineCommand = Command.make(

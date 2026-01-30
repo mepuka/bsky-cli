@@ -11,19 +11,30 @@ import { StoreDb } from "./store-db.js";
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const MAX_ULID_TIME = 0xffff_ffff_ffff;
 
+class UlidTimeError extends Schema.TaggedError<UlidTimeError>()("UlidTimeError", {
+  time: Schema.String,
+  message: Schema.String
+}) {}
+
 const encodeTime = (time: number) => {
   if (!Number.isFinite(time) || time < 0 || time > MAX_ULID_TIME) {
-    throw new Error(`ULID time out of range: ${time}`);
+    return Effect.fail(
+      UlidTimeError.make({
+        time: String(time),
+        message: `ULID time out of range: ${time}`
+      })
+    );
   }
-
-  let value = BigInt(Math.trunc(time));
-  let output = "";
-  for (let i = 0; i < 10; i += 1) {
-    const mod = Number(value % 32n);
-    output = `${ULID_ALPHABET[mod]}${output}`;
-    value = value / 32n;
-  }
-  return output;
+  return Effect.sync(() => {
+    let value = BigInt(Math.trunc(time));
+    let output = "";
+    for (let i = 0; i < 10; i += 1) {
+      const mod = Number(value % 32n);
+      output = `${ULID_ALPHABET[mod]}${output}`;
+      value = value / 32n;
+    }
+    return output;
+  });
 };
 
 const encodeRandomDigits = (digits: ReadonlyArray<number>) =>
@@ -114,14 +125,15 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
               }
             }
 
-            const id = `${encodeTime(time)}${encodeRandomDigits(digits)}`;
+            const timeEncoded = yield* encodeTime(time);
+            const id = `${timeEncoded}${encodeRandomDigits(digits)}`;
             const decoded = yield* Schema.decodeUnknown(EventId)(id);
             return [
               decoded,
               { lastTime: time, lastRandom: digits }
             ] as const;
           })
-        ).pipe(Effect.orDie)
+        )
       );
 
       const appendWithClient = Effect.fn("StoreWriter.appendWithClient")(

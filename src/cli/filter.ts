@@ -10,6 +10,7 @@ import { FilterCompiler } from "../services/filter-compiler.js";
 import { FilterLibrary } from "../services/filter-library.js";
 import { FilterRuntime } from "../services/filter-runtime.js";
 import { PostParser } from "../services/post-parser.js";
+import { AppConfigService } from "../services/app-config.js";
 import { StoreIndex } from "../services/store-index.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { decodeJson } from "./parse.js";
@@ -22,6 +23,7 @@ import { renderPlain, renderAnsi } from "./doc/render.js";
 import { renderTableLegacy } from "./doc/table.js";
 import { withExamples } from "./help.js";
 import { filterOption, filterJsonOption } from "./shared-options.js";
+import { jsonTableFormats, resolveOutputFormat, textJsonFormats } from "./output-format.js";
 
 const filterNameArg = Args.text({ name: "name" }).pipe(
   Args.withSchema(StoreName),
@@ -44,15 +46,15 @@ const sampleSizeOption = Options.integer("sample-size").pipe(
   Options.withDescription("Number of posts to evaluate (default: 1000)"),
   Options.optional
 );
-const describeFormatOption = Options.choice("format", ["text", "json"]).pipe(
+const describeFormatOption = Options.choice("format", textJsonFormats).pipe(
   Options.withDescription("Output format for filter descriptions (default: text)"),
   Options.optional
 );
-const testFormatOption = Options.choice("format", ["text", "json"]).pipe(
+const testFormatOption = Options.choice("format", textJsonFormats).pipe(
   Options.withDescription("Output format for filter tests (default: text)"),
   Options.optional
 );
-const listFormatOption = Options.choice("format", ["json", "table"]).pipe(
+const listFormatOption = Options.choice("format", jsonTableFormats).pipe(
   Options.withDescription("Output format (default: json)"),
   Options.optional
 );
@@ -146,9 +148,15 @@ const loadPost = (
 
 export const filterList = Command.make("list", { format: listFormatOption }, ({ format }) =>
   Effect.gen(function* () {
+    const appConfig = yield* AppConfigService;
     const library = yield* FilterLibrary;
     const names = yield* library.list();
-    const outputFormat = Option.getOrElse(format, () => "json" as const);
+    const outputFormat = resolveOutputFormat(
+      format,
+      appConfig.outputFormat,
+      jsonTableFormats,
+      "json"
+    );
     
     if (outputFormat === "table") {
       const filters = yield* Effect.forEach(names, (name) =>

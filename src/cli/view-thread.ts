@@ -16,6 +16,8 @@ import { storeOptions } from "./store.js";
 import { withExamples } from "./help.js";
 import { CliInputError } from "./errors.js";
 import { formatSchemaError } from "./shared.js";
+import { parseBoundedIntOption } from "./shared-options.js";
+import { textJsonFormats } from "./output-format.js";
 
 const uriArg = Args.text({ name: "uri" }).pipe(
   Args.withDescription("AT-URI of any post in the thread")
@@ -40,7 +42,7 @@ const widthOption = Options.integer("width").pipe(
   Options.optional
 );
 
-const formatOption = Options.choice("format", ["text", "json"]).pipe(
+const formatOption = Options.choice("format", textJsonFormats).pipe(
   Options.withDescription("Output format (default: text)"),
   Options.optional
 );
@@ -71,8 +73,15 @@ export const threadCommand = Command.make(
     Effect.gen(function* () {
       const outputFormat = Option.getOrElse(format, () => "text" as const);
       const w = Option.getOrUndefined(width);
-      const d = Option.getOrElse(depth, () => 6);
-      const ph = Option.getOrElse(parentHeight, () => 80);
+      const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
+      const parsedParentHeight = yield* parseBoundedIntOption(
+        parentHeight,
+        "parent-height",
+        0,
+        1000
+      );
+      const d = Option.getOrElse(parsedDepth, () => 6);
+      const ph = Option.getOrElse(parsedParentHeight, () => 80);
 
       let posts: ReadonlyArray<Post>;
 

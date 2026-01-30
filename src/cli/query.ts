@@ -2,6 +2,7 @@ import { Args, Command, Options } from "@effect/cli";
 import { Chunk, Clock, Effect, Option, Ref, Stream } from "effect";
 import * as Doc from "@effect/printer/Doc";
 import { all } from "../domain/filter.js";
+import type { FilterExpr } from "../domain/filter.js";
 import { StoreQuery } from "../domain/events.js";
 import { StoreName } from "../domain/primitives.js";
 import type { Post } from "../domain/post.js";
@@ -76,6 +77,29 @@ const progressOption = Options.boolean("progress").pipe(
 );
 
 const DEFAULT_FILTER_SCAN_LIMIT = 5000;
+
+const isAscii = (value: string) => /^[\x00-\x7F]*$/.test(value);
+
+const hasUnicodeInsensitiveContains = (expr: FilterExpr): boolean => {
+  switch (expr._tag) {
+    case "Contains":
+      return !expr.caseSensitive && expr.text.length > 0 && !isAscii(expr.text);
+    case "And":
+      return (
+        hasUnicodeInsensitiveContains(expr.left) ||
+        hasUnicodeInsensitiveContains(expr.right)
+      );
+    case "Or":
+      return (
+        hasUnicodeInsensitiveContains(expr.left) ||
+        hasUnicodeInsensitiveContains(expr.right)
+      );
+    case "Not":
+      return hasUnicodeInsensitiveContains(expr.expr);
+    default:
+      return false;
+  }
+};
 
 const parseRangeOption = (range: Option.Option<string>) =>
   Option.match(range, {
@@ -154,6 +178,13 @@ export const queryCommand = Command.make(
       }
 
       const hasFilter = Option.isSome(parsedFilter);
+      if (hasFilter && hasUnicodeInsensitiveContains(expr)) {
+        yield* output
+          .writeStderr(
+            "Warning: Unicode case-insensitive contains filters cannot be pushed down; query may scan in-memory.\n"
+          )
+          .pipe(Effect.catchAll(() => Effect.void));
+      }
       const userLimit = Option.getOrUndefined(limit);
       const userScanLimit = Option.getOrUndefined(scanLimit);
       const defaultScanLimit =
@@ -193,6 +224,10 @@ export const queryCommand = Command.make(
 
       const baseStream = index.query(storeRef, query);
       const progressEnabled = hasFilter && progress;
+      const trackScanLimit = hasFilter && resolvedScanLimit !== undefined;
+      const scanRef = trackScanLimit
+        ? yield* Ref.make({ scanned: 0, matched: 0 })
+        : undefined;
       let startTime = 0;
       let progressRef: Ref.Ref<{ scanned: number; matched: number; lastReportAt: number }> | undefined;
       if (progressEnabled) {
@@ -210,26 +245,31 @@ export const queryCommand = Command.make(
                 .pipe(Effect.catchAll(() => Effect.void))
           : undefined;
 
-      const onBatch =
-        progressEnabled && progressRef && reportProgress
-          ? (scannedDelta: number, matchedDelta: number) =>
-              Effect.gen(function* () {
-                const now = yield* Clock.currentTimeMillis;
-                const state = yield* Ref.get(progressRef);
-                const scanned = state.scanned + scannedDelta;
-                const matched = state.matched + matchedDelta;
-                const shouldReport =
-                  scanned % 1000 === 0 || now - state.lastReportAt >= 1000;
-                if (shouldReport) {
-                  yield* reportProgress(scanned, matched, now);
-                }
-                yield* Ref.set(progressRef, {
-                  scanned,
-                  matched,
-                  lastReportAt: shouldReport ? now : state.lastReportAt
-                });
-              })
-          : (_scanned: number, _matched: number) => Effect.void;
+      const onBatch = (scannedDelta: number, matchedDelta: number) =>
+        Effect.gen(function* () {
+          if (scanRef) {
+            yield* Ref.update(scanRef, (state) => ({
+              scanned: state.scanned + scannedDelta,
+              matched: state.matched + matchedDelta
+            }));
+          }
+          if (progressEnabled && progressRef && reportProgress) {
+            const now = yield* Clock.currentTimeMillis;
+            const state = yield* Ref.get(progressRef);
+            const scanned = state.scanned + scannedDelta;
+            const matched = state.matched + matchedDelta;
+            const shouldReport =
+              scanned % 1000 === 0 || now - state.lastReportAt >= 1000;
+            if (shouldReport) {
+              yield* reportProgress(scanned, matched, now);
+            }
+            yield* Ref.set(progressRef, {
+              scanned,
+              matched,
+              lastReportAt: shouldReport ? now : state.lastReportAt
+            });
+          }
+        });
 
       const evaluateBatch = hasFilter ? yield* runtime.evaluateBatch(expr) : undefined;
 
@@ -259,8 +299,24 @@ export const queryCommand = Command.make(
         onSome: (value) => filtered.pipe(Stream.take(value))
       });
 
+      const warnIfScanLimitReached = scanRef && resolvedScanLimit !== undefined
+        ? () =>
+            Ref.get(scanRef).pipe(
+              Effect.flatMap((state) =>
+                state.scanned >= resolvedScanLimit
+                  ? output
+                      .writeStderr(
+                        `Warning: scan limit ${resolvedScanLimit} reached. Results may be truncated.\n`
+                      )
+                      .pipe(Effect.catchAll(() => Effect.void))
+                  : Effect.void
+              )
+            )
+        : () => Effect.void;
+
       if (outputFormat === "ndjson") {
         yield* writeJsonStream(stream.pipe(Stream.map(project)));
+        yield* warnIfScanLimitReached();
         return;
       }
       if (outputFormat === "json") {
@@ -276,6 +332,7 @@ export const queryCommand = Command.make(
         });
         const suffix = isFirst ? "]\n" : "\n]\n";
         yield* writeChunk(suffix);
+        yield* warnIfScanLimitReached();
         return;
       }
 
@@ -286,6 +343,7 @@ export const queryCommand = Command.make(
               ? renderAnsi(renderPostCompact(post), w)
               : renderPlain(renderPostCompact(post), w);
           yield* Stream.runForEach(stream, (post) => writeText(render(post)));
+          yield* warnIfScanLimitReached();
           return;
         }
         case "card": {
@@ -300,6 +358,7 @@ export const queryCommand = Command.make(
             })
           );
           yield* Stream.runForEach(rendered, (text) => writeText(text));
+          yield* warnIfScanLimitReached();
           return;
         }
       }
@@ -307,6 +366,7 @@ export const queryCommand = Command.make(
       const collected = yield* Stream.runCollect(stream);
       const posts = Chunk.toReadonlyArray(collected);
       const projectedPosts = Option.isSome(selectorsOption) ? posts.map(project) : posts;
+      yield* warnIfScanLimitReached();
 
       switch (outputFormat) {
         case "markdown":
