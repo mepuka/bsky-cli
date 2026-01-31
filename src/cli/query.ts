@@ -75,6 +75,9 @@ const fieldsOption = Options.text("fields").pipe(
 const progressOption = Options.boolean("progress").pipe(
   Options.withDescription("Show progress for filtered queries")
 );
+const countOption = Options.boolean("count").pipe(
+  Options.withDescription("Only output the count of matching posts")
+);
 
 const DEFAULT_FILTER_SCAN_LIMIT = 5000;
 
@@ -123,9 +126,10 @@ export const queryCommand = Command.make(
     ansi: ansiOption,
     width: widthOption,
     fields: fieldsOption,
-    progress: progressOption
+    progress: progressOption,
+    count: countOption
   },
-  ({ store, range, filter, filterJson, limit, scanLimit, sort, newestFirst, format, ansi, width, fields, progress }) =>
+  ({ store, range, filter, filterJson, limit, scanLimit, sort, newestFirst, format, ansi, width, fields, progress, count }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
@@ -148,6 +152,12 @@ export const queryCommand = Command.make(
         return yield* CliInputError.make({
           message: "--fields is only supported with json or ndjson output.",
           cause: { format: outputFormat }
+        });
+      }
+      if (count && Option.isSome(selectorsOption)) {
+        return yield* CliInputError.make({
+          message: "--count cannot be combined with --fields.",
+          cause: { count, fields }
         });
       }
 
@@ -314,6 +324,21 @@ export const queryCommand = Command.make(
             )
         : () => Effect.void;
 
+      if (count) {
+        const canUseIndexCount =
+          !hasFilter && Option.isNone(parsedRange);
+        const total = canUseIndexCount
+          ? yield* index.count(storeRef)
+          : yield* Stream.runFold(stream, 0, (acc) => acc + 1);
+        const limited = Option.match(limit, {
+          onNone: () => total,
+          onSome: (value) => Math.min(total, value)
+        });
+        yield* writeJson(limited);
+        yield* warnIfScanLimitReached();
+        return;
+      }
+
       if (outputFormat === "ndjson") {
         const countRef = yield* Ref.make(0);
         const counted = stream.pipe(
@@ -433,7 +458,8 @@ export const queryCommand = Command.make(
         "skygent query my-store --format card --ansi",
         "skygent query my-store --format thread --ansi --width 120",
         "skygent query my-store --format compact --limit 50",
-        "skygent query my-store --sort desc --limit 25"
+        "skygent query my-store --sort desc --limit 25",
+        "skygent query my-store --filter 'contains:ai' --count"
       ],
       [
         "Tip: use --fields @minimal or --compact to reduce JSON output size."

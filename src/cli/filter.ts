@@ -42,6 +42,15 @@ const storeOption = Options.text("store").pipe(
   Options.withSchema(StoreName),
   Options.withDescription("Store name to sample for benchmarking")
 );
+const storeTestOption = Options.text("store").pipe(
+  Options.withSchema(StoreName),
+  Options.withDescription("Store name to sample for filter testing"),
+  Options.optional
+);
+const testLimitOption = Options.integer("limit").pipe(
+  Options.withDescription("Number of posts to evaluate (default: 100)"),
+  Options.optional
+);
 const sampleSizeOption = Options.integer("sample-size").pipe(
   Options.withDescription("Number of posts to evaluate (default: 1000)"),
   Options.optional
@@ -267,17 +276,74 @@ export const filterTest = Command.make(
     filterJson: filterJsonOption,
     postJson: postJsonOption,
     postUri: postUriOption,
+    store: storeTestOption,
+    limit: testLimitOption,
     format: testFormatOption
   },
-  ({ filter, filterJson, postJson, postUri, format }) =>
+  ({ filter, filterJson, postJson, postUri, store, limit, format }) =>
     Effect.gen(function* () {
       yield* requireFilterExpr(filter, filterJson);
       const expr = yield* parseFilterExpr(filter, filterJson);
       const runtime = yield* FilterRuntime;
+      const outputFormat = Option.getOrElse(format, () => "text" as const);
+      if (Option.isSome(store)) {
+        if (Option.isSome(postJson) || Option.isSome(postUri)) {
+          return yield* CliInputError.make({
+            message: "Use either --store or --post-json/--post-uri, not both.",
+            cause: { store: store.value, postJson, postUri }
+          });
+        }
+        if (Option.isSome(limit) && limit.value <= 0) {
+          return yield* CliInputError.make({
+            message: "--limit must be a positive integer.",
+            cause: { limit: limit.value }
+          });
+        }
+        const storeRef = yield* storeOptions.loadStoreRef(store.value);
+        const index = yield* StoreIndex;
+        const evaluateBatch = yield* runtime.evaluateBatch(expr);
+        const sampleLimit = Option.getOrElse(limit, () => 100);
+        const query = StoreQuery.make({ scanLimit: sampleLimit, order: "desc" });
+        const stream = index.query(storeRef, query);
+        const result = yield* stream.pipe(
+          Stream.grouped(50),
+          Stream.runFoldEffect(
+            { processed: 0, matched: 0 },
+            (state, batch) =>
+              evaluateBatch(batch).pipe(
+                Effect.map((results) => {
+                  const processed = state.processed + Chunk.size(batch);
+                  const matched =
+                    state.matched +
+                    Chunk.toReadonlyArray(results).filter(Boolean).length;
+                  return { processed, matched };
+                })
+              )
+          )
+        );
+        if (outputFormat === "json") {
+          yield* writeJson({
+            store: storeRef.name,
+            processed: result.processed,
+            matched: result.matched,
+            limit: sampleLimit,
+            filter: expr,
+            filterText: formatFilterExpr(expr)
+          });
+          return;
+        }
+        const lines = [
+          `Matched: ${result.matched}/${result.processed}`,
+          `Store: ${storeRef.name}`,
+          `Filter: ${formatFilterExpr(expr)}`
+        ];
+        yield* writeText(lines.join("\n"));
+        return;
+      }
+
       const predicate = yield* runtime.evaluate(expr);
       const post = yield* loadPost(postJson, postUri);
       const ok = yield* predicate(post);
-      const outputFormat = Option.getOrElse(format, () => "text" as const);
       if (outputFormat === "json") {
         yield* writeJson({
           ok,
@@ -297,8 +363,9 @@ export const filterTest = Command.make(
     })
 ).pipe(
   Command.withDescription(
-    withExamples("Test a filter against a single post", [
-      "skygent filter test --filter 'hashtag:#ai' --post-uri at://did:plc:example/app.bsky.feed.post/xyz"
+    withExamples("Test a filter against a post or store sample", [
+      "skygent filter test --filter 'hashtag:#ai' --post-uri at://did:plc:example/app.bsky.feed.post/xyz",
+      "skygent filter test --filter 'engagement:minLikes=10' --store my-store --limit 100"
     ])
   )
 );
