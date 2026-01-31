@@ -5,6 +5,8 @@ export type SyncSettingsValue = {
   readonly checkpointEvery: number;
   readonly checkpointIntervalMs: number;
   readonly concurrency: number;
+  readonly batchSize: number;
+  readonly pageLimit: number;
 };
 
 type SyncSettingsOverridesValue = Partial<SyncSettingsValue>;
@@ -36,11 +38,19 @@ export class SyncSettings extends Context.Tag("@skygent/SyncSettings")<
       const concurrency = yield* Config.integer("SKYGENT_SYNC_CONCURRENCY").pipe(
         Config.withDefault(5)
       );
+      const batchSize = yield* Config.integer("SKYGENT_SYNC_BATCH_SIZE").pipe(
+        Config.withDefault(100)
+      );
+      const pageLimit = yield* Config.integer("SKYGENT_SYNC_PAGE_LIMIT").pipe(
+        Config.withDefault(100)
+      );
 
       const merged = {
         checkpointEvery,
         checkpointIntervalMs,
         concurrency,
+        batchSize,
+        pageLimit,
         ...pickDefined(overrides as Record<string, unknown>)
       } as SyncSettingsValue;
 
@@ -64,6 +74,20 @@ export class SyncSettings extends Context.Tag("@skygent/SyncSettings")<
       );
       if (concurrencyError) {
         return yield* concurrencyError;
+      }
+      const batchSizeError = validatePositive(
+        "SKYGENT_SYNC_BATCH_SIZE",
+        merged.batchSize
+      );
+      if (batchSizeError) {
+        return yield* batchSizeError;
+      }
+      const pageLimitError = validatePositive(
+        "SKYGENT_SYNC_PAGE_LIMIT",
+        merged.pageLimit
+      );
+      if (pageLimitError) {
+        return yield* pageLimitError;
       }
 
       return SyncSettings.of(merged);

@@ -59,7 +59,7 @@
  * @module services/sync-engine
  */
 
-import { Clock, Context, Duration, Effect, Fiber, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
+import { Chunk, Clock, Context, Duration, Effect, Fiber, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
 import { messageFromCause } from "./shared.js";
 import { FilterRuntime } from "./filter-runtime.js";
 import { PostParser } from "./post-parser.js";
@@ -68,6 +68,7 @@ import { BskyClient } from "./bsky-client.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { filterExprSignature } from "../domain/filter.js";
 import { EventMeta, PostUpsert } from "../domain/events.js";
+import type { EventLogEntry } from "../domain/events.js";
 import type { Post } from "../domain/post.js";
 import { EventSeq, Timestamp } from "../domain/primitives.js";
 import type { RawPost } from "../domain/raw.js";
@@ -200,29 +201,10 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                 )
               );
 
-            const storePost = (post: Post) =>
-              Effect.gen(function* () {
-                const meta = yield* makeMeta();
-                const event = PostUpsert.make({ post, meta });
-                if (policy === "refresh") {
-                  const record = yield* committer
-                    .appendUpsert(target, event)
-                    .pipe(
-                      Effect.mapError(
-                        toSyncError("store", "Failed to append event")
-                      )
-                    );
-                  return Option.some(record.seq);
-                }
-                const stored = yield* committer
-                  .appendUpsertIfMissing(target, event)
-                  .pipe(
-                    Effect.mapError(
-                      toSyncError("store", "Failed to append event")
-                    )
-                  );
-                return Option.map(stored, (entry) => entry.seq);
-              });
+            const buildUpsert = (post: Post) =>
+              makeMeta().pipe(
+                Effect.map((meta) => PostUpsert.make({ post, meta }))
+              );
 
             const prepareRaw = (raw: RawPost): Effect.Effect<PreparedOutcome, SyncError> =>
               parser.parsePost(raw).pipe(
@@ -244,23 +226,53 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                 )
               );
 
-            const applyPrepared = (
-              prepared: PreparedOutcome
-            ): Effect.Effect<SyncOutcome, SyncError> =>
+            const commitStoreEvents = (events: ReadonlyArray<PostUpsert>) => {
+              if (events.length === 0) {
+                return Effect.succeed(
+                  [] as ReadonlyArray<Option.Option<EventLogEntry>>
+                );
+              }
+              const commit = policy === "refresh"
+                ? committer
+                    .appendUpserts(target, events)
+                    .pipe(Effect.map((entries) => entries.map(Option.some)))
+                : committer.appendUpsertsIfMissing(target, events);
+              return commit.pipe(
+                Effect.mapError(
+                  toSyncError("store", "Failed to append events")
+                )
+              );
+            };
+
+            const applyPreparedBatch = (
+              preparedBatch: ReadonlyArray<PreparedOutcome>
+            ): Effect.Effect<ReadonlyArray<SyncOutcome>, SyncError> =>
               Effect.gen(function* () {
-                switch (prepared._tag) {
-                  case "Skip":
-                    return skippedOutcome;
-                  case "Error":
-                    return { _tag: "Error", error: prepared.error } as const;
-                  case "Store": {
-                    const stored = yield* storePost(prepared.post);
-                    return Option.match(stored, {
-                      onNone: () => skippedOutcome,
-                      onSome: (eventSeq) => ({ _tag: "Stored", eventSeq } as const)
-                    });
+                const storeItems = preparedBatch.filter(
+                  (item): item is Extract<PreparedOutcome, { _tag: "Store" }> =>
+                    item._tag === "Store"
+                );
+                const events = yield* Effect.forEach(storeItems, (item) =>
+                  buildUpsert(item.post)
+                );
+                const storedEntries = yield* commitStoreEvents(events);
+                let storeIndex = 0;
+                return preparedBatch.map((prepared) => {
+                  switch (prepared._tag) {
+                    case "Skip":
+                      return skippedOutcome;
+                    case "Error":
+                      return { _tag: "Error", error: prepared.error } as const;
+                    case "Store": {
+                      const entry = storedEntries[storeIndex++] ?? Option.none();
+                      return Option.match(entry, {
+                        onNone: () => skippedOutcome,
+                        onSome: (record) =>
+                          ({ _tag: "Stored", eventSeq: record.seq } as const)
+                      });
+                    }
                   }
-                }
+                });
               });
 
             const initial = SyncResultMonoid.empty;
@@ -273,41 +285,43 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
             const cursorOption = Option.flatMap(activeCheckpoint, (value) =>
               Option.fromNullable(value.cursor)
             );
+            const pageLimit = settings.pageLimit;
 
             const stream = (() => {
               switch (source._tag) {
                 case "Timeline":
                   return client.getTimeline(
                     Option.match(cursorOption, {
-                      onNone: () => undefined,
-                      onSome: (value) => ({ cursor: value })
+                      onNone: () => ({ limit: pageLimit }),
+                      onSome: (value) => ({ cursor: value, limit: pageLimit })
                     })
                   );
                 case "Feed":
                   return client.getFeed(
                     source.uri,
                     Option.match(cursorOption, {
-                      onNone: () => undefined,
-                      onSome: (value) => ({ cursor: value })
+                      onNone: () => ({ limit: pageLimit }),
+                      onSome: (value) => ({ cursor: value, limit: pageLimit })
                     })
                   );
                 case "List":
                   return client.getListFeed(
                     source.uri,
                     Option.match(cursorOption, {
-                      onNone: () => undefined,
-                      onSome: (value) => ({ cursor: value })
+                      onNone: () => ({ limit: pageLimit }),
+                      onSome: (value) => ({ cursor: value, limit: pageLimit })
                     })
                   );
                 case "Notifications":
                   return client.getNotifications(
                     Option.match(cursorOption, {
-                      onNone: () => undefined,
-                      onSome: (value) => ({ cursor: value })
+                      onNone: () => ({ limit: pageLimit }),
+                      onSome: (value) => ({ cursor: value, limit: pageLimit })
                     })
                   );
                 case "Author":
                   const authorOptions = {
+                    limit: pageLimit,
                     ...(source.filter !== undefined
                       ? { filter: source.filter }
                       : {}),
@@ -450,44 +464,45 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                 concurrency: settings.concurrency,
                 unordered: false
               }),
+              Stream.grouped(settings.batchSize),
               Stream.runFoldEffect(
                 initialState,
-                (state, prepared) =>
+                (state, preparedChunk) =>
                   Effect.gen(function* () {
-                    const outcome = yield* applyPrepared(prepared);
-                    const delta = (() => {
+                    const preparedBatch = Chunk.toReadonlyArray(preparedChunk);
+                    const outcomes = yield* applyPreparedBatch(preparedBatch);
+                    let storedDelta = 0;
+                    let skippedDelta = 0;
+                    let errorDelta = 0;
+                    let lastStoredSeq = Option.none<EventSeq>();
+                    const errorList: Array<SyncError> = [];
+                    for (const outcome of outcomes) {
                       switch (outcome._tag) {
                         case "Stored":
-                          return SyncResult.make({
-                            postsAdded: 1,
-                            postsDeleted: 0,
-                            postsSkipped: 0,
-                            errors: []
-                          });
+                          storedDelta += 1;
+                          lastStoredSeq = Option.some(outcome.eventSeq);
+                          break;
                         case "Skipped":
-                          return SyncResult.make({
-                            postsAdded: 0,
-                            postsDeleted: 0,
-                            postsSkipped: 1,
-                            errors: []
-                          });
+                          skippedDelta += 1;
+                          break;
                         case "Error":
-                          return SyncResult.make({
-                            postsAdded: 0,
-                            postsDeleted: 0,
-                            postsSkipped: 1,
-                            errors: [outcome.error]
-                          });
+                          skippedDelta += 1;
+                          errorDelta += 1;
+                          errorList.push(outcome.error);
+                          break;
                       }
-                    })();
+                    }
+                    const delta = SyncResult.make({
+                      postsAdded: storedDelta,
+                      postsDeleted: 0,
+                      postsSkipped: skippedDelta,
+                      errors: errorList
+                    });
 
-                    const processed = state.processed + 1;
-                    const stored =
-                      state.stored + (outcome._tag === "Stored" ? 1 : 0);
-                    const skipped =
-                      state.skipped + (outcome._tag === "Skipped" ? 1 : 0);
-                    const errors =
-                      state.errors + (outcome._tag === "Error" ? 1 : 0);
+                    const processed = state.processed + preparedBatch.length;
+                    const stored = state.stored + storedDelta;
+                    const skipped = state.skipped + skippedDelta;
+                    const errors = state.errors + errorDelta;
                     const now = yield* Clock.currentTimeMillis;
                     const shouldReport =
                       processed % 100 === 0 || now - state.lastReportAt >= progressIntervalMs;
@@ -507,16 +522,21 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       );
                     }
 
-                    const nextCursor = prepared.pageCursor
-                      ? Option.some(prepared.pageCursor)
-                      : state.latestCursor;
+                    const nextCursor = preparedBatch.reduce(
+                      (cursor, prepared) =>
+                        prepared.pageCursor
+                          ? Option.some(prepared.pageCursor)
+                          : cursor,
+                      state.latestCursor
+                    );
+                    const nextLastEventSeq =
+                      Option.isSome(lastStoredSeq)
+                        ? lastStoredSeq
+                        : state.lastEventSeq;
 
                     const nextState: SyncState = {
                       result: SyncResultMonoid.combine(state.result, delta),
-                      lastEventSeq:
-                        outcome._tag === "Stored"
-                          ? Option.some(outcome.eventSeq)
-                          : state.lastEventSeq,
+                      lastEventSeq: nextLastEventSeq,
                       latestCursor: nextCursor,
                       processed,
                       stored,

@@ -67,6 +67,13 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
       store: StoreRef,
       event: PostUpsert
     ) => Effect.Effect<EventLogEntry, StoreIoError>;
+    /**
+     * Append multiple upsert events in a single transaction.
+     */
+    readonly appendUpserts: (
+      store: StoreRef,
+      events: ReadonlyArray<PostUpsert>
+    ) => Effect.Effect<ReadonlyArray<EventLogEntry>, StoreIoError>;
 
     /**
      * Append an upsert event only if the post doesn't already exist.
@@ -84,6 +91,13 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
       store: StoreRef,
       event: PostUpsert
     ) => Effect.Effect<Option.Option<EventLogEntry>, StoreIoError>;
+    /**
+     * Append multiple upsert events if missing in a single transaction.
+     */
+    readonly appendUpsertsIfMissing: (
+      store: StoreRef,
+      events: ReadonlyArray<PostUpsert>
+    ) => Effect.Effect<ReadonlyArray<Option.Option<EventLogEntry>>, StoreIoError>;
 
     /**
      * Append a delete event to the store, removing the post.
@@ -125,6 +139,26 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
             .pipe(Effect.mapError(toStoreIoError(store.root)))
       );
 
+      const appendUpserts = Effect.fn("StoreCommitter.appendUpserts")(
+        (store: StoreRef, events: ReadonlyArray<PostUpsert>) => {
+          if (events.length === 0) {
+            return Effect.succeed([] as ReadonlyArray<EventLogEntry>);
+          }
+          return storeDb
+            .withClient(store, (client) =>
+              client.withTransaction(
+                Effect.forEach(events, (event) =>
+                  Effect.gen(function* () {
+                    yield* upsertPost(client, event.post);
+                    return yield* writer.appendWithClient(client, event);
+                  })
+                )
+              )
+            )
+            .pipe(Effect.mapError(toStoreIoError(store.root)));
+        }
+      );
+
       const appendUpsertIfMissing = Effect.fn(
         "StoreCommitter.appendUpsertIfMissing"
       )((store: StoreRef, event: PostUpsert) =>
@@ -144,6 +178,30 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
           .pipe(Effect.mapError(toStoreIoError(store.root)))
       );
 
+      const appendUpsertsIfMissing = Effect.fn(
+        "StoreCommitter.appendUpsertsIfMissing"
+      )((store: StoreRef, events: ReadonlyArray<PostUpsert>) => {
+        if (events.length === 0) {
+          return Effect.succeed([] as ReadonlyArray<Option.Option<EventLogEntry>>);
+        }
+        return storeDb
+          .withClient(store, (client) =>
+            client.withTransaction(
+              Effect.forEach(events, (event) =>
+                Effect.gen(function* () {
+                  const inserted = yield* insertPostIfMissing(client, event.post);
+                  if (!inserted) {
+                    return Option.none<EventLogEntry>();
+                  }
+                  const entry = yield* writer.appendWithClient(client, event);
+                  return Option.some(entry);
+                })
+              )
+            )
+          )
+          .pipe(Effect.mapError(toStoreIoError(store.root)));
+      });
+
       const appendDelete = Effect.fn("StoreCommitter.appendDelete")(
         (store: StoreRef, event: PostDelete) =>
           storeDb
@@ -160,7 +218,9 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
 
       return StoreCommitter.of({
         appendUpsert,
+        appendUpserts,
         appendUpsertIfMissing,
+        appendUpsertsIfMissing,
         appendDelete
       });
     })

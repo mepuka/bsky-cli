@@ -42,6 +42,14 @@ export const configOptions = {
     Options.optional,
     Options.withDescription("Concurrent sync preparation workers (default: 5)")
   ),
+  syncBatchSize: Options.integer("sync-batch-size").pipe(
+    Options.optional,
+    Options.withDescription("Batch size for sync store writes (default: 100)")
+  ),
+  syncPageLimit: Options.integer("sync-page-limit").pipe(
+    Options.optional,
+    Options.withDescription("Page size for sync fetches (default: 100)")
+  ),
   checkpointEvery: Options.integer("checkpoint-every").pipe(
     Options.optional,
     Options.withDescription("Checkpoint every N processed posts (default: 100)")
@@ -61,6 +69,8 @@ export type ConfigOptions = {
   readonly compact: boolean;
   readonly logFormat: Option.Option<LogFormat>;
   readonly syncConcurrency: Option.Option<number>;
+  readonly syncBatchSize: Option.Option<number>;
+  readonly syncPageLimit: Option.Option<number>;
   readonly checkpointEvery: Option.Option<number>;
   readonly checkpointIntervalMs: Option.Option<number>;
 };
@@ -86,6 +96,8 @@ export const toSyncSettingsOverrides = (
 ): Partial<SyncSettingsValue> =>
   pickDefined({
     concurrency: Option.getOrUndefined(options.syncConcurrency),
+    batchSize: Option.getOrUndefined(options.syncBatchSize),
+    pageLimit: Option.getOrUndefined(options.syncPageLimit),
     checkpointEvery: Option.getOrUndefined(options.checkpointEvery),
     checkpointIntervalMs: Option.getOrUndefined(options.checkpointIntervalMs)
   }) as Partial<SyncSettingsValue>;
