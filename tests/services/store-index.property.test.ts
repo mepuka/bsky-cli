@@ -12,6 +12,7 @@ import { EventMeta, PostDelete, PostEventRecord, PostUpsert, StoreQuery } from "
 import { EventId, Handle, Hashtag, PostUri } from "../../src/domain/primitives.js";
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
+import { PostOrder } from "../../src/domain/order.js";
 
 const postUriArb = Arbitrary.make(PostUri);
 const handleArb = Arbitrary.make(Handle);
@@ -83,11 +84,6 @@ const limitArb = fc.option(fc.integer({ min: 1, max: 10 }), { nil: undefined });
 const toDate = (value: Date | string) =>
   typeof value === "string" ? new Date(value) : value;
 
-const compareByCreatedAt = (left: Post, right: Post) => {
-  const delta = toDate(left.createdAt).getTime() - toDate(right.createdAt).getTime();
-  if (delta !== 0) return delta;
-  return left.uri.localeCompare(right.uri);
-};
 
 type ModelEntry = { readonly createdDate: string; readonly hashtags: ReadonlyArray<string> };
 
@@ -175,7 +171,7 @@ const queryModel = (
 ) => {
   const collected: Array<Post> = [];
 
-  const orderedPosts = Array.from(model.posts.values()).sort(compareByCreatedAt);
+  const orderedPosts = Array.from(model.posts.values()).sort(PostOrder);
   for (const post of orderedPosts) {
     const createdAt = toDate(post.createdAt);
     if (

@@ -38,7 +38,7 @@
 
 import { FileSystem, Path } from "@effect/platform";
 import { directorySize } from "./shared.js";
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Order } from "effect";
 import { AppConfigService } from "./app-config.js";
 import { StoreManager } from "./store-manager.js";
 import { StoreIndex } from "./store-index.js";
@@ -47,11 +47,12 @@ import { LineageStore } from "./lineage-store.js";
 import { DerivationValidator } from "./derivation-validator.js";
 import { StoreEventLog } from "./store-event-log.js";
 import { SyncCheckpointStore } from "./sync-checkpoint-store.js";
-import { DataSource } from "../domain/sync.js";
+import { DataSource, type SyncCheckpoint } from "../domain/sync.js";
 import { StoreName, type StorePath } from "../domain/primitives.js";
 import { StoreRef } from "../domain/store.js";
 import type { StoreLineage } from "../domain/derivation.js";
 import { StoreIoError, type StoreIndexError } from "../domain/errors.js";
+import { updatedAtOrder } from "../domain/order.js";
 
 /**
  * Detailed statistics for a single store.
@@ -257,9 +258,10 @@ const resolveSyncStatus = (
     if (candidates.length === 0) {
       return "unknown" as const;
     }
-    const latest = candidates.sort(
-      (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
-    )[0];
+    const checkpointOrder = updatedAtOrder<SyncCheckpoint>();
+    const latest = candidates.reduce((acc, candidate) =>
+      Order.max(checkpointOrder)(acc, candidate)
+    );
     if (!latest || !latest.lastEventSeq) {
       return "stale" as const;
     }

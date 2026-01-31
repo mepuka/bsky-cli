@@ -3,6 +3,7 @@ import type { Annotation } from "./annotation.js";
 import { renderTree } from "./tree.js";
 import { renderPostCompact, renderPostCardLines } from "./post.js";
 import type { Post } from "../../domain/post.js";
+import { PostOrder } from "../../domain/order.js";
 
 export const renderThread = (
   posts: ReadonlyArray<Post>,
@@ -23,10 +24,7 @@ export const renderThread = (
     }
   }
 
-  const sortPosts = (arr: Post[]) =>
-    arr.sort((a, b) =>
-      a.createdAt.getTime() - b.createdAt.getTime() || a.uri.localeCompare(b.uri)
-    );
+  const sortPosts = (arr: Post[]) => arr.sort(PostOrder);
 
   sortPosts(roots);
   for (const children of childMap.values()) sortPosts(children);
