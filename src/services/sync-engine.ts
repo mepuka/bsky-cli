@@ -61,6 +61,7 @@
 
 import { Chunk, Clock, Context, Duration, Effect, Fiber, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
 import { messageFromCause } from "./shared.js";
+import type { BskyError } from "../domain/errors.js";
 import { FilterRuntime } from "./filter-runtime.js";
 import { PostParser } from "./post-parser.js";
 import { StoreCommitter } from "./store-commit.js";
@@ -155,7 +156,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
       source: DataSource,
       target: StoreRef,
       filter: FilterExpr,
-      options?: { readonly policy?: SyncUpsertPolicy }
+      options?: { readonly policy?: SyncUpsertPolicy; readonly limit?: number }
     ) => Effect.Effect<SyncResult, SyncError>;
     readonly watch: (config: WatchConfig) => Stream.Stream<SyncEvent, SyncError>;
   }
@@ -172,7 +173,12 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
       const settings = yield* SyncSettings;
 
       const sync = Effect.fn("SyncEngine.sync")(
-        (source: DataSource, target: StoreRef, filter: FilterExpr, options?: { readonly policy?: SyncUpsertPolicy }) =>
+        (
+          source: DataSource,
+          target: StoreRef,
+          filter: FilterExpr,
+          options?: { readonly policy?: SyncUpsertPolicy; readonly limit?: number }
+        ) =>
           Effect.gen(function* () {
             const predicate = yield* runtime
               .evaluateWithMetadata(filter)
@@ -287,7 +293,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
             );
             const pageLimit = settings.pageLimit;
 
-            const stream = (() => {
+            let stream = (() => {
               switch (source._tag) {
                 case "Timeline":
                   return client.getTimeline(
@@ -360,7 +366,10 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                     })
                   );
               }
-            })();
+            })() as Stream.Stream<RawPost, BskyError | SyncError>;
+            if (options?.limit !== undefined) {
+              stream = stream.pipe(Stream.take(options.limit));
+            }
 
             type SyncState = {
               readonly result: SyncResult;

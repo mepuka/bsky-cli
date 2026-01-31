@@ -42,7 +42,11 @@ import {
   parseThreadDepth
 } from "./thread-options.js";
 
-const limitOption = Options.integer("limit").pipe(
+const syncLimitOption = Options.integer("limit").pipe(
+  Options.withDescription("Maximum number of posts to sync"),
+  Options.optional
+);
+const jetstreamLimitOption = Options.integer("limit").pipe(
   Options.withDescription("Maximum number of Jetstream events to process"),
   Options.optional
 );
@@ -84,7 +88,7 @@ const parseDuration = (value: Option.Option<string>) =>
 
 const timelineCommand = Command.make(
   "timeline",
-  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
+  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
   makeSyncCommandBody("timeline", () => DataSource.timeline())
 ).pipe(
   Command.withDescription(
@@ -101,7 +105,7 @@ const timelineCommand = Command.make(
 
 const feedCommand = Command.make(
   "feed",
-  { uri: feedUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
+  { uri: feedUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
   ({ uri, ...rest }) => makeSyncCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
 ).pipe(
   Command.withDescription(
@@ -117,7 +121,7 @@ const feedCommand = Command.make(
 
 const listCommand = Command.make(
   "list",
-  { uri: listUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
+  { uri: listUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
   ({ uri, ...rest }) => makeSyncCommandBody("list", () => DataSource.list(uri), { uri })(rest)
 ).pipe(
   Command.withDescription(
@@ -133,7 +137,7 @@ const listCommand = Command.make(
 
 const notificationsCommand = Command.make(
   "notifications",
-  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
+  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
   makeSyncCommandBody("notifications", () => DataSource.notifications())
 ).pipe(
   Command.withDescription(
@@ -155,9 +159,10 @@ const authorCommand = Command.make(
     postFilter: postFilterOption,
     postFilterJson: postFilterJsonOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    limit: syncLimitOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh, limit }) =>
     Effect.gen(function* () {
       const resolvedActor = yield* decodeActor(actor);
       const apiFilter = Option.getOrUndefined(filter);
@@ -175,7 +180,8 @@ const authorCommand = Command.make(
         filter: postFilter,
         filterJson: postFilterJson,
         quiet,
-        refresh
+        refresh,
+        limit
       });
     })
 ).pipe(
@@ -201,9 +207,10 @@ const threadCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    limit: syncLimitOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh, limit }) =>
     Effect.gen(function* () {
       const { depth: depthValue, parentHeight: parentHeightValue } =
         yield* parseThreadDepth(depth, parentHeight);
@@ -216,7 +223,7 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, quiet, refresh });
+      return yield* run({ store, filter, filterJson, quiet, refresh, limit });
     })
 ).pipe(
   Command.withDescription(
@@ -244,7 +251,7 @@ const jetstreamCommand = Command.make(
     cursor: jetstreamOptions.cursor,
     compress: jetstreamOptions.compress,
     maxMessageSize: jetstreamOptions.maxMessageSize,
-    limit: limitOption,
+    limit: jetstreamLimitOption,
     duration: durationOption,
     strict: strictOption,
     maxErrors: maxErrorsOption

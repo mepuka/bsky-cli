@@ -6,6 +6,7 @@ import { OutputManager } from "../services/output-manager.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { StoreIndex } from "../services/store-index.js";
 import { parseFilterExpr } from "./filter-input.js";
+import { parseLimit } from "./shared-options.js";
 import { CliOutput, writeJson, writeJsonStream } from "./output.js";
 import { storeOptions } from "./store.js";
 import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
@@ -20,6 +21,7 @@ export interface CommonCommandInput {
   readonly filterJson: Option.Option<string>;
   readonly quiet: boolean;
   readonly refresh: boolean;
+  readonly limit?: Option.Option<number>;
 }
 
 /** Build the command body for a one-shot sync command (timeline, feed, notifications). */
@@ -38,6 +40,7 @@ export const makeSyncCommandBody = (
       const storeRef = yield* storeOptions.loadStoreRef(input.store);
       const storeConfig = yield* storeOptions.loadStoreConfig(input.store);
       const expr = yield* parseFilterExpr(input.filter, input.filterJson);
+      const parsedLimit = yield* parseLimit(input.limit ?? Option.none());
       const basePolicy = storeConfig.syncPolicy ?? "dedupe";
       const policy = input.refresh ? "refresh" : basePolicy;
       yield* logInfo("Starting sync", { source: sourceName, store: storeRef.name, ...extraLogFields });
@@ -47,8 +50,12 @@ export const makeSyncCommandBody = (
           store: storeRef.name
         });
       }
+      const limitValue = Option.getOrUndefined(parsedLimit);
       const result = yield* sync
-        .sync(makeDataSource(), storeRef, expr, { policy })
+        .sync(makeDataSource(), storeRef, expr, {
+          policy,
+          ...(limitValue !== undefined ? { limit: limitValue } : {})
+        })
         .pipe(
           Effect.provideService(SyncReporter, makeSyncReporter(input.quiet, monitor, output))
         );

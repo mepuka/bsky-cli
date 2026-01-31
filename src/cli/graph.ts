@@ -15,6 +15,8 @@ import { renderProfileTable } from "./doc/table-renderers.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
+import { CliPreferences } from "./preferences.js";
+import { compactListItemView, compactListView, compactProfileView } from "./compact-output.js";
 import {
   buildRelationshipGraph,
   relationshipEntries,
@@ -135,6 +137,7 @@ const followersCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
@@ -143,14 +146,26 @@ const followersCommand = Command.make(
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getFollowers(resolvedActor, options);
+      const subject = preferences.compact
+        ? compactProfileView(result.subject)
+        : result.subject;
+      const followers = preferences.compact
+        ? result.followers.map(compactProfileView)
+        : result.followers;
+      const payload = result.cursor
+        ? { subject, followers, cursor: result.cursor }
+        : { subject, followers };
+      const followersStream = Stream.fromIterable(
+        followers as ReadonlyArray<unknown>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
-          ndjson: writeJsonStream(Stream.fromIterable(result.followers)),
+          json: writeJson(payload),
+          ndjson: writeJsonStream(followersStream),
           table: writeText(renderProfileTable(result.followers, result.cursor))
         }
       );
@@ -171,6 +186,7 @@ const followsCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
@@ -179,14 +195,26 @@ const followsCommand = Command.make(
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getFollows(resolvedActor, options);
+      const subject = preferences.compact
+        ? compactProfileView(result.subject)
+        : result.subject;
+      const follows = preferences.compact
+        ? result.follows.map(compactProfileView)
+        : result.follows;
+      const payload = result.cursor
+        ? { subject, follows, cursor: result.cursor }
+        : { subject, follows };
+      const followsStream = Stream.fromIterable(
+        follows as ReadonlyArray<unknown>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
-          ndjson: writeJsonStream(Stream.fromIterable(result.follows)),
+          json: writeJson(payload),
+          ndjson: writeJsonStream(followsStream),
           table: writeText(renderProfileTable(result.follows, result.cursor))
         }
       );
@@ -207,6 +235,7 @@ const knownFollowersCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
@@ -215,14 +244,26 @@ const knownFollowersCommand = Command.make(
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getKnownFollowers(resolvedActor, options);
+      const subject = preferences.compact
+        ? compactProfileView(result.subject)
+        : result.subject;
+      const followers = preferences.compact
+        ? result.followers.map(compactProfileView)
+        : result.followers;
+      const payload = result.cursor
+        ? { subject, followers, cursor: result.cursor }
+        : { subject, followers };
+      const followersStream = Stream.fromIterable(
+        followers as ReadonlyArray<unknown>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
-          ndjson: writeJsonStream(Stream.fromIterable(result.followers)),
+          json: writeJson(payload),
+          ndjson: writeJsonStream(followersStream),
           table: writeText(renderProfileTable(result.followers, result.cursor))
         }
       );
@@ -370,6 +411,7 @@ const listsCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
@@ -379,14 +421,21 @@ const listsCommand = Command.make(
         ...(Option.isSome(purpose) ? { purposes: [purpose.value] } : {})
       };
       const result = yield* client.getLists(resolvedActor, options);
+      const lists = preferences.compact
+        ? result.lists.map(compactListView)
+        : result.lists;
+      const payload = result.cursor ? { lists, cursor: result.cursor } : { lists };
+      const listsStream = Stream.fromIterable(
+        lists as ReadonlyArray<ListView | ReturnType<typeof compactListView>>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
-          ndjson: writeJsonStream(Stream.fromIterable(result.lists)),
+          json: writeJson(payload),
+          ndjson: writeJsonStream(listsStream),
           table: writeText(renderListTable(result.lists, result.cursor))
         }
       );
@@ -407,6 +456,7 @@ const listCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
@@ -414,6 +464,16 @@ const listCommand = Command.make(
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getList(uri, options);
+      const list = preferences.compact ? compactListView(result.list) : result.list;
+      const items = preferences.compact
+        ? result.items.map(compactListItemView)
+        : result.items;
+      const payload = result.cursor
+        ? { list, items, cursor: result.cursor }
+        : { list, items };
+      const itemsStream = Stream.fromIterable(
+        items as ReadonlyArray<ListItemView | ReturnType<typeof compactListItemView>>
+      );
       const header = `${result.list.name} (${result.list.purpose}) by ${result.list.creator.handle}`;
       const body = renderListItemsTable(result.items, result.cursor);
       yield* emitWithFormat(
@@ -422,8 +482,8 @@ const listCommand = Command.make(
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
-          ndjson: writeJsonStream(Stream.fromIterable(result.items)),
+          json: writeJson(payload),
+          ndjson: writeJsonStream(itemsStream),
           table: writeText(`${header}\n\n${body}`)
         }
       );
@@ -443,6 +503,7 @@ const blocksCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
@@ -450,17 +511,24 @@ const blocksCommand = Command.make(
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getBlocks(options);
+      const blocks = preferences.compact
+        ? result.blocks.map(compactProfileView)
+        : result.blocks;
+      const payload = result.cursor ? { blocks, cursor: result.cursor } : { blocks };
+      const blocksStream = Stream.fromIterable(
+        blocks as ReadonlyArray<unknown>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
+          json: writeJson(payload),
           ndjson:
-            result.blocks.length === 0
+            blocks.length === 0
               ? writeText("[]")
-              : writeJsonStream(Stream.fromIterable(result.blocks)),
+              : writeJsonStream(blocksStream),
           table: writeText(renderProfileTable(result.blocks, result.cursor))
         }
       );
@@ -480,6 +548,7 @@ const mutesCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
@@ -487,17 +556,24 @@ const mutesCommand = Command.make(
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getMutes(options);
+      const mutes = preferences.compact
+        ? result.mutes.map(compactProfileView)
+        : result.mutes;
+      const payload = result.cursor ? { mutes, cursor: result.cursor } : { mutes };
+      const mutesStream = Stream.fromIterable(
+        mutes as ReadonlyArray<unknown>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
+          json: writeJson(payload),
           ndjson:
-            result.mutes.length === 0
+            mutes.length === 0
               ? writeText("[]")
-              : writeJsonStream(Stream.fromIterable(result.mutes)),
+              : writeJsonStream(mutesStream),
           table: writeText(renderProfileTable(result.mutes, result.cursor))
         }
       );

@@ -6,6 +6,8 @@ import { BskyClient } from "../services/bsky-client.js";
 import { AppConfigService } from "../services/app-config.js";
 import type { FeedGeneratorView } from "../domain/bsky.js";
 import { AtUri } from "../domain/primitives.js";
+import { CliPreferences } from "./preferences.js";
+import { compactFeedGeneratorView } from "./compact-output.js";
 import { decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
@@ -70,16 +72,23 @@ const showCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const result = yield* client.getFeedGenerator(uri);
+      const payload = preferences.compact
+        ? {
+            ...result,
+            view: compactFeedGeneratorView(result.view)
+          }
+        : result;
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
-          ndjson: writeJson(result),
+          json: writeJson(payload),
+          ndjson: writeJson(payload),
           table: writeText(renderFeedInfoTable(result.view, result.isOnline, result.isValid))
         }
       );
@@ -99,6 +108,7 @@ const batchCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       if (uris.length === 0) {
         return yield* CliInputError.make({
@@ -107,14 +117,21 @@ const batchCommand = Command.make(
         });
       }
       const result = yield* client.getFeedGenerators(uris);
+      const feeds = preferences.compact
+        ? result.feeds.map(compactFeedGeneratorView)
+        : result.feeds;
+      const payload = { ...result, feeds };
+      const feedsStream = Stream.fromIterable(
+        feeds as ReadonlyArray<FeedGeneratorView | ReturnType<typeof compactFeedGeneratorView>>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
-          ndjson: writeJsonStream(Stream.fromIterable(result.feeds)),
+          json: writeJson(payload),
+          ndjson: writeJsonStream(feedsStream),
           table: writeText(renderFeedTable(result.feeds, undefined))
         }
       );
@@ -134,6 +151,7 @@ const byActorCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const resolvedActor = yield* decodeActor(actor);
@@ -141,14 +159,21 @@ const byActorCommand = Command.make(
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       });
+      const feeds = preferences.compact
+        ? result.feeds.map(compactFeedGeneratorView)
+        : result.feeds;
+      const payload = { ...result, feeds };
+      const feedsStream = Stream.fromIterable(
+        feeds as ReadonlyArray<FeedGeneratorView | ReturnType<typeof compactFeedGeneratorView>>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
-          ndjson: writeJsonStream(Stream.fromIterable(result.feeds)),
+          json: writeJson(payload),
+          ndjson: writeJsonStream(feedsStream),
           table: writeText(renderFeedTable(result.feeds, result.cursor))
         }
       );
