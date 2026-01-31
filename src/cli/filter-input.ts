@@ -1,4 +1,5 @@
 import { Effect, Option } from "effect";
+import type { Clock as ClockService } from "effect/Clock";
 import { FilterExprSchema, all } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
 import type { FilterLibrary } from "../services/filter-library.js";
@@ -16,7 +17,7 @@ const conflictError = (filter: boolean, filterJson: boolean) =>
 export const parseFilterExpr = (
   filter: Option.Option<string>,
   filterJson: Option.Option<string>
-): Effect.Effect<FilterExpr, CliInputError | CliJsonError, FilterLibrary> =>
+): Effect.Effect<FilterExpr, CliInputError | CliJsonError, FilterLibrary | ClockService> =>
   Option.match(filter, {
     onNone: () =>
       Option.match(filterJson, {
@@ -36,7 +37,7 @@ export const parseFilterExpr = (
 export const parseOptionalFilterExpr = (
   filter: Option.Option<string>,
   filterJson: Option.Option<string>
-): Effect.Effect<Option.Option<FilterExpr>, CliInputError | CliJsonError, FilterLibrary> =>
+): Effect.Effect<Option.Option<FilterExpr>, CliInputError | CliJsonError, FilterLibrary | ClockService> =>
   Option.match(filter, {
     onNone: () =>
       Option.match(filterJson, {

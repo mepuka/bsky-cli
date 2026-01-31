@@ -1,14 +1,15 @@
-import { Context, Duration, Effect, Schema } from "effect";
+import { Clock, Context, Duration, Effect, Schema } from "effect";
 import { formatSchemaError } from "./shared.js";
 import type { FilterEngagement, FilterExpr } from "../domain/filter.js";
 import { all, and, none, not, or } from "../domain/filter.js";
 import type { FilterErrorPolicy } from "../domain/policies.js";
 import { ExcludeOnError, IncludeOnError, RetryOnError } from "../domain/policies.js";
-import { Handle, Hashtag, StoreName } from "../domain/primitives.js";
+import { Handle, Hashtag, StoreName, Timestamp } from "../domain/primitives.js";
 import { FilterLibrary } from "../services/filter-library.js";
 import { FilterLibraryError, FilterNotFound } from "../domain/errors.js";
 import { CliInputError } from "./errors.js";
 import { parseRange } from "./range.js";
+import { parseDurationInput, parseTimeInput } from "./time.js";
 
 type Token =
   | { readonly _tag: "Word"; readonly value: string; readonly position: number }
@@ -235,7 +236,10 @@ const filterKeyHints = new Map<string, string>([
   ["hashtagin", "hashtagin:#ai,#ml"],
   ["tags", "hashtagin:#ai,#ml"],
   ["hashtags", "hashtagin:#ai,#ml"],
-  ["engagement", "engagement:minLikes=100"]
+  ["engagement", "engagement:minLikes=100"],
+  ["since", "since:24h"],
+  ["until", "until:2026-01-01T00:00:00Z"],
+  ["age", "age:<24h"]
 ]);
 
 type FilterSuggestion = {
@@ -295,6 +299,18 @@ const filterSuggestions: ReadonlyArray<FilterSuggestion> = [
   {
     keys: ["engagement"],
     suggestions: ["engagement:minLikes=100"]
+  },
+  {
+    keys: ["since"],
+    suggestions: ["since:24h"]
+  },
+  {
+    keys: ["until"],
+    suggestions: ["until:2026-01-01T00:00:00Z"]
+  },
+  {
+    keys: ["age"],
+    suggestions: ["age:<24h"]
   },
   {
     keys: ["authorin", "authors"],
@@ -826,7 +842,8 @@ class Parser {
   constructor(
     private readonly input: string,
     private readonly tokens: ReadonlyArray<Token>,
-    private readonly library: FilterLibraryService
+    private readonly library: FilterLibraryService,
+    private readonly now: Date
   ) {}
 
   parse = (): Effect.Effect<FilterExpr, CliInputError> => {
@@ -1111,6 +1128,8 @@ class Parser {
       const { value: baseValueRaw, valuePosition: basePosition, options } =
         yield* parseValueOptions(self.input, rawValue, valuePosition, optionMode);
       const baseValue = stripQuotes(baseValueRaw);
+      const timeError = (message: string, cause?: unknown) =>
+        failAt(self.input, basePosition, message);
 
       switch (key) {
         case "author":
@@ -1296,6 +1315,105 @@ class Parser {
           yield* ensureNoUnknownOptions(options, self.input);
           return { _tag: "DateRange", start: range.start, end: range.end };
         }
+        case "since": {
+          if (baseValue.length === 0) {
+            return yield* self.fail(`Missing value for "${key}".`, token.position);
+          }
+          const start = yield* parseTimeInput(baseValue, self.now, {
+            label: "since",
+            onError: timeError
+          });
+          const end = self.now;
+          if (start.getTime() >= end.getTime()) {
+            return yield* self.fail(
+              "Since value must be before now.",
+              basePosition
+            );
+          }
+          yield* ensureNoUnknownOptions(options, self.input);
+          return {
+            _tag: "DateRange",
+            start: yield* self.asTimestamp(start, basePosition),
+            end: yield* self.asTimestamp(end, basePosition)
+          };
+        }
+        case "until": {
+          if (baseValue.length === 0) {
+            return yield* self.fail(`Missing value for "${key}".`, token.position);
+          }
+          const end = yield* parseTimeInput(baseValue, self.now, {
+            label: "until",
+            onError: timeError
+          });
+          const start = new Date(0);
+          if (start.getTime() >= end.getTime()) {
+            return yield* self.fail(
+              "Until value must be after the epoch (1970-01-01T00:00:00Z).",
+              basePosition
+            );
+          }
+          yield* ensureNoUnknownOptions(options, self.input);
+          return {
+            _tag: "DateRange",
+            start: yield* self.asTimestamp(start, basePosition),
+            end: yield* self.asTimestamp(end, basePosition)
+          };
+        }
+        case "age": {
+          if (baseValue.length === 0) {
+            return yield* self.fail(`Missing value for "${key}".`, token.position);
+          }
+          const comparatorMatch = /^(<=|>=|<|>)/.exec(baseValue.trim());
+          const comparator = comparatorMatch?.[1];
+          const durationRaw = comparator
+            ? baseValue.trim().slice(comparator.length).trim()
+            : baseValue.trim();
+          if (durationRaw.length === 0) {
+            return yield* self.fail("Age filter requires a duration.", basePosition);
+          }
+          const duration = yield* parseDurationInput(durationRaw, {
+            label: "age",
+            onError: timeError
+          });
+          const durationMillis = Duration.toMillis(duration);
+          if (durationMillis <= 0) {
+            return yield* self.fail(
+              "Age duration must be greater than zero.",
+              basePosition
+            );
+          }
+          const now = self.now.getTime();
+          if (comparator === ">" || comparator === ">=") {
+            const end = new Date(now - durationMillis);
+            const start = new Date(0);
+            if (start.getTime() >= end.getTime()) {
+              return yield* self.fail(
+                "Age duration is larger than the available timeline.",
+                basePosition
+              );
+            }
+            yield* ensureNoUnknownOptions(options, self.input);
+            return {
+              _tag: "DateRange",
+              start: yield* self.asTimestamp(start, basePosition),
+              end: yield* self.asTimestamp(end, basePosition)
+            };
+          }
+          const start = new Date(now - durationMillis);
+          const end = self.now;
+          if (start.getTime() >= end.getTime()) {
+            return yield* self.fail(
+              "Age duration is larger than the available timeline.",
+              basePosition
+            );
+          }
+          yield* ensureNoUnknownOptions(options, self.input);
+          return {
+            _tag: "DateRange",
+            start: yield* self.asTimestamp(start, basePosition),
+            end: yield* self.asTimestamp(end, basePosition)
+          };
+        }
         case "links":
         case "validlinks":
         case "hasvalidlinks": {
@@ -1365,6 +1483,17 @@ class Parser {
     return Effect.fail(failAt(this.input, position, message));
   }
 
+  private asTimestamp(
+    date: Date,
+    position: number
+  ): Effect.Effect<Timestamp, CliInputError> {
+    return Schema.decodeUnknown(Timestamp)(date).pipe(
+      Effect.mapError((error) =>
+        failAt(this.input, position, `Invalid timestamp: ${formatSchemaError(error)}`)
+      )
+    );
+  }
+
   private peek(): Token | undefined {
     return this.tokens[this.index];
   }
@@ -1405,7 +1534,8 @@ class Parser {
 export const parseFilterDsl = Effect.fn("FilterDsl.parse")((input: string) =>
   Effect.gen(function* () {
     const library = yield* FilterLibrary;
+    const nowMillis = yield* Clock.currentTimeMillis;
     const tokens = yield* tokenize(input);
-    return yield* new Parser(input, tokens, library).parse();
+    return yield* new Parser(input, tokens, library, new Date(nowMillis)).parse();
   })
 );

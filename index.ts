@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, HelpDoc, ValidationError } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
-import { Effect, Layer } from "effect";
+import { Clock, Effect, Layer } from "effect";
 import { app } from "./src/cli/app.js";
 import pkg from "./package.json" with { type: "json" };
 import {
@@ -130,7 +130,13 @@ const program = cli(process.argv).pipe(
       ...errorDetails(error, agentPayload)
     });
   }),
-  Effect.provide(Layer.mergeAll(BunContext.layer, CliOutput.layer))
+  Effect.provide(
+    Layer.mergeAll(
+      BunContext.layer,
+      CliOutput.layer,
+      Layer.succeed(Clock.Clock, Clock.make())
+    )
+  )
 );
 
 BunRuntime.runMain({

@@ -1,10 +1,10 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Clock, Effect, Option, Ref, Stream } from "effect";
+import { Chunk, Clock, Effect, Option, Ref, Schema, Stream } from "effect";
 import * as Doc from "@effect/printer/Doc";
 import { all } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { StoreQuery } from "../domain/events.js";
-import { StoreName } from "../domain/primitives.js";
+import { StoreName, Timestamp } from "../domain/primitives.js";
 import type { Post } from "../domain/post.js";
 import { FilterRuntime } from "../services/filter-runtime.js";
 import { AppConfigService } from "../services/app-config.js";
@@ -16,6 +16,7 @@ import { renderPlain, renderAnsi } from "./doc/render.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJson, writeJsonStream, writeText } from "./output.js";
 import { parseRange } from "./range.js";
+import { parseTimeInput } from "./time.js";
 import { storeOptions } from "./store.js";
 import { CliPreferences } from "./preferences.js";
 import { projectFields, resolveFieldSelectors } from "./query-fields.js";
@@ -30,6 +31,18 @@ const storeNameArg = Args.text({ name: "store" }).pipe(
 );
 const rangeOption = Options.text("range").pipe(
   Options.withDescription("ISO range as <start>..<end>"),
+  Options.optional
+);
+const sinceOption = Options.text("since").pipe(
+  Options.withDescription(
+    "Start time (ISO timestamp, date, relative duration like 24h, or now/today/yesterday)"
+  ),
+  Options.optional
+);
+const untilOption = Options.text("until").pipe(
+  Options.withDescription(
+    "End time (ISO timestamp, date, relative duration like 24h, or now/today/yesterday)"
+  ),
   Options.optional
 );
 const limitOption = Options.integer("limit").pipe(
@@ -104,10 +117,61 @@ const hasUnicodeInsensitiveContains = (expr: FilterExpr): boolean => {
   }
 };
 
-const parseRangeOption = (range: Option.Option<string>) =>
-  Option.match(range, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (raw) => parseRange(raw).pipe(Effect.map(Option.some))
+const parseRangeOptions = (
+  range: Option.Option<string>,
+  since: Option.Option<string>,
+  until: Option.Option<string>
+) =>
+  Effect.gen(function* () {
+    const toTimestamp = (date: Date, label: string) =>
+      Schema.decodeUnknown(Timestamp)(date).pipe(
+        Effect.mapError((cause) =>
+          CliInputError.make({
+            message: `Computed ${label} timestamp is invalid.`,
+            cause
+          })
+        )
+      );
+    const hasRange = Option.isSome(range);
+    const hasSince = Option.isSome(since);
+    const hasUntil = Option.isSome(until);
+
+    if (hasRange && (hasSince || hasUntil)) {
+      return yield* CliInputError.make({
+        message: "Use either --range or --since/--until, not both.",
+        cause: { range: range.value, since: Option.getOrUndefined(since), until: Option.getOrUndefined(until) }
+      });
+    }
+
+    if (hasRange) {
+      const parsed = yield* parseRange(range.value);
+      return Option.some(parsed);
+    }
+
+    if (!hasSince && !hasUntil) {
+      return Option.none();
+    }
+
+    const nowMillis = yield* Clock.currentTimeMillis;
+    const now = new Date(nowMillis);
+
+    const start = hasSince
+      ? yield* parseTimeInput(since.value, now, { label: "--since" })
+      : new Date(0);
+    const end = hasUntil
+      ? yield* parseTimeInput(until.value, now, { label: "--until" })
+      : now;
+
+    if (start.getTime() > end.getTime()) {
+      return yield* CliInputError.make({
+        message: `Invalid time range: start ${start.toISOString()} must be before end ${end.toISOString()}.`,
+        cause: { start, end }
+      });
+    }
+
+    const startTimestamp = yield* toTimestamp(start, "start");
+    const endTimestamp = yield* toTimestamp(end, "end");
+    return Option.some({ start: startTimestamp, end: endTimestamp });
   });
 
 
@@ -116,6 +180,8 @@ export const queryCommand = Command.make(
   {
     store: storeNameArg,
     range: rangeOption,
+    since: sinceOption,
+    until: untilOption,
     filter: filterOption,
     filterJson: filterJsonOption,
     limit: limitOption,
@@ -129,7 +195,7 @@ export const queryCommand = Command.make(
     progress: progressOption,
     count: countOption
   },
-  ({ store, range, filter, filterJson, limit, scanLimit, sort, newestFirst, format, ansi, width, fields, progress, count }) =>
+  ({ store, range, since, until, filter, filterJson, limit, scanLimit, sort, newestFirst, format, ansi, width, fields, progress, count }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
@@ -137,7 +203,7 @@ export const queryCommand = Command.make(
       const output = yield* CliOutput;
       const preferences = yield* CliPreferences;
       const storeRef = yield* storeOptions.loadStoreRef(store);
-      const parsedRange = yield* parseRangeOption(range);
+      const parsedRange = yield* parseRangeOptions(range, since, until);
       const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
       const expr = Option.getOrElse(parsedFilter, () => all());
       const outputFormat = Option.getOrElse(format, () => appConfig.outputFormat);
@@ -451,10 +517,12 @@ export const queryCommand = Command.make(
 ).pipe(
   Command.withDescription(
     withExamples(
-      "Query a store with optional range and filter",
+      "Query a store with optional time range and filter",
       [
         "skygent query my-store --limit 25 --format table",
         "skygent query my-store --range 2024-01-01T00:00:00Z..2024-01-31T00:00:00Z --filter 'hashtag:#ai'",
+        "skygent query my-store --since 24h --filter 'hashtag:#ai'",
+        "skygent query my-store --until 2024-01-15 --format compact",
         "skygent query my-store --format card --ansi",
         "skygent query my-store --format thread --ansi --width 120",
         "skygent query my-store --format compact --limit 50",
