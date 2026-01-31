@@ -7,6 +7,11 @@ type FieldSelector = {
   readonly raw: string;
 };
 
+export type FieldSelectorsResolution = {
+  readonly selectors: Option.Option<ReadonlyArray<FieldSelector>>;
+  readonly source: "implicit" | "explicit";
+};
+
 const fieldPresets: Record<string, ReadonlyArray<string>> = {
   minimal: ["uri", "author", "text", "createdAt"],
   social: ["uri", "author", "text", "metrics", "hashtags"],
@@ -162,11 +167,16 @@ export const parseFieldSelectors = (
 export const resolveFieldSelectors = (
   fields: Option.Option<string>,
   compact: boolean
-): Effect.Effect<Option.Option<ReadonlyArray<FieldSelector>>, CliInputError> =>
+): Effect.Effect<FieldSelectorsResolution, CliInputError> =>
   Option.match(fields, {
     onNone: () =>
-      compact ? parseFieldSelectors("@minimal") : Effect.succeed(Option.none()),
-    onSome: (raw) => parseFieldSelectors(raw)
+      (compact ? parseFieldSelectors("@minimal") : Effect.succeed(Option.none())).pipe(
+        Effect.map((selectors) => ({ selectors, source: "implicit" as const }))
+      ),
+    onSome: (raw) =>
+      parseFieldSelectors(raw).pipe(
+        Effect.map((selectors) => ({ selectors, source: "explicit" as const }))
+      )
   });
 
 const getPathValue = (source: unknown, path: ReadonlyArray<string>): unknown => {

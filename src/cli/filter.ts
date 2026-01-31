@@ -4,7 +4,7 @@ import { Chunk, Clock, Effect, Option, Stream } from "effect";
 import { StoreQuery } from "../domain/events.js";
 import { RawPost } from "../domain/raw.js";
 import type { Post } from "../domain/post.js";
-import { StoreName } from "../domain/primitives.js";
+import { PostUri, StoreName } from "../domain/primitives.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { FilterCompiler } from "../services/filter-compiler.js";
 import { FilterLibrary } from "../services/filter-library.js";
@@ -25,6 +25,7 @@ import { withExamples } from "./help.js";
 import { filterOption, filterJsonOption } from "./shared-options.js";
 import { jsonTableFormats, resolveOutputFormat, textJsonFormats } from "./output-format.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
+import { PositiveInt } from "./option-schemas.js";
 
 const filterNameArg = Args.text({ name: "name" }).pipe(
   Args.withSchema(StoreName),
@@ -36,6 +37,7 @@ const postJsonOption = Options.text("post-json").pipe(
   Options.optional
 );
 const postUriOption = Options.text("post-uri").pipe(
+  Options.withSchema(PostUri),
   Options.withDescription("Bluesky post URI (at://...)."),
   Options.optional
 );
@@ -49,10 +51,12 @@ const storeTestOption = Options.text("store").pipe(
   Options.optional
 );
 const testLimitOption = Options.integer("limit").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Number of posts to evaluate (default: 100)"),
   Options.optional
 );
 const sampleSizeOption = Options.integer("sample-size").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Number of posts to evaluate (default: 1000)"),
   Options.optional
 );
@@ -292,12 +296,6 @@ export const filterTest = Command.make(
           return yield* CliInputError.make({
             message: "Use either --store or --post-json/--post-uri, not both.",
             cause: { store: store.value, postJson, postUri }
-          });
-        }
-        if (Option.isSome(limit) && limit.value <= 0) {
-          return yield* CliInputError.make({
-            message: "--limit must be a positive integer.",
-            cause: { limit: limit.value }
           });
         }
         const storeRef = yield* storeOptions.loadStoreRef(store.value);

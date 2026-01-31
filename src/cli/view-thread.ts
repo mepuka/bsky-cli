@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Console, Effect, Option, Schema, Stream } from "effect";
+import { Chunk, Console, Effect, Option, Stream } from "effect";
 import { PostUri, StoreName } from "../domain/primitives.js";
 import type { Post } from "../domain/post.js";
 import { all } from "../domain/filter.js";
@@ -11,19 +11,20 @@ import { StoreIndex } from "../services/store-index.js";
 import { SyncEngine } from "../services/sync-engine.js";
 import { renderThread } from "./doc/thread.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
-import { writeJson, writeText } from "./output.js";
+import { CliOutput, writeJson, writeText } from "./output.js";
 import { storeOptions } from "./store.js";
 import { withExamples } from "./help.js";
 import { CliInputError } from "./errors.js";
-import { formatSchemaError } from "./shared.js";
 import {
   depthOption as threadDepthOption,
   parentHeightOption as threadParentHeightOption,
   parseThreadDepth
 } from "./thread-options.js";
 import { textJsonFormats } from "./output-format.js";
+import { PositiveInt } from "./option-schemas.js";
 
 const uriArg = Args.text({ name: "uri" }).pipe(
+  Args.withSchema(PostUri),
   Args.withDescription("AT-URI of any post in the thread")
 );
 
@@ -42,6 +43,7 @@ const ansiOption = Options.boolean("ansi").pipe(
 );
 
 const widthOption = Options.integer("width").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Line width for terminal output"),
   Options.optional
 );
@@ -70,10 +72,11 @@ export const threadCommand = Command.make(
   },
   ({ uri, store, compact, ansi, width, format, depth, parentHeight }) =>
     Effect.gen(function* () {
+      const output = yield* CliOutput;
       const outputFormat = Option.getOrElse(format, () => "text" as const);
       const w = Option.getOrUndefined(width);
       const { depth: depthValue, parentHeight: parentHeightValue } =
-        yield* parseThreadDepth(depth, parentHeight);
+        parseThreadDepth(depth, parentHeight);
       const d = depthValue ?? 6;
       const ph = parentHeightValue ?? 80;
 
@@ -82,15 +85,15 @@ export const threadCommand = Command.make(
       if (Option.isSome(store)) {
         const index = yield* StoreIndex;
         const storeRef = yield* storeOptions.loadStoreRef(store.value);
-        const targetUri = yield* Schema.decodeUnknown(PostUri)(uri).pipe(
-          Effect.mapError((error) =>
-            CliInputError.make({
-              message: `Invalid post URI: ${formatSchemaError(error)}`,
-              cause: error
-            })
-          )
-        );
-        const hasTarget = yield* index.hasUri(storeRef, targetUri);
+        const totalPosts = yield* index.count(storeRef);
+        if (totalPosts > 20000) {
+          yield* output
+            .writeStderr(
+              `ℹ️  Store ${storeRef.name} has ${totalPosts} posts. Thread rendering will load all posts into memory.`
+            )
+            .pipe(Effect.catchAll(() => Effect.void));
+        }
+        const hasTarget = yield* index.hasUri(storeRef, uri);
         if (!hasTarget) {
           const engine = yield* SyncEngine;
           const source = DataSource.thread(uri, { depth: d, parentHeight: ph });
@@ -100,7 +103,7 @@ export const threadCommand = Command.make(
         const stream = index.query(storeRef, query);
         const collected = yield* Stream.runCollect(stream);
         const allPosts = Chunk.toReadonlyArray(collected);
-        const threadPosts = selectThreadPosts(allPosts, String(targetUri));
+        const threadPosts = selectThreadPosts(allPosts, String(uri));
         if (threadPosts.length === 0) {
           return yield* CliInputError.make({
             message: `Thread not found for ${uri}.`,
@@ -108,7 +111,7 @@ export const threadCommand = Command.make(
           });
         }
         // B1: Hint when only root post exists in store
-        if (threadPosts.length === 1 && threadPosts[0]?.uri === targetUri) {
+        if (threadPosts.length === 1 && threadPosts[0]?.uri === uri) {
           yield* Console.log("\nℹ️  Only root post found in store. Use --no-store to fetch full thread from API.\n");
         }
         posts = threadPosts;

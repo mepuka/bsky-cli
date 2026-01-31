@@ -6,17 +6,15 @@ import { PostParser } from "../services/post-parser.js";
 import { StoreIndex } from "../services/store-index.js";
 import { renderPostsTable } from "../domain/format.js";
 import { AppConfigService } from "../services/app-config.js";
-import { StoreName } from "../domain/primitives.js";
+import { ActorId, StoreName } from "../domain/primitives.js";
 import { storeOptions } from "./store.js";
 import { withExamples } from "./help.js";
 import { CliInputError } from "./errors.js";
-import { decodeActor } from "./shared-options.js";
 import { formatSchemaError } from "./shared.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
-import { parseLimit } from "./shared-options.js";
 
 const queryArg = Args.text({ name: "query" }).pipe(
   Args.withDescription("Search query string")
@@ -70,11 +68,13 @@ const untilOption = Options.text("until").pipe(
 );
 
 const mentionsOption = Options.text("mentions").pipe(
+  Options.withSchema(ActorId),
   Options.withDescription("Filter network results by mention (handle or DID)"),
   Options.optional
 );
 
 const authorOption = Options.text("author").pipe(
+  Options.withSchema(ActorId),
   Options.withDescription("Filter network results by author (handle or DID)"),
   Options.optional
 );
@@ -135,7 +135,7 @@ const handlesCommand = Command.make(
         });
       }
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
@@ -171,7 +171,7 @@ const feedsCommand = Command.make(
       const appConfig = yield* AppConfigService;
       const queryValue = yield* requireNonEmptyQuery(query);
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
@@ -220,8 +220,7 @@ const postsCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const queryValue = yield* requireNonEmptyQuery(query);
-      const parsedLimit = yield* parseLimit(limit);
-      const limitValue = Option.getOrUndefined(parsedLimit);
+      const limitValue = Option.getOrUndefined(limit);
       if (network && Option.isSome(store)) {
         return yield* CliInputError.make({
           message: "--store cannot be used with --network.",
@@ -287,24 +286,8 @@ const postsCommand = Command.make(
               .map((item) => item.trim())
               .filter((item) => item.length > 0)
         });
-        const authorValue = Option.match(author, {
-          onNone: () => Effect.void.pipe(Effect.as(undefined)),
-          onSome: (value) =>
-            Effect.gen(function* () {
-              const decoded = yield* decodeActor(value);
-              return String(decoded);
-            })
-        });
-        const mentionsValue = Option.match(mentions, {
-          onNone: () => Effect.void.pipe(Effect.as(undefined)),
-          onSome: (value) =>
-            Effect.gen(function* () {
-              const decoded = yield* decodeActor(value);
-              return String(decoded);
-            })
-        });
-      const parsedAuthor = yield* authorValue;
-      const parsedMentions = yield* mentionsValue;
+        const parsedAuthor = Option.getOrUndefined(author);
+        const parsedMentions = Option.getOrUndefined(mentions);
       const result = yield* client.searchPosts(queryValue, {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),

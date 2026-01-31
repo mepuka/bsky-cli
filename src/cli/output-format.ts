@@ -13,6 +13,17 @@ export type TextJsonFormat = typeof textJsonFormats[number];
 export const treeTableJsonFormats = ["tree", "table", "json"] as const;
 export type TreeTableJsonFormat = typeof treeTableJsonFormats[number];
 
+export const queryOutputFormats = [
+  "json",
+  "ndjson",
+  "markdown",
+  "table",
+  "compact",
+  "card",
+  "thread"
+] as const;
+export type QueryOutputFormat = typeof queryOutputFormats[number];
+
 export const resolveOutputFormat = <T extends string>(
   format: Option.Option<T>,
   configFormat: OutputFormat,

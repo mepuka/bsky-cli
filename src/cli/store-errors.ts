@@ -1,5 +1,5 @@
 import { ParseResult } from "effect";
-import { safeParseJson, issueDetails } from "./parse-errors.js";
+import { safeParseJson, issueDetails, findJsonParseIssue, jsonParseTip } from "./parse-errors.js";
 import { formatAgentError } from "./errors.js";
 
 const storeConfigExample = {
@@ -35,20 +35,16 @@ export const formatStoreConfigParseError = (
   const received = safeParseJson(raw);
   const receivedValue = received === undefined ? raw : received;
 
-  const jsonParseIssue = issues.find(
-    (issue) =>
-      issue._tag === "Transformation" &&
-      typeof issue.message === "string" &&
-      issue.message.startsWith("JSON Parse error")
-  );
+  const jsonParseIssue = findJsonParseIssue(issues);
   if (jsonParseIssue) {
+    const jsonMessage = jsonParseIssue.message ?? "Invalid JSON input.";
     return formatAgentError({
       error: "StoreConfigJsonParseError",
       message: `Invalid JSON in --config-json. ${storeConfigDocHint}`,
       received: raw,
       details: [
-        jsonParseIssue.message,
-        "Tip: wrap JSON in single quotes to avoid shell escaping issues."
+        jsonMessage,
+        jsonParseTip
       ],
       expected: storeConfigExample
     });

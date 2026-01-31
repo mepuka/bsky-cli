@@ -1,5 +1,5 @@
 import { Command, Options } from "@effect/cli";
-import { Duration, Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { Jetstream } from "effect-jetstream";
 import { filterExprSignature } from "../domain/filter.js";
 import { DataSource, SyncResult } from "../domain/sync.js";
@@ -28,25 +28,30 @@ import {
   postFilterJsonOption,
   authorFilterOption,
   includePinsOption,
-  decodeActor,
   quietOption,
   refreshOption,
   strictOption,
-  maxErrorsOption,
-  parseMaxErrors,
-  parseLimit
+  maxErrorsOption
 } from "./shared-options.js";
 import {
   depthOption as threadDepthOption,
   parentHeightOption as threadParentHeightOption,
   parseThreadDepth
 } from "./thread-options.js";
+import { DurationInput, PositiveInt } from "./option-schemas.js";
 
-const limitOption = Options.integer("limit").pipe(
+const syncLimitOption = Options.integer("limit").pipe(
+  Options.withSchema(PositiveInt),
+  Options.withDescription("Maximum number of posts to sync"),
+  Options.optional
+);
+const jetstreamLimitOption = Options.integer("limit").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Maximum number of Jetstream events to process"),
   Options.optional
 );
 const durationOption = Options.text("duration").pipe(
+  Options.withSchema(DurationInput),
   Options.withDescription("Stop after a duration (e.g. \"2 minutes\")"),
   Options.optional
 );
@@ -57,34 +62,10 @@ const parentHeightOption = threadParentHeightOption(
   "Thread parent height to include (0-1000, default 80)"
 );
 
-const parseDuration = (value: Option.Option<string>) =>
-  Option.match(value, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (raw) =>
-      Effect.try({
-        try: () => Duration.decode(raw as Duration.DurationInput),
-        catch: (cause) =>
-          CliInputError.make({
-            message: `Invalid duration: ${raw}. Use formats like \"2 minutes\".`,
-            cause
-          })
-      }).pipe(
-        Effect.flatMap((duration) =>
-          Duration.toMillis(duration) < 0
-            ? Effect.fail(
-                CliInputError.make({
-                  message: "Duration must be non-negative.",
-                  cause: duration
-                })
-              )
-            : Effect.succeed(Option.some(duration))
-        )
-      )
-  });
 
 const timelineCommand = Command.make(
   "timeline",
-  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
+  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
   makeSyncCommandBody("timeline", () => DataSource.timeline())
 ).pipe(
   Command.withDescription(
@@ -101,7 +82,7 @@ const timelineCommand = Command.make(
 
 const feedCommand = Command.make(
   "feed",
-  { uri: feedUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
+  { uri: feedUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
   ({ uri, ...rest }) => makeSyncCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
 ).pipe(
   Command.withDescription(
@@ -117,7 +98,7 @@ const feedCommand = Command.make(
 
 const listCommand = Command.make(
   "list",
-  { uri: listUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
+  { uri: listUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
   ({ uri, ...rest }) => makeSyncCommandBody("list", () => DataSource.list(uri), { uri })(rest)
 ).pipe(
   Command.withDescription(
@@ -133,7 +114,7 @@ const listCommand = Command.make(
 
 const notificationsCommand = Command.make(
   "notifications",
-  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption },
+  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
   makeSyncCommandBody("notifications", () => DataSource.notifications())
 ).pipe(
   Command.withDescription(
@@ -155,18 +136,18 @@ const authorCommand = Command.make(
     postFilter: postFilterOption,
     postFilterJson: postFilterJsonOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    limit: syncLimitOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh, limit }) =>
     Effect.gen(function* () {
-      const resolvedActor = yield* decodeActor(actor);
       const apiFilter = Option.getOrUndefined(filter);
-      const source = DataSource.author(resolvedActor, {
+      const source = DataSource.author(actor, {
         ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
         ...(includePins ? { includePins: true } : {})
       });
       const run = makeSyncCommandBody("author", () => source, {
-        actor: resolvedActor,
+        actor,
         ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
         ...(includePins ? { includePins: true } : {})
       });
@@ -175,7 +156,8 @@ const authorCommand = Command.make(
         filter: postFilter,
         filterJson: postFilterJson,
         quiet,
-        refresh
+        refresh,
+        limit
       });
     })
 ).pipe(
@@ -201,12 +183,13 @@ const threadCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    limit: syncLimitOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh, limit }) =>
     Effect.gen(function* () {
       const { depth: depthValue, parentHeight: parentHeightValue } =
-        yield* parseThreadDepth(depth, parentHeight);
+        parseThreadDepth(depth, parentHeight);
       const source = DataSource.thread(uri, {
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
@@ -216,7 +199,7 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, quiet, refresh });
+      return yield* run({ store, filter, filterJson, quiet, refresh, limit });
     })
 ).pipe(
   Command.withDescription(
@@ -244,7 +227,7 @@ const jetstreamCommand = Command.make(
     cursor: jetstreamOptions.cursor,
     compress: jetstreamOptions.compress,
     maxMessageSize: jetstreamOptions.maxMessageSize,
-    limit: limitOption,
+    limit: jetstreamLimitOption,
     duration: durationOption,
     strict: strictOption,
     maxErrors: maxErrorsOption
@@ -285,10 +268,8 @@ const jetstreamCommand = Command.make(
         storeRef,
         filterHash
       );
-      const parsedLimit = yield* parseLimit(limit);
-      const parsedDuration = yield* parseDuration(duration);
-      const parsedMaxErrors = yield* parseMaxErrors(maxErrors);
-      if (Option.isNone(parsedLimit) && Option.isNone(parsedDuration)) {
+      const parsedDuration = duration;
+      if (Option.isNone(limit) && Option.isNone(parsedDuration)) {
         return yield* CliInputError.make({
           message:
             "Jetstream sync requires --limit or --duration. Use watch jetstream for continuous streaming.",
@@ -304,9 +285,9 @@ const jetstreamCommand = Command.make(
       });
       const result = yield* Effect.gen(function* () {
         const engine = yield* JetstreamSyncEngine;
-        const limitValue = Option.getOrUndefined(parsedLimit);
+        const limitValue = Option.getOrUndefined(limit);
         const durationValue = Option.getOrUndefined(parsedDuration);
-        const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
+        const maxErrorsValue = Option.getOrUndefined(maxErrors);
         return yield* engine.sync({
           source: selection.source,
           store: storeRef,

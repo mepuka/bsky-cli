@@ -8,12 +8,16 @@ import { renderPostsTable } from "../domain/format.js";
 import { AppConfigService } from "../services/app-config.js";
 import { withExamples } from "./help.js";
 import { postUriArg } from "./shared-options.js";
+import { PostCid } from "../domain/primitives.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { renderTableLegacy } from "./doc/table.js";
 import { renderProfileTable } from "./doc/table-renderers.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
+import { CliInputError } from "./errors.js";
+import { CliPreferences } from "./preferences.js";
+import { compactPost, compactPostLike, compactProfileView } from "./compact-output.js";
 
 const limitOption = baseLimitOption.pipe(
   Options.withDescription("Maximum number of results")
@@ -28,7 +32,19 @@ const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
   Options.optional
 );
 
+const ensureSupportedFormat = (
+  format: Option.Option<typeof jsonNdjsonTableFormats[number]>,
+  configFormat: string
+) =>
+  Option.isNone(format) && configFormat === "markdown"
+    ? CliInputError.make({
+        message: 'Output format "markdown" is not supported for post commands. Use --format json|ndjson|table.',
+        cause: { format: configFormat }
+      })
+    : Effect.void;
+
 const cidOption = Options.text("cid").pipe(
+  Options.withSchema(PostCid),
   Options.withDescription("Filter engagement by specific record CID"),
   Options.optional
 );
@@ -60,21 +76,30 @@ const likesCommand = Command.make(
   ({ uri, cid, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const result = yield* client.getLikes(uri, {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
         ...(Option.isSome(cid) ? { cid: cid.value } : {})
       });
+      const likes = preferences.compact
+        ? result.likes.map(compactPostLike)
+        : result.likes;
+      const payload = result.cursor ? { likes, cursor: result.cursor } : { likes };
+      const likesStream = Stream.fromIterable(
+        likes as ReadonlyArray<unknown>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
-          ndjson: writeJsonStream(Stream.fromIterable(result.likes)),
+          json: writeJson(payload),
+          ndjson: writeJsonStream(likesStream),
           table: writeText(renderLikesTable(result.likes, result.cursor))
         }
       );
@@ -94,21 +119,32 @@ const repostedByCommand = Command.make(
   ({ uri, cid, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const result = yield* client.getRepostedBy(uri, {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
         ...(Option.isSome(cid) ? { cid: cid.value } : {})
       });
+      const repostedBy = preferences.compact
+        ? result.repostedBy.map(compactProfileView)
+        : result.repostedBy;
+      const payload = result.cursor
+        ? { repostedBy, cursor: result.cursor }
+        : { repostedBy };
+      const repostedStream = Stream.fromIterable(
+        repostedBy as ReadonlyArray<unknown>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson(result),
-          ndjson: writeJsonStream(Stream.fromIterable(result.repostedBy)),
+          json: writeJson(payload),
+          ndjson: writeJsonStream(repostedStream),
           table: writeText(renderProfileTable(result.repostedBy, result.cursor))
         }
       );
@@ -127,26 +163,35 @@ const quotesCommand = Command.make(
   ({ uri, cid, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const parser = yield* PostParser;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const result = yield* client.getQuotes(uri, {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
         ...(Option.isSome(cid) ? { cid: cid.value } : {})
       });
       const posts = yield* parseRawPosts(parser, result.posts);
+      const compactPosts = preferences.compact
+        ? posts.map(compactPost)
+        : posts;
+      const payload = {
+        ...result,
+        posts: compactPosts
+      };
+      const postStream = Stream.fromIterable(
+        compactPosts as ReadonlyArray<unknown>
+      );
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson({
-            ...result,
-            posts
-          }),
-          ndjson: writeJsonStream(Stream.fromIterable(posts)),
+          json: writeJson(payload),
+          ndjson: writeJsonStream(postStream),
           table: writeText(renderPostsTable(posts))
         }
       );

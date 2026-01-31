@@ -1256,6 +1256,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       const config = yield* AppConfigService;
       const credentials = yield* CredentialStore;
       const agent = new AtpAgent({ service: config.service });
+      const publicAgent = new AtpAgent({ service: "https://public.api.bsky.app" });
 
       const minInterval = yield* Config.duration("SKYGENT_BSKY_RATE_LIMIT").pipe(
         Config.withDefault(Duration.millis(250))
@@ -1507,6 +1508,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       const getFollowers = (actor: string, opts?: GraphOptions) =>
         Effect.gen(function* () {
           yield* ensureAuth(false);
+          const api = agent.hasSession ? agent : publicAgent;
           const params = withCursor(
             { actor, limit: opts?.limit ?? 50 },
             opts?.cursor
@@ -1514,7 +1516,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           const response = yield* withRetry(
             withRateLimit(
               Effect.tryPromise<AppBskyGraphGetFollowers.Response>(() =>
-                agent.app.bsky.graph.getFollowers(params)
+                api.app.bsky.graph.getFollowers(params)
               )
             )
           ).pipe(Effect.mapError(toBskyError("Failed to fetch followers", "getFollowers")));
@@ -1531,6 +1533,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       const getFollows = (actor: string, opts?: GraphOptions) =>
         Effect.gen(function* () {
           yield* ensureAuth(false);
+          const api = agent.hasSession ? agent : publicAgent;
           const params = withCursor(
             { actor, limit: opts?.limit ?? 50 },
             opts?.cursor
@@ -1538,7 +1541,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           const response = yield* withRetry(
             withRateLimit(
               Effect.tryPromise<AppBskyGraphGetFollows.Response>(() =>
-                agent.app.bsky.graph.getFollows(params)
+                api.app.bsky.graph.getFollows(params)
               )
             )
           ).pipe(Effect.mapError(toBskyError("Failed to fetch follows", "getFollows")));
@@ -1582,10 +1585,11 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
             return { actor, relationships: [] };
           }
           yield* ensureAuth(false);
+          const api = agent.hasSession ? agent : publicAgent;
           const response = yield* withRetry(
             withRateLimit(
               Effect.tryPromise<AppBskyGraphGetRelationships.Response>(() =>
-                agent.app.bsky.graph.getRelationships({ actor, others: [...others] })
+                api.app.bsky.graph.getRelationships({ actor, others: [...others] })
               )
             )
           ).pipe(Effect.mapError(toBskyError("Failed to fetch relationships", "getRelationships")));
@@ -1602,6 +1606,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       const getList = (uri: string, opts?: GraphOptions) =>
         Effect.gen(function* () {
           yield* ensureAuth(false);
+          const api = agent.hasSession ? agent : publicAgent;
           const params = withCursor(
             { list: uri, limit: opts?.limit ?? 50 },
             opts?.cursor
@@ -1609,7 +1614,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           const response = yield* withRetry(
             withRateLimit(
               Effect.tryPromise<AppBskyGraphGetList.Response>(() =>
-                agent.app.bsky.graph.getList(params)
+                api.app.bsky.graph.getList(params)
               )
             )
           ).pipe(Effect.mapError(toBskyError("Failed to fetch list", "getList")));
@@ -1626,6 +1631,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
       const getLists = (actor: string, opts?: GraphListsOptions) =>
         Effect.gen(function* () {
           yield* ensureAuth(false);
+          const api = agent.hasSession ? agent : publicAgent;
           const params = withCursor(
             {
               actor,
@@ -1639,7 +1645,7 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
           const response = yield* withRetry(
             withRateLimit(
               Effect.tryPromise<AppBskyGraphGetLists.Response>(() =>
-                agent.app.bsky.graph.getLists(params)
+                api.app.bsky.graph.getLists(params)
               )
             )
           ).pipe(Effect.mapError(toBskyError("Failed to fetch lists", "getLists")));

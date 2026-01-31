@@ -1,9 +1,10 @@
 import { Args, Options } from "@effect/cli";
-import { Effect, Option, Schema } from "effect";
-import { Did, Handle, StoreName } from "../domain/primitives.js";
+import { Effect, Schema } from "effect";
+import { ActorId, AtUri, PostUri, StoreName } from "../domain/primitives.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { CliInputError } from "./errors.js";
 import { formatSchemaError } from "./shared.js";
+import { NonNegativeInt } from "./option-schemas.js";
 
 /** --store option with StoreName schema validation */
 export const storeNameOption = Options.text("store").pipe(
@@ -52,27 +53,32 @@ export const strictOption = Options.boolean("strict").pipe(
 
 /** --max-errors option (optional) */
 export const maxErrorsOption = Options.integer("max-errors").pipe(
+  Options.withSchema(NonNegativeInt),
   Options.withDescription("Stop after exceeding N errors (default: unlimited)"),
   Options.optional
 );
 
 /** Positional arg for feed URI */
 export const feedUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withSchema(AtUri),
   Args.withDescription("Bluesky feed URI (at://...)")
 );
 
 /** Positional arg for list URI */
 export const listUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withSchema(AtUri),
   Args.withDescription("Bluesky list URI (at://...)")
 );
 
 /** Positional arg for author handle or DID */
 export const actorArg = Args.text({ name: "actor" }).pipe(
+  Args.withSchema(ActorId),
   Args.withDescription("Bluesky handle or DID")
 );
 
 /** Positional arg for post URI */
 export const postUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withSchema(PostUri),
   Args.withDescription("Bluesky post URI (at://...)")
 );
 
@@ -100,70 +106,12 @@ export const includePinsOption = Options.boolean("include-pins").pipe(
 );
 
 /** Validate --max-errors value is non-negative */
-export const parseMaxErrors = (maxErrors: Option.Option<number>) =>
-  Option.match(maxErrors, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (value) =>
-      value < 0
-        ? Effect.fail(
-            CliInputError.make({
-              message: "max-errors must be a non-negative integer.",
-              cause: value
-            })
-          )
-        : Effect.succeed(Option.some(value))
-  });
-
-export const decodeActor = (actor: string) => {
-  if (actor.startsWith("did:")) {
-    return Schema.decodeUnknown(Did)(actor).pipe(
-      Effect.mapError((error) =>
-        CliInputError.make({
-          message: `Invalid DID: ${formatSchemaError(error)}`,
-          cause: { actor }
-        })
-      )
-    );
-  }
-  return Schema.decodeUnknown(Handle)(actor).pipe(
+export const decodeActor = (actor: string) =>
+  Schema.decodeUnknown(ActorId)(actor).pipe(
     Effect.mapError((error) =>
       CliInputError.make({
-        message: `Invalid handle: ${formatSchemaError(error)}`,
+        message: `Invalid actor: ${formatSchemaError(error)}`,
         cause: { actor }
       })
     )
   );
-};
-
-export const parseLimit = (limit: Option.Option<number>) =>
-  Option.match(limit, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (value) =>
-      value <= 0
-        ? Effect.fail(
-            CliInputError.make({
-              message: "--limit must be a positive integer.",
-              cause: value
-            })
-          )
-        : Effect.succeed(Option.some(value))
-  });
-
-export const parseBoundedIntOption = (
-  value: Option.Option<number>,
-  name: string,
-  min: number,
-  max: number
-) =>
-  Option.match(value, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (raw) =>
-      raw < min || raw > max
-        ? Effect.fail(
-            CliInputError.make({
-              message: `${name} must be between ${min} and ${max}.`,
-              cause: raw
-            })
-          )
-        : Effect.succeed(Option.some(raw))
-  });

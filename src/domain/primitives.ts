@@ -16,17 +16,34 @@ export const Hashtag = Schema.String.pipe(
 );
 export type Hashtag = typeof Hashtag.Type;
 
-export const AtUri = Schema.String.pipe(Schema.brand("AtUri"));
+const atUriPattern = /^at:\/\/\S+$/;
+
+export const AtUri = Schema.String.pipe(
+  Schema.pattern(atUriPattern),
+  Schema.brand("AtUri")
+);
 export type AtUri = typeof AtUri.Type;
 
-export const PostUri = Schema.String.pipe(Schema.brand("PostUri"));
+export const PostUri = Schema.String.pipe(
+  Schema.pattern(atUriPattern),
+  Schema.brand("PostUri")
+);
 export type PostUri = typeof PostUri.Type;
 
 export const PostCid = Schema.String.pipe(Schema.brand("PostCid"));
 export type PostCid = typeof PostCid.Type;
 
-export const Did = Schema.String.pipe(Schema.brand("Did"));
+export const Did = Schema.String.pipe(
+  Schema.pattern(/^did:\S+$/),
+  Schema.brand("Did")
+);
 export type Did = typeof Did.Type;
+
+export const ActorId = Schema.String.pipe(
+  Schema.pattern(/^(did:\S+|[a-z0-9][a-z0-9.-]{1,251})$/),
+  Schema.brand("ActorId")
+);
+export type ActorId = typeof ActorId.Type;
 
 export const Timestamp = Schema.Union(
   Schema.DateFromString,
