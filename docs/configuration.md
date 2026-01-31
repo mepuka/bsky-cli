@@ -64,6 +64,8 @@ Resource monitoring:
 Sync settings:
 
 - `SKYGENT_SYNC_CONCURRENCY` -- number of concurrent sync operations. Must be a positive integer. Default: `5`.
+- `SKYGENT_SYNC_BATCH_SIZE` -- number of posts per store write batch. Must be a positive integer. Default: `100`.
+- `SKYGENT_SYNC_PAGE_LIMIT` -- page size for Bluesky sync fetches. Must be a positive integer. Default: `100`.
 - `SKYGENT_SYNC_CHECKPOINT_EVERY` -- persist a checkpoint after this many ingested items. Must be a positive integer. Default: `100`.
 - `SKYGENT_SYNC_CHECKPOINT_INTERVAL_MS` -- minimum milliseconds between time-based checkpoints. Must be non-negative. Default: `5000`.
 
