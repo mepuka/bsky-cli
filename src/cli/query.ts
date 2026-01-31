@@ -34,6 +34,7 @@ import { StoreNotFound } from "../domain/errors.js";
 import { StorePostOrder } from "../domain/order.js";
 import { formatSchemaError } from "./shared.js";
 import { mergeOrderedStreams } from "./stream-merge.js";
+import { queryOutputFormats, resolveOutputFormat } from "./output-format.js";
 
 const storeNamesArg = Args.text({ name: "store" }).pipe(
   Args.repeated,
@@ -70,15 +71,7 @@ const sortOption = Options.choice("sort", ["asc", "desc"]).pipe(
 const newestFirstOption = Options.boolean("newest-first").pipe(
   Options.withDescription("Sort newest posts first (alias for --sort desc)")
 );
-const formatOption = Options.choice("format", [
-  "json",
-  "ndjson",
-  "markdown",
-  "table",
-  "compact",
-  "card",
-  "thread"
-]).pipe(
+const formatOption = Options.choice("format", queryOutputFormats).pipe(
   Options.optional,
   Options.withDescription("Output format (default: config output format)")
 );
@@ -284,8 +277,11 @@ export const queryCommand = Command.make(
       const parsedRange = yield* parseRangeOptions(range, since, until);
       const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
       const expr = Option.getOrElse(parsedFilter, () => all());
-      const outputFormat = Option.getOrElse(format, () =>
-        appConfig.outputFormat === "ndjson" ? "compact" : appConfig.outputFormat
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        queryOutputFormats,
+        "json"
       );
       if (multiStore && outputFormat === "thread") {
         return yield* CliInputError.make({
@@ -294,19 +290,20 @@ export const queryCommand = Command.make(
         });
       }
       const compact = preferences.compact;
-      const selectorsOption = yield* resolveFieldSelectors(fields, compact);
+      const { selectors: selectorsOption, source: selectorsSource } =
+        yield* resolveFieldSelectors(fields, compact);
       const project = (post: Post) =>
         Option.match(selectorsOption, {
           onNone: () => post,
           onSome: (selectors) => projectFields(post, selectors)
         });
-      if (Option.isSome(selectorsOption) && outputFormat !== "json" && outputFormat !== "ndjson") {
+      if (selectorsSource === "explicit" && outputFormat !== "json" && outputFormat !== "ndjson") {
         return yield* CliInputError.make({
           message: "--fields is only supported with json or ndjson output.",
           cause: { format: outputFormat }
         });
       }
-      if (count && Option.isSome(selectorsOption)) {
+      if (count && selectorsSource === "explicit") {
         return yield* CliInputError.make({
           message: "--count cannot be combined with --fields.",
           cause: { count, fields }
@@ -538,16 +535,7 @@ export const queryCommand = Command.make(
       }
 
       if (outputFormat === "ndjson") {
-        const countRef = yield* Ref.make(0);
-        const counted = stream.pipe(
-          Stream.map(toOutput),
-          Stream.tap(() => Ref.update(countRef, (count) => count + 1))
-        );
-        yield* writeJsonStream(counted);
-        const count = yield* Ref.get(countRef);
-        if (count === 0) {
-          yield* writeText("[]");
-        }
+        yield* writeJsonStream(stream.pipe(Stream.map(toOutput)));
         yield* warnIfScanLimitReached();
         return;
       }

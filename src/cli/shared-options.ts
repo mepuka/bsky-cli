@@ -1,6 +1,6 @@
 import { Args, Options } from "@effect/cli";
 import { Effect, Option, Schema } from "effect";
-import { Did, Handle, StoreName } from "../domain/primitives.js";
+import { AtUri, Did, Handle, PostUri, StoreName } from "../domain/primitives.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { CliInputError } from "./errors.js";
 import { formatSchemaError } from "./shared.js";
@@ -58,11 +58,13 @@ export const maxErrorsOption = Options.integer("max-errors").pipe(
 
 /** Positional arg for feed URI */
 export const feedUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withSchema(AtUri),
   Args.withDescription("Bluesky feed URI (at://...)")
 );
 
 /** Positional arg for list URI */
 export const listUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withSchema(AtUri),
   Args.withDescription("Bluesky list URI (at://...)")
 );
 
@@ -73,6 +75,7 @@ export const actorArg = Args.text({ name: "actor" }).pipe(
 
 /** Positional arg for post URI */
 export const postUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withSchema(PostUri),
   Args.withDescription("Bluesky post URI (at://...)")
 );
 

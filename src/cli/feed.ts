@@ -5,6 +5,7 @@ import { renderFeedTable } from "./doc/table-renderers.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { AppConfigService } from "../services/app-config.js";
 import type { FeedGeneratorView } from "../domain/bsky.js";
+import { AtUri } from "../domain/primitives.js";
 import { decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
@@ -14,6 +15,7 @@ import { emitWithFormat } from "./output-render.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
 
 const feedUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withSchema(AtUri),
   Args.withDescription("Bluesky feed URI (at://...)")
 );
 

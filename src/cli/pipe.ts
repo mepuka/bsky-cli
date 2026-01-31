@@ -1,7 +1,6 @@
 import { Command, Options } from "@effect/cli";
 import { Chunk, Effect, Option, Ref, Stream } from "effect";
 import { ParseResult } from "effect";
-import { RawPost } from "../domain/raw.js";
 import type { Post } from "../domain/post.js";
 import { FilterRuntime } from "../services/filter-runtime.js";
 import { PostParser } from "../services/post-parser.js";
@@ -9,10 +8,11 @@ import { CliInput } from "./input.js";
 import { CliInputError, CliJsonError } from "./errors.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { decodeJson } from "./parse.js";
+import { PipeInput, isRawPostInput, isStorePostInput } from "./pipe-input.js";
 import { withExamples } from "./help.js";
 import { filterOption, filterJsonOption } from "./shared-options.js";
 import { formatSchemaError } from "./shared.js";
-import { writeJsonStream, writeText } from "./output.js";
+import { writeJsonStream } from "./output.js";
 import { filterByFlags } from "../typeclass/chunk.js";
 import { logErrorEvent, logWarn } from "./logging.js";
 
@@ -86,8 +86,6 @@ export const pipeCommand = Command.make(
       }
 
       const lineRef = yield* Ref.make(0);
-      const countRef = yield* Ref.make(0);
-
       const parsed = input.lines.pipe(
         Stream.map((line) => line.trim()),
         Stream.filter((line) => line.length > 0),
@@ -97,8 +95,16 @@ export const pipeCommand = Command.make(
           )
         ),
         Stream.mapEffect(({ line, lineNumber }) =>
-          decodeJson(RawPost, line).pipe(
-            Effect.flatMap((raw) => parser.parsePost(raw)),
+          decodeJson(PipeInput, line).pipe(
+            Effect.flatMap((inputPost) => {
+              if (isRawPostInput(inputPost)) {
+                return parser.parsePost(inputPost);
+              }
+              if (isStorePostInput(inputPost)) {
+                return Effect.succeed(inputPost.post);
+              }
+              return Effect.succeed(inputPost);
+            }),
             Effect.map(Option.some),
             Effect.catchAll((error) => {
               if (onError === "fail") {
@@ -131,15 +137,10 @@ export const pipeCommand = Command.make(
             Effect.map((flags) => filterByFlags(batch, flags))
           )
         ),
-        Stream.mapConcat((chunk) => Chunk.toReadonlyArray(chunk)),
-        Stream.tap(() => Ref.update(countRef, (count) => count + 1))
+        Stream.mapConcat((chunk) => Chunk.toReadonlyArray(chunk))
       );
 
       yield* writeJsonStream(filtered);
-      const count = yield* Ref.get(countRef);
-      if (count === 0) {
-        yield* writeText("[]");
-      }
     })
 ).pipe(
   Command.withDescription(
@@ -150,7 +151,7 @@ export const pipeCommand = Command.make(
         "cat posts.ndjson | skygent pipe --filter-json '{\"_tag\":\"All\"}'"
       ],
       [
-        "Note: stdin must be raw post NDJSON (app.bsky.feed.getPosts result)."
+        "Note: stdin must be raw post NDJSON or skygent post NDJSON (from query --format ndjson)."
       ]
     )
   )

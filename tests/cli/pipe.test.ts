@@ -120,6 +120,16 @@ const makeRawPost = (text: string, uri: string) => ({
   }
 });
 
+const makePost = (text: string, uri: string) => ({
+  uri,
+  author: "alice.bsky.social",
+  text,
+  createdAt: "2026-01-01T00:00:00Z",
+  hashtags: [],
+  mentions: [],
+  links: []
+});
+
 describe("pipe command", () => {
   test("filters raw posts from stdin and outputs matches", async () => {
     const run = Command.run(pipeCommand, { name: "skygent", version: "0.0.0" });
@@ -197,5 +207,41 @@ describe("pipe command", () => {
       .map((line) => JSON.parse(line));
     expect(payloads).toHaveLength(2);
     expect(stderr.length).toBeGreaterThan(0);
+  });
+
+  test("accepts post ndjson input", async () => {
+    const run = Command.run(pipeCommand, { name: "skygent", version: "0.0.0" });
+    const { layer: outputLayer, stdoutRef } = makeOutputCapture();
+    const inputLines = [
+      JSON.stringify(makePost("match me", "at://did:plc:5/app.bsky.feed.post/5")),
+      JSON.stringify(makePost("skip me", "at://did:plc:6/app.bsky.feed.post/6"))
+    ];
+    const inputLayer = makeInputLayer(inputLines);
+    const appLayer = Layer.mergeAll(
+      outputLayer,
+      inputLayer,
+      runtimeLayer,
+      libraryLayer,
+      PostParser.layer,
+      clockLayer
+    );
+
+    await Effect.runPromise(
+      run([
+        "node",
+        "skygent",
+        "--filter-json",
+        JSON.stringify({ _tag: "Contains", text: "match" })
+      ]).pipe(Effect.provide(appLayer))
+    );
+
+    const stdout = await Effect.runPromise(Ref.get(stdoutRef));
+    const payloads = stdout
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line));
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({ text: "match me" });
   });
 });

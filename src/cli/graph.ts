@@ -5,6 +5,7 @@ import { AppConfigService } from "../services/app-config.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import { ProfileResolver } from "../services/profile-resolver.js";
 import type { ListItemView, ListView } from "../domain/bsky.js";
+import { AtUri } from "../domain/primitives.js";
 import { decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
@@ -26,6 +27,7 @@ const actorArg = Args.text({ name: "actor" }).pipe(
 );
 
 const listUriArg = Args.text({ name: "uri" }).pipe(
+  Args.withSchema(AtUri),
   Args.withDescription("Bluesky list URI (at://...)")
 );
 
