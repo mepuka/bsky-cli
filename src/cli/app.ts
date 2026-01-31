@@ -71,7 +71,7 @@ export const app = Command.make("skygent", configOptions).pipe(
         "skygent store list --compact",
         "skygent sync timeline --store my-store --quiet"
       ],
-      ["Tip: add --compact for shorter JSON output."]
+      ["Tip: compact output is the default; use --full for verbose JSON."]
     )
   )
 );

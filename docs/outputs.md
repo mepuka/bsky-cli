@@ -19,7 +19,7 @@ Notes:
 - `watch` emits NDJSON `SyncResult` objects to stdout (per poll interval for timeline/feed/notifications, per Jetstream batch for `watch jetstream`).
 - `sync`, `store`, `derive`, `filter`, and `view` usually emit a single JSON object, unless a subcommand uses a text format (table/tree/markdown).
 - `query` defaults to `compact` unless `--format` or a non-`ndjson` `outputFormat` is set.
-- Use `--compact` to reduce JSON payload size for agent workflows (store list/show, query, derive).
+- Compact JSON is the default for agent workflows (store list/show, query, derive). Use `--full` for verbose JSON.
 - Use `--fields` on `query` to select specific fields (supports dot notation and presets like `@minimal`).
 
 ## Logs and progress
