@@ -10,6 +10,8 @@ Store names must match this pattern:
 
 That means lowercase letters or digits, may include `-` or `_`, and must be 2-64 characters.
 
+To rename a store, use `skygent store rename <old> <new>`.
+
 ## Store root layout
 
 The default store root is `~/.skygent`. Contents:

@@ -80,6 +80,7 @@ skygent search posts "effect typescript" --store my-store
 | `store create <name>` | Create a new store |
 | `store list` | List all stores |
 | `store show <name>` | Show store config and metadata |
+| `store rename <from> <to>` | Rename a store |
 | `store delete <name> --force` | Delete a store |
 | `store stats <name>` | Show store statistics |
 | `store summary` | Summarize all stores |

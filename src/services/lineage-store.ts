@@ -63,6 +63,14 @@ export class LineageStore extends Context.Tag("@skygent/LineageStore")<
      * @returns Effect resolving to void, or StoreIoError on failure
      */
     readonly save: (lineage: StoreLineage) => Effect.Effect<void, StoreIoError>;
+
+    /**
+     * Removes lineage information for a store.
+     *
+     * @param storeName - The name of the store to remove lineage for
+     * @returns Effect resolving to void, or StoreIoError on failure
+     */
+    readonly remove: (storeName: StoreName) => Effect.Effect<void, StoreIoError>;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -83,7 +91,13 @@ export class LineageStore extends Context.Tag("@skygent/LineageStore")<
           .pipe(Effect.mapError(toStoreIoError(lineage.storeName)))
       );
 
-      return LineageStore.of({ get, save });
+      const remove = Effect.fn("LineageStore.remove")((storeName: StoreName) =>
+        lineages
+          .remove(lineageKey(storeName))
+          .pipe(Effect.mapError(toStoreIoError(storeName)))
+      );
+
+      return LineageStore.of({ get, save, remove });
     })
   );
 }

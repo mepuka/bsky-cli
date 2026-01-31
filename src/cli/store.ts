@@ -20,6 +20,7 @@ import { CliPreferences } from "./preferences.js";
 import { StoreStats } from "../services/store-stats.js";
 import { withExamples } from "./help.js";
 import { resolveOutputFormat, treeTableJsonFormats } from "./output-format.js";
+import { StoreRenamer } from "../services/store-renamer.js";
 import {
   buildStoreTreeData,
   renderStoreTree,
@@ -32,6 +33,14 @@ import {
 const storeNameArg = Args.text({ name: "name" }).pipe(
   Args.withSchema(StoreName),
   Args.withDescription("Store name")
+);
+const storeRenameFromArg = Args.text({ name: "from" }).pipe(
+  Args.withSchema(StoreName),
+  Args.withDescription("Existing store name")
+);
+const storeRenameToArg = Args.text({ name: "to" }).pipe(
+  Args.withSchema(StoreName),
+  Args.withDescription("New store name")
 );
 const storeNameOption = Options.text("store").pipe(
   Options.withSchema(StoreName),
@@ -254,6 +263,27 @@ export const storeDelete = Command.make(
   )
 );
 
+export const storeRename = Command.make(
+  "rename",
+  { from: storeRenameFromArg, to: storeRenameToArg },
+  ({ from, to }) =>
+    Effect.gen(function* () {
+      if (from === to) {
+        return yield* CliInputError.make({
+          message: "Old and new store names must be different.",
+          cause: { from, to }
+        });
+      }
+      const renamer = yield* StoreRenamer;
+      const result = yield* renamer.rename(from, to);
+      yield* writeJson(result);
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Rename a store", ["skygent store rename old-name new-name"])
+  )
+);
+
 export const storeMaterialize = Command.make(
   "materialize",
   { name: storeNameArg, filter: filterNameOption },
@@ -380,6 +410,7 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeCreate,
     storeList,
     storeShow,
+    storeRename,
     storeDelete,
     storeMaterialize,
     storeStats,

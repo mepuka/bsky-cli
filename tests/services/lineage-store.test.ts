@@ -116,4 +116,18 @@ describe("LineageStore", () => {
       expect(result.value.sources[1].storeName).toBe("another-source");
     }
   });
+
+  test("remove deletes lineage entry", async () => {
+    const program = Effect.gen(function* () {
+      const store = yield* LineageStore;
+
+      yield* store.save(sampleLineage);
+      yield* store.remove(sampleStoreName);
+      return yield* store.get(sampleStoreName);
+    });
+
+    const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)));
+
+    expect(Option.isNone(result)).toBe(true);
+  });
 });
