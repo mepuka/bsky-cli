@@ -16,7 +16,11 @@ import { storeOptions } from "./store.js";
 import { withExamples } from "./help.js";
 import { CliInputError } from "./errors.js";
 import { formatSchemaError } from "./shared.js";
-import { parseBoundedIntOption } from "./shared-options.js";
+import {
+  depthOption as threadDepthOption,
+  parentHeightOption as threadParentHeightOption,
+  parseThreadDepth
+} from "./thread-options.js";
 import { textJsonFormats } from "./output-format.js";
 
 const uriArg = Args.text({ name: "uri" }).pipe(
@@ -47,14 +51,9 @@ const formatOption = Options.choice("format", textJsonFormats).pipe(
   Options.optional
 );
 
-const depthOption = Options.integer("depth").pipe(
-  Options.withDescription("Reply depth (API only, default: 6)"),
-  Options.optional
-);
-
-const parentHeightOption = Options.integer("parent-height").pipe(
-  Options.withDescription("Parent height (API only, default: 80)"),
-  Options.optional
+const depthOption = threadDepthOption("Reply depth (API only, default: 6)");
+const parentHeightOption = threadParentHeightOption(
+  "Parent height (API only, default: 80)"
 );
 
 export const threadCommand = Command.make(
@@ -73,15 +72,10 @@ export const threadCommand = Command.make(
     Effect.gen(function* () {
       const outputFormat = Option.getOrElse(format, () => "text" as const);
       const w = Option.getOrUndefined(width);
-      const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
-      const parsedParentHeight = yield* parseBoundedIntOption(
-        parentHeight,
-        "parent-height",
-        0,
-        1000
-      );
-      const d = Option.getOrElse(parsedDepth, () => 6);
-      const ph = Option.getOrElse(parsedParentHeight, () => 80);
+      const { depth: depthValue, parentHeight: parentHeightValue } =
+        yield* parseThreadDepth(depth, parentHeight);
+      const d = depthValue ?? 6;
+      const ph = parentHeightValue ?? 80;
 
       let posts: ReadonlyArray<Post>;
 

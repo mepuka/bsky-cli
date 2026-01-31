@@ -14,20 +14,21 @@ import { CliInputError } from "./errors.js";
 import { decodeActor } from "./shared-options.js";
 import { formatSchemaError } from "./shared.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
-import { jsonNdjsonTableFormats, resolveOutputFormat } from "./output-format.js";
+import { jsonNdjsonTableFormats } from "./output-format.js";
+import { emitWithFormat } from "./output-render.js";
+import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
+import { parseLimit } from "./shared-options.js";
 
 const queryArg = Args.text({ name: "query" }).pipe(
   Args.withDescription("Search query string")
 );
 
-const limitOption = Options.integer("limit").pipe(
-  Options.withDescription("Maximum number of results"),
-  Options.optional
+const limitOption = baseLimitOption.pipe(
+  Options.withDescription("Maximum number of results")
 );
 
-const cursorOption = Options.text("cursor").pipe(
-  Options.withDescription("Pagination cursor"),
-  Options.optional
+const cursorOption = baseCursorOption.pipe(
+  Options.withDescription("Pagination cursor")
 );
 
 const typeaheadOption = Options.boolean("typeahead").pipe(
@@ -50,9 +51,8 @@ const networkOption = Options.boolean("network").pipe(
   Options.withDescription("Search the Bluesky network instead of a local store")
 );
 
-const postCursorOption = Options.text("cursor").pipe(
-  Options.withDescription("Pagination cursor (network) or offset (local)"),
-  Options.optional
+const postCursorOption = baseCursorOption.pipe(
+  Options.withDescription("Pagination cursor (network) or offset (local)")
 );
 
 const sortOption = Options.text("sort").pipe(
@@ -162,27 +162,24 @@ const handlesCommand = Command.make(
         });
       }
       const client = yield* BskyClient;
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
-        ...(Option.isSome(limit) ? { limit: limit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {}),
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
         ...(typeahead ? { typeahead: true } : {})
       };
       const result = yield* client.searchActors(queryValue, options);
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
+        "json",
+        {
+          json: writeJson(result),
+          ndjson: writeJsonStream(Stream.fromIterable(result.actors)),
+          table: writeText(renderProfileTable(result.actors, result.cursor))
+        }
       );
-      if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(result.actors));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderProfileTable(result.actors, result.cursor));
-        return;
-      }
-      yield* writeJson(result);
     })
 ).pipe(
   Command.withDescription(
@@ -201,26 +198,23 @@ const feedsCommand = Command.make(
       const appConfig = yield* AppConfigService;
       const queryValue = yield* requireNonEmptyQuery(query);
       const client = yield* BskyClient;
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
-        ...(Option.isSome(limit) ? { limit: limit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.searchFeedGenerators(queryValue, options);
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
+        "json",
+        {
+          json: writeJson(result),
+          ndjson: writeJsonStream(Stream.fromIterable(result.feeds)),
+          table: writeText(renderFeedTable(result.feeds, result.cursor))
+        }
       );
-      if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(result.feeds));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderFeedTable(result.feeds, result.cursor));
-        return;
-      }
-      yield* writeJson(result);
     })
 ).pipe(
   Command.withDescription(
@@ -253,12 +247,8 @@ const postsCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const queryValue = yield* requireNonEmptyQuery(query);
-      if (Option.isSome(limit) && limit.value <= 0) {
-        return yield* CliInputError.make({
-          message: "--limit must be a positive integer.",
-          cause: { limit: limit.value }
-        });
-      }
+      const parsedLimit = yield* parseLimit(limit);
+      const limitValue = Option.getOrUndefined(parsedLimit);
       if (network && Option.isSome(store)) {
         return yield* CliInputError.make({
           message: "--store cannot be used with --network.",
@@ -296,12 +286,6 @@ const postsCommand = Command.make(
         });
       }
 
-      const outputFormat = resolveOutputFormat(
-        format,
-        appConfig.outputFormat,
-        jsonNdjsonTableFormats,
-        "json"
-      );
       const storeValue = Option.getOrElse(store, () => undefined);
 
       if (network) {
@@ -349,7 +333,7 @@ const postsCommand = Command.make(
       const parsedAuthor = yield* authorValue;
       const parsedMentions = yield* mentionsValue;
       const result = yield* client.searchPosts(queryValue, {
-        ...(Option.isSome(limit) ? { limit: limit.value } : {}),
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
         ...(sortValue ? { sort: sortValue } : {}),
         ...(Option.isSome(since) ? { since: since.value } : {}),
@@ -374,21 +358,23 @@ const postsCommand = Command.make(
             ),
           { concurrency: "unbounded" }
         );
-        if (outputFormat === "ndjson") {
-          yield* writeJsonStream(Stream.fromIterable(posts));
-          return;
-        }
-        if (outputFormat === "table") {
-          yield* writeText(renderPostsTable(posts));
-          return;
-        }
-        yield* writeJson({
-          query: queryValue,
-          cursor: result.cursor,
-          hitsTotal: result.hitsTotal,
-          count: posts.length,
-          posts
-        });
+        yield* emitWithFormat(
+          format,
+          appConfig.outputFormat,
+          jsonNdjsonTableFormats,
+          "json",
+          {
+            json: writeJson({
+              query: queryValue,
+              cursor: result.cursor,
+              hitsTotal: result.hitsTotal,
+              count: posts.length,
+              posts
+            }),
+            ndjson: writeJsonStream(Stream.fromIterable(posts)),
+            table: writeText(renderPostsTable(posts))
+          }
+        );
         return;
       }
 
@@ -435,27 +421,27 @@ const postsCommand = Command.make(
       }
       const input = {
         query: queryValue,
-        ...(Option.isSome(limit) ? { limit: limit.value } : {}),
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
         ...(localSort ? { sort: localSort } : {})
       };
       const result = yield* index.searchPosts(storeRef, input);
-
-      if (outputFormat === "ndjson") {
-        const stream = Stream.fromIterable(result.posts);
-        yield* writeJsonStream(stream);
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderPostsTable(result.posts));
-        return;
-      }
-      yield* writeJson({
-        query: queryValue,
-        cursor: result.cursor,
-        count: result.posts.length,
-        posts: result.posts
-      });
+      yield* emitWithFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json",
+        {
+          json: writeJson({
+            query: queryValue,
+            cursor: result.cursor,
+            count: result.posts.length,
+            posts: result.posts
+          }),
+          ndjson: writeJsonStream(Stream.fromIterable(result.posts)),
+          table: writeText(renderPostsTable(result.posts))
+        }
+      );
     })
 ).pipe(
   Command.withDescription(
