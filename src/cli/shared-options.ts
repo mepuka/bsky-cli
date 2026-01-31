@@ -1,9 +1,10 @@
 import { Args, Options } from "@effect/cli";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { AtUri, Did, Handle, PostUri, StoreName } from "../domain/primitives.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { CliInputError } from "./errors.js";
 import { formatSchemaError } from "./shared.js";
+import { NonNegativeInt } from "./option-schemas.js";
 
 /** --store option with StoreName schema validation */
 export const storeNameOption = Options.text("store").pipe(
@@ -52,6 +53,7 @@ export const strictOption = Options.boolean("strict").pipe(
 
 /** --max-errors option (optional) */
 export const maxErrorsOption = Options.integer("max-errors").pipe(
+  Options.withSchema(NonNegativeInt),
   Options.withDescription("Stop after exceeding N errors (default: unlimited)"),
   Options.optional
 );
@@ -103,20 +105,6 @@ export const includePinsOption = Options.boolean("include-pins").pipe(
 );
 
 /** Validate --max-errors value is non-negative */
-export const parseMaxErrors = (maxErrors: Option.Option<number>) =>
-  Option.match(maxErrors, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (value) =>
-      value < 0
-        ? Effect.fail(
-            CliInputError.make({
-              message: "max-errors must be a non-negative integer.",
-              cause: value
-            })
-          )
-        : Effect.succeed(Option.some(value))
-  });
-
 export const decodeActor = (actor: string) => {
   if (actor.startsWith("did:")) {
     return Schema.decodeUnknown(Did)(actor).pipe(
@@ -137,36 +125,3 @@ export const decodeActor = (actor: string) => {
     )
   );
 };
-
-export const parseLimit = (limit: Option.Option<number>) =>
-  Option.match(limit, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (value) =>
-      value <= 0
-        ? Effect.fail(
-            CliInputError.make({
-              message: "--limit must be a positive integer.",
-              cause: value
-            })
-          )
-        : Effect.succeed(Option.some(value))
-  });
-
-export const parseBoundedIntOption = (
-  value: Option.Option<number>,
-  name: string,
-  min: number,
-  max: number
-) =>
-  Option.match(value, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (raw) =>
-      raw < min || raw > max
-        ? Effect.fail(
-            CliInputError.make({
-              message: `${name} must be between ${min} and ${max}.`,
-              cause: raw
-            })
-          )
-        : Effect.succeed(Option.some(raw))
-  });

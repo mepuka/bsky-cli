@@ -14,7 +14,6 @@ import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { makeWatchCommandBody } from "./sync-factory.js";
 import { parseOptionalDuration } from "./interval.js";
-import { CliInputError } from "./errors.js";
 import {
   feedUriArg,
   listUriArg,
@@ -31,14 +30,14 @@ import {
   quietOption,
   refreshOption,
   strictOption,
-  maxErrorsOption,
-  parseMaxErrors
+  maxErrorsOption
 } from "./shared-options.js";
 import {
   depthOption as threadDepthOption,
   parentHeightOption as threadParentHeightOption,
   parseThreadDepth
 } from "./thread-options.js";
+import { PositiveInt } from "./option-schemas.js";
 
 const intervalOption = Options.text("interval").pipe(
   Options.withDescription(
@@ -47,6 +46,7 @@ const intervalOption = Options.text("interval").pipe(
   Options.optional
 );
 const maxCyclesOption = Options.integer("max-cycles").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Stop after N watch cycles"),
   Options.optional
 );
@@ -232,7 +232,7 @@ const threadCommand = Command.make(
   ({ uri, depth, parentHeight, filter, filterJson, interval, maxCycles, until, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const { depth: depthValue, parentHeight: parentHeightValue } =
-        yield* parseThreadDepth(depth, parentHeight);
+        parseThreadDepth(depth, parentHeight);
       const source = DataSource.thread(uri, {
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
@@ -309,27 +309,14 @@ const jetstreamCommand = Command.make(
         storeRef,
         filterHash
       );
-      const parsedMaxErrors = yield* parseMaxErrors(maxErrors);
       const parsedUntil = yield* parseOptionalDuration(until);
-      const parsedMaxCycles = yield* Option.match(maxCycles, {
-        onNone: () => Effect.succeed(Option.none<number>()),
-        onSome: (value) =>
-          value <= 0
-            ? Effect.fail(
-                CliInputError.make({
-                  message: "--max-cycles must be a positive integer.",
-                  cause: { maxCycles: value }
-                })
-              )
-            : Effect.succeed(Option.some(value))
-      });
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
       yield* logInfo("Starting watch", { source: "jetstream", store: storeRef.name });
       yield* Effect.gen(function* () {
         const engine = yield* JetstreamSyncEngine;
-        const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
+        const maxErrorsValue = Option.getOrUndefined(maxErrors);
         const stream = engine.watch({
           source: selection.source,
           store: storeRef,
@@ -346,8 +333,8 @@ const jetstreamCommand = Command.make(
             makeSyncReporter(quiet, monitor, output)
           )
         );
-        const limited = Option.isSome(parsedMaxCycles)
-          ? outputStream.pipe(Stream.take(parsedMaxCycles.value))
+        const limited = Option.isSome(maxCycles)
+          ? outputStream.pipe(Stream.take(maxCycles.value))
           : outputStream;
         const timed = Option.isSome(parsedUntil)
           ? limited.pipe(Stream.interruptWhen(Effect.sleep(parsedUntil.value)))

@@ -153,7 +153,7 @@ const byActorCommand = Command.make(
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const resolvedActor = yield* decodeActor(actor);
       const result = yield* client.getActorFeeds(resolvedActor, {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),

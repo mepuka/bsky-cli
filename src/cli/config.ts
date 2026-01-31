@@ -6,6 +6,7 @@ import { AppConfig } from "../domain/config.js";
 import type { LogFormat } from "./logging.js";
 import type { SyncSettingsValue } from "../services/sync-settings.js";
 import type { CredentialsOverridesValue } from "../services/credential-store.js";
+import { NonNegativeInt, PositiveInt } from "./option-schemas.js";
 
 
 const compactOption = Options.all({
@@ -63,22 +64,27 @@ export const configOptions = {
     Options.withDescription("Override log format (json or human)")
   ),
   syncConcurrency: Options.integer("sync-concurrency").pipe(
+    Options.withSchema(PositiveInt),
     Options.optional,
     Options.withDescription("Concurrent sync preparation workers (default: 5)")
   ),
   syncBatchSize: Options.integer("sync-batch-size").pipe(
+    Options.withSchema(PositiveInt),
     Options.optional,
     Options.withDescription("Batch size for sync store writes (default: 100)")
   ),
   syncPageLimit: Options.integer("sync-page-limit").pipe(
+    Options.withSchema(PositiveInt),
     Options.optional,
     Options.withDescription("Page size for sync fetches (default: 100)")
   ),
   checkpointEvery: Options.integer("checkpoint-every").pipe(
+    Options.withSchema(PositiveInt),
     Options.optional,
     Options.withDescription("Checkpoint every N processed posts (default: 100)")
   ),
   checkpointIntervalMs: Options.integer("checkpoint-interval-ms").pipe(
+    Options.withSchema(NonNegativeInt),
     Options.optional,
     Options.withDescription("Checkpoint interval in milliseconds (default: 5000)")
   )

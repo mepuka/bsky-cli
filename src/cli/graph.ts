@@ -140,7 +140,7 @@ const followersCommand = Command.make(
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
@@ -189,7 +189,7 @@ const followsCommand = Command.make(
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
@@ -238,7 +238,7 @@ const knownFollowersCommand = Command.make(
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
@@ -414,7 +414,7 @@ const listsCommand = Command.make(
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
@@ -458,7 +458,7 @@ const listCommand = Command.make(
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
@@ -505,7 +505,7 @@ const blocksCommand = Command.make(
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
@@ -550,7 +550,7 @@ const mutesCommand = Command.make(
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})

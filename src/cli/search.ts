@@ -16,7 +16,6 @@ import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
-import { parseLimit } from "./shared-options.js";
 
 const queryArg = Args.text({ name: "query" }).pipe(
   Args.withDescription("Search query string")
@@ -135,7 +134,7 @@ const handlesCommand = Command.make(
         });
       }
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
@@ -171,7 +170,7 @@ const feedsCommand = Command.make(
       const appConfig = yield* AppConfigService;
       const queryValue = yield* requireNonEmptyQuery(query);
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
@@ -220,8 +219,7 @@ const postsCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const queryValue = yield* requireNonEmptyQuery(query);
-      const parsedLimit = yield* parseLimit(limit);
-      const limitValue = Option.getOrUndefined(parsedLimit);
+      const limitValue = Option.getOrUndefined(limit);
       if (network && Option.isSome(store)) {
         return yield* CliInputError.make({
           message: "--store cannot be used with --network.",

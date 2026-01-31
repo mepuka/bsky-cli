@@ -6,12 +6,10 @@ import { OutputManager } from "../services/output-manager.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { StoreIndex } from "../services/store-index.js";
 import { parseFilterExpr } from "./filter-input.js";
-import { parseLimit } from "./shared-options.js";
 import { CliOutput, writeJson, writeJsonStream } from "./output.js";
 import { storeOptions } from "./store.js";
 import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
 import { parseInterval, parseOptionalDuration } from "./interval.js";
-import { CliInputError } from "./errors.js";
 import type { StoreName } from "../domain/primitives.js";
 
 /** Common options shared by sync and watch API-based commands */
@@ -40,7 +38,6 @@ export const makeSyncCommandBody = (
       const storeRef = yield* storeOptions.loadStoreRef(input.store);
       const storeConfig = yield* storeOptions.loadStoreConfig(input.store);
       const expr = yield* parseFilterExpr(input.filter, input.filterJson);
-      const parsedLimit = yield* parseLimit(input.limit ?? Option.none());
       const basePolicy = storeConfig.syncPolicy ?? "dedupe";
       const policy = input.refresh ? "refresh" : basePolicy;
       yield* logInfo("Starting sync", { source: sourceName, store: storeRef.name, ...extraLogFields });
@@ -50,7 +47,7 @@ export const makeSyncCommandBody = (
           store: storeRef.name
         });
       }
-      const limitValue = Option.getOrUndefined(parsedLimit);
+      const limitValue = Option.getOrUndefined(input.limit ?? Option.none());
       const result = yield* sync
         .sync(makeDataSource(), storeRef, expr, {
           policy,
@@ -96,18 +93,6 @@ export const makeWatchCommandBody = (
       const policy = input.refresh ? "refresh" : basePolicy;
       const parsedInterval = yield* parseInterval(input.interval);
       const parsedUntil = yield* parseOptionalDuration(input.until);
-      const parsedMaxCycles = yield* Option.match(input.maxCycles, {
-        onNone: () => Effect.succeed(Option.none<number>()),
-        onSome: (value) =>
-          value <= 0
-            ? Effect.fail(
-                CliInputError.make({
-                  message: "--max-cycles must be a positive integer.",
-                  cause: { maxCycles: value }
-                })
-              )
-            : Effect.succeed(Option.some(value))
-      });
       yield* logInfo("Starting watch", { source: sourceName, store: storeRef.name, ...extraLogFields });
       if (policy === "refresh") {
         yield* logWarn("Refresh mode updates existing posts and may grow the event log.", {
@@ -129,8 +114,8 @@ export const makeWatchCommandBody = (
           Stream.map((event) => event.result),
           Stream.provideService(SyncReporter, makeSyncReporter(input.quiet, monitor, output))
         );
-      if (Option.isSome(parsedMaxCycles)) {
-        stream = stream.pipe(Stream.take(parsedMaxCycles.value));
+      if (Option.isSome(input.maxCycles)) {
+        stream = stream.pipe(Stream.take(input.maxCycles.value));
       }
       if (Option.isSome(parsedUntil)) {
         stream = stream.pipe(Stream.interruptWhen(Effect.sleep(parsedUntil.value)));

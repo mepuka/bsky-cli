@@ -5,6 +5,7 @@ import { DataSource } from "../domain/sync.js";
 import type { StoreRef } from "../domain/store.js";
 import { SyncCheckpointStore } from "../services/sync-checkpoint-store.js";
 import { CliInputError } from "./errors.js";
+import { PositiveInt } from "./option-schemas.js";
 
 const DEFAULT_COLLECTIONS = ["app.bsky.feed.post"];
 
@@ -31,6 +32,7 @@ export const jetstreamOptions = {
     Options.withDescription("Enable compression if supported by runtime")
   ),
   maxMessageSize: Options.integer("max-message-size").pipe(
+    Options.withSchema(PositiveInt),
     Options.withDescription("Max message size in bytes"),
     Options.optional
   )

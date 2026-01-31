@@ -21,6 +21,7 @@ import { StoreStats } from "../services/store-stats.js";
 import { withExamples } from "./help.js";
 import { resolveOutputFormat, treeTableJsonFormats } from "./output-format.js";
 import { StoreRenamer } from "../services/store-renamer.js";
+import { PositiveInt } from "./option-schemas.js";
 import {
   buildStoreTreeData,
   renderStoreTree,
@@ -62,6 +63,7 @@ const treeAnsiOption = Options.boolean("ansi").pipe(
   Options.withDescription("Enable ANSI color output for tree format")
 );
 const treeWidthOption = Options.integer("width").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Line width for tree rendering (enables wrapping)"),
   Options.optional
 );

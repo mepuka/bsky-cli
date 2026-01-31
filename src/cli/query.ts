@@ -35,6 +35,7 @@ import { StorePostOrder } from "../domain/order.js";
 import { formatSchemaError } from "./shared.js";
 import { mergeOrderedStreams } from "./stream-merge.js";
 import { queryOutputFormats, resolveOutputFormat } from "./output-format.js";
+import { PositiveInt } from "./option-schemas.js";
 
 const storeNamesArg = Args.text({ name: "store" }).pipe(
   Args.repeated,
@@ -57,10 +58,12 @@ const untilOption = Options.text("until").pipe(
   Options.optional
 );
 const limitOption = Options.integer("limit").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Maximum number of posts to return"),
   Options.optional
 );
 const scanLimitOption = Options.integer("scan-limit").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Maximum rows to scan before filtering (advanced)"),
   Options.optional
 );
@@ -82,6 +85,7 @@ const ansiOption = Options.boolean("ansi").pipe(
   Options.withDescription("Enable ANSI colors in output")
 );
 const widthOption = Options.integer("width").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Line width for terminal output"),
   Options.optional
 );
@@ -312,18 +316,6 @@ export const queryCommand = Command.make(
 
       const w = Option.getOrUndefined(width);
 
-      if (Option.isSome(limit) && limit.value <= 0) {
-        return yield* CliInputError.make({
-          message: "--limit must be a positive integer.",
-          cause: { limit: limit.value }
-        });
-      }
-      if (Option.isSome(scanLimit) && scanLimit.value <= 0) {
-        return yield* CliInputError.make({
-          message: "--scan-limit must be a positive integer.",
-          cause: { scanLimit: scanLimit.value }
-        });
-      }
       const sortValue = Option.getOrUndefined(sort);
       const order =
         newestFirst

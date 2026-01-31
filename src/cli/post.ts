@@ -77,7 +77,7 @@ const likesCommand = Command.make(
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const result = yield* client.getLikes(uri, {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
@@ -120,7 +120,7 @@ const repostedByCommand = Command.make(
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const result = yield* client.getRepostedBy(uri, {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
@@ -165,7 +165,7 @@ const quotesCommand = Command.make(
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const parser = yield* PostParser;
-      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
+      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const result = yield* client.getQuotes(uri, {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),

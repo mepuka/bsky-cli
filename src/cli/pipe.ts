@@ -15,6 +15,7 @@ import { formatSchemaError } from "./shared.js";
 import { writeJsonStream } from "./output.js";
 import { filterByFlags } from "../typeclass/chunk.js";
 import { logErrorEvent, logWarn } from "./logging.js";
+import { PositiveInt } from "./option-schemas.js";
 
 const onErrorOption = Options.choice("on-error", ["fail", "skip", "report"]).pipe(
   Options.withDescription("Behavior on invalid input lines"),
@@ -22,6 +23,7 @@ const onErrorOption = Options.choice("on-error", ["fail", "skip", "report"]).pip
 );
 
 const batchSizeOption = Options.integer("batch-size").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Posts per filter batch (default: 50)"),
   Options.optional
 );
@@ -78,12 +80,6 @@ export const pipeCommand = Command.make(
       const evaluateBatch = yield* runtime.evaluateBatch(expr);
 
       const size = Option.getOrElse(batchSize, () => 50);
-      if (size <= 0) {
-        return yield* CliInputError.make({
-          message: "--batch-size must be a positive integer.",
-          cause: { batchSize: size }
-        });
-      }
 
       const lineRef = yield* Ref.make(0);
       const parsed = input.lines.pipe(

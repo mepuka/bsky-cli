@@ -32,21 +32,22 @@ import {
   quietOption,
   refreshOption,
   strictOption,
-  maxErrorsOption,
-  parseMaxErrors,
-  parseLimit
+  maxErrorsOption
 } from "./shared-options.js";
 import {
   depthOption as threadDepthOption,
   parentHeightOption as threadParentHeightOption,
   parseThreadDepth
 } from "./thread-options.js";
+import { PositiveInt } from "./option-schemas.js";
 
 const syncLimitOption = Options.integer("limit").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Maximum number of posts to sync"),
   Options.optional
 );
 const jetstreamLimitOption = Options.integer("limit").pipe(
+  Options.withSchema(PositiveInt),
   Options.withDescription("Maximum number of Jetstream events to process"),
   Options.optional
 );
@@ -213,7 +214,7 @@ const threadCommand = Command.make(
   ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh, limit }) =>
     Effect.gen(function* () {
       const { depth: depthValue, parentHeight: parentHeightValue } =
-        yield* parseThreadDepth(depth, parentHeight);
+        parseThreadDepth(depth, parentHeight);
       const source = DataSource.thread(uri, {
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
@@ -292,10 +293,8 @@ const jetstreamCommand = Command.make(
         storeRef,
         filterHash
       );
-      const parsedLimit = yield* parseLimit(limit);
       const parsedDuration = yield* parseDuration(duration);
-      const parsedMaxErrors = yield* parseMaxErrors(maxErrors);
-      if (Option.isNone(parsedLimit) && Option.isNone(parsedDuration)) {
+      if (Option.isNone(limit) && Option.isNone(parsedDuration)) {
         return yield* CliInputError.make({
           message:
             "Jetstream sync requires --limit or --duration. Use watch jetstream for continuous streaming.",
@@ -311,9 +310,9 @@ const jetstreamCommand = Command.make(
       });
       const result = yield* Effect.gen(function* () {
         const engine = yield* JetstreamSyncEngine;
-        const limitValue = Option.getOrUndefined(parsedLimit);
+        const limitValue = Option.getOrUndefined(limit);
         const durationValue = Option.getOrUndefined(parsedDuration);
-        const maxErrorsValue = Option.getOrUndefined(parsedMaxErrors);
+        const maxErrorsValue = Option.getOrUndefined(maxErrors);
         return yield* engine.sync({
           source: selection.source,
           store: storeRef,
