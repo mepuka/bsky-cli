@@ -106,7 +106,7 @@ Repeated polling + streaming NDJSON results to stdout.
 
 Query stored posts.
 
-- `query <store> [--range <start>..<end>] [--filter <dsl>] [--filter-json <json>] [--limit <n>] [--format <json|ndjson|markdown|table>] [--fields <fields>]`
+- `query <store...> [--range <start>..<end>] [--filter <dsl>] [--filter-json <json>] [--limit <n>] [--format <json|ndjson|markdown|table|compact|card|thread>] [--fields <fields>] [--include-store]`
 
 Examples:
 
@@ -114,7 +114,10 @@ Examples:
 bun run index.ts query my-store --limit 10 --format table
 bun run index.ts query my-store --range 2024-01-01T00:00:00Z..2024-01-31T00:00:00Z
 bun run index.ts query my-store --fields uri,author,text --limit 5
+bun run index.ts query store-a,store-b --format ndjson
 ```
+
+Multi-store queries accept comma-separated store lists or repeated store arguments.
 
 ### derive
 

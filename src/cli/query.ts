@@ -6,10 +6,16 @@ import type { FilterExpr } from "../domain/filter.js";
 import { StoreQuery } from "../domain/events.js";
 import { StoreName, Timestamp } from "../domain/primitives.js";
 import type { Post } from "../domain/post.js";
+import type { StoreRef } from "../domain/store.js";
 import { FilterRuntime } from "../services/filter-runtime.js";
 import { AppConfigService } from "../services/app-config.js";
 import { StoreIndex } from "../services/store-index.js";
-import { renderPostsMarkdown, renderPostsTable } from "../domain/format.js";
+import {
+  renderPostsMarkdown,
+  renderPostsTable,
+  renderStorePostsMarkdown,
+  renderStorePostsTable
+} from "../domain/format.js";
 import { renderPostCompact, renderPostCard } from "./doc/post.js";
 import { renderThread } from "./doc/thread.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
@@ -17,17 +23,20 @@ import { parseOptionalFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJson, writeJsonStream, writeText } from "./output.js";
 import { parseRange } from "./range.js";
 import { parseTimeInput } from "./time.js";
-import { storeOptions } from "./store.js";
 import { CliPreferences } from "./preferences.js";
 import { projectFields, resolveFieldSelectors } from "./query-fields.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { filterOption, filterJsonOption } from "./shared-options.js";
 import { filterByFlags } from "../typeclass/chunk.js";
+import { StoreManager } from "../services/store-manager.js";
+import { StoreNotFound } from "../domain/errors.js";
+import { formatSchemaError } from "./shared.js";
+import { mergeOrderedStreams } from "./stream-merge.js";
 
-const storeNameArg = Args.text({ name: "store" }).pipe(
-  Args.withSchema(StoreName),
-  Args.withDescription("Store name to query")
+const storeNamesArg = Args.text({ name: "store" }).pipe(
+  Args.repeated,
+  Args.withDescription("Store name(s) to query (repeatable or comma-separated)")
 );
 const rangeOption = Options.text("range").pipe(
   Options.withDescription("ISO range as <start>..<end>"),
@@ -72,6 +81,9 @@ const formatOption = Options.choice("format", [
   Options.optional,
   Options.withDescription("Output format (default: config output format)")
 );
+const includeStoreOption = Options.boolean("include-store").pipe(
+  Options.withDescription("Include store name in output")
+);
 const ansiOption = Options.boolean("ansi").pipe(
   Options.withDescription("Enable ANSI colors in output")
 );
@@ -93,6 +105,11 @@ const countOption = Options.boolean("count").pipe(
 );
 
 const DEFAULT_FILTER_SCAN_LIMIT = 5000;
+
+type StorePost = {
+  readonly store: StoreRef;
+  readonly post: Post;
+};
 
 const isAscii = (value: string) => /^[\x00-\x7F]*$/.test(value);
 
@@ -174,11 +191,67 @@ const parseRangeOptions = (
     return Option.some({ start: startTimestamp, end: endTimestamp });
   });
 
+const splitStoreNames = (raw: ReadonlyArray<string>) =>
+  raw.flatMap((value) =>
+    value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+  );
+
+const parseStoreNames = (raw: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const names = splitStoreNames(raw);
+    if (names.length === 0) {
+      return yield* CliInputError.make({
+        message: "Provide at least one store name.",
+        cause: { stores: raw }
+      });
+    }
+    return yield* Effect.forEach(
+      names,
+      (name) =>
+        Schema.decodeUnknown(StoreName)(name).pipe(
+          Effect.mapError((error) =>
+            CliInputError.make({
+              message: `Invalid store name "${name}": ${formatSchemaError(error)}`,
+              cause: { name }
+            })
+          )
+        ),
+      { discard: false }
+    );
+  });
+
+const loadStoreRefs = (names: ReadonlyArray<StoreName>) =>
+  Effect.gen(function* () {
+    const manager = yield* StoreManager;
+    const results = yield* Effect.forEach(
+      names,
+      (name) => manager.getStore(name),
+      { discard: false }
+    );
+    const missing = names.filter((_, index) => Option.isNone(results[index]!));
+    if (missing.length > 0) {
+      if (missing.length === 1 && names.length === 1) {
+        return yield* StoreNotFound.make({ name: missing[0]! });
+      }
+      return yield* CliInputError.make({
+        message: `Unknown stores: ${missing.join(", ")}`,
+        cause: { missing }
+      });
+    }
+    const stores = results
+      .map((option) => (Option.isSome(option) ? option.value : undefined))
+      .filter((value): value is NonNullable<typeof value> => value !== undefined);
+    return stores;
+  });
+
 
 export const queryCommand = Command.make(
   "query",
   {
-    store: storeNameArg,
+    stores: storeNamesArg,
     range: rangeOption,
     since: sinceOption,
     until: untilOption,
@@ -189,26 +262,36 @@ export const queryCommand = Command.make(
     sort: sortOption,
     newestFirst: newestFirstOption,
     format: formatOption,
+    includeStore: includeStoreOption,
     ansi: ansiOption,
     width: widthOption,
     fields: fieldsOption,
     progress: progressOption,
     count: countOption
   },
-  ({ store, range, since, until, filter, filterJson, limit, scanLimit, sort, newestFirst, format, ansi, width, fields, progress, count }) =>
+  ({ stores, range, since, until, filter, filterJson, limit, scanLimit, sort, newestFirst, format, includeStore, ansi, width, fields, progress, count }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
       const runtime = yield* FilterRuntime;
       const output = yield* CliOutput;
       const preferences = yield* CliPreferences;
-      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const storeNames = yield* parseStoreNames(stores);
+      const storeRefs = yield* loadStoreRefs(storeNames);
+      const multiStore = storeRefs.length > 1;
+      const includeStoreLabel = includeStore || multiStore;
       const parsedRange = yield* parseRangeOptions(range, since, until);
       const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
       const expr = Option.getOrElse(parsedFilter, () => all());
       const outputFormat = Option.getOrElse(format, () =>
         appConfig.outputFormat === "ndjson" ? "compact" : appConfig.outputFormat
       );
+      if (multiStore && outputFormat === "thread") {
+        return yield* CliInputError.make({
+          message: "Thread output is only supported for single-store queries.",
+          cause: { format: outputFormat }
+        });
+      }
       const compact = preferences.compact;
       const selectorsOption = yield* resolveFieldSelectors(fields, compact);
       const project = (post: Post) =>
@@ -276,7 +359,7 @@ export const queryCommand = Command.make(
       if (defaultScanLimit !== undefined) {
         yield* output
           .writeStderr(
-            `ℹ️  Scanning up to ${defaultScanLimit} posts (filtered query). Use --scan-limit to scan more.`
+            `ℹ️  Scanning up to ${defaultScanLimit} posts${multiStore ? " per store" : ""} (filtered query). Use --scan-limit to scan more.`
           )
           .pipe(Effect.catchAll(() => Effect.void));
       }
@@ -300,12 +383,8 @@ export const queryCommand = Command.make(
         order
       });
 
-      const baseStream = index.query(storeRef, query);
       const progressEnabled = hasFilter && progress;
       const trackScanLimit = hasFilter && resolvedScanLimit !== undefined;
-      const scanRef = trackScanLimit
-        ? yield* Ref.make({ scanned: 0, matched: 0 })
-        : undefined;
       let startTime = 0;
       let progressRef: Ref.Ref<{ scanned: number; matched: number; lastReportAt: number }> | undefined;
       if (progressEnabled) {
@@ -323,7 +402,11 @@ export const queryCommand = Command.make(
                 .pipe(Effect.catchAll(() => Effect.void))
           : undefined;
 
-      const onBatch = (scannedDelta: number, matchedDelta: number) =>
+      const onBatch = (
+        scanRef: Ref.Ref<{ scanned: number; matched: number }> | undefined,
+        scannedDelta: number,
+        matchedDelta: number
+      ) =>
         Effect.gen(function* () {
           if (scanRef) {
             yield* Ref.update(scanRef, (state) => ({
@@ -351,52 +434,110 @@ export const queryCommand = Command.make(
 
       const evaluateBatch = hasFilter ? yield* runtime.evaluateBatch(expr) : undefined;
 
-      const filtered = hasFilter && evaluateBatch
-        ? baseStream.pipe(
-            Stream.grouped(50),
-            Stream.mapEffect((batch) =>
-              evaluateBatch(batch).pipe(
-                Effect.map((flags) => {
-                  const matched = filterByFlags(batch, flags);
-                  return {
-                    matched,
-                    scanned: Chunk.size(batch),
-                    matchedCount: Chunk.size(matched)
-                  };
-                }),
-                Effect.tap(({ scanned, matchedCount }) => onBatch(scanned, matchedCount)),
-                Effect.map(({ matched }) => matched)
+      const buildStoreStream = (storeRef: StoreRef) =>
+        Effect.gen(function* () {
+          const scanRef = trackScanLimit
+            ? yield* Ref.make({ scanned: 0, matched: 0 })
+            : undefined;
+          const baseStream = index.query(storeRef, query);
+          const filtered = hasFilter && evaluateBatch
+            ? baseStream.pipe(
+                Stream.grouped(50),
+                Stream.mapEffect((batch) =>
+                  evaluateBatch(batch).pipe(
+                    Effect.map((flags) => {
+                      const matched = filterByFlags(batch, flags);
+                      return {
+                        matched,
+                        scanned: Chunk.size(batch),
+                        matchedCount: Chunk.size(matched)
+                      };
+                    }),
+                    Effect.tap(({ scanned, matchedCount }) =>
+                      onBatch(scanRef, scanned, matchedCount)
+                    ),
+                    Effect.map(({ matched }) => matched)
+                  )
+                ),
+                Stream.mapConcat((chunk) => Chunk.toReadonlyArray(chunk))
               )
-            ),
-            Stream.mapConcat((chunk) => Chunk.toReadonlyArray(chunk))
-          )
-        : baseStream;
+            : baseStream;
+          const storeStream = filtered.pipe(
+            Stream.map((post) => ({ store: storeRef, post }))
+          );
+          return { store: storeRef, stream: storeStream, scanRef };
+        });
+
+      const storeStreams = yield* Effect.forEach(storeRefs, buildStoreStream, {
+        discard: false
+      });
+      const scanRefs = storeStreams
+        .map((entry) =>
+          entry.scanRef ? { store: entry.store, ref: entry.scanRef } : undefined
+        )
+        .filter((entry): entry is { store: StoreRef; ref: Ref.Ref<{ scanned: number; matched: number }> } => entry !== undefined);
+
+      const compareStorePosts = (left: StorePost, right: StorePost) => {
+        const leftTime = left.post.createdAt.getTime();
+        const rightTime = right.post.createdAt.getTime();
+        if (leftTime !== rightTime) {
+          return order === "desc" ? rightTime - leftTime : leftTime - rightTime;
+        }
+        const storeCompare = left.store.name.localeCompare(right.store.name);
+        if (storeCompare !== 0) {
+          return storeCompare;
+        }
+        return order === "desc"
+          ? right.post.uri.localeCompare(left.post.uri)
+          : left.post.uri.localeCompare(right.post.uri);
+      };
+
+      const merged = mergeOrderedStreams(
+        storeStreams.map((entry) => entry.stream),
+        compareStorePosts
+      );
 
       const stream = Option.match(limit, {
-        onNone: () => filtered,
-        onSome: (value) => filtered.pipe(Stream.take(value))
+        onNone: () => merged,
+        onSome: (value) => merged.pipe(Stream.take(value))
       });
 
-      const warnIfScanLimitReached = scanRef && resolvedScanLimit !== undefined
-        ? () =>
-            Ref.get(scanRef).pipe(
-              Effect.flatMap((state) =>
-                state.scanned >= resolvedScanLimit
-                  ? output
-                      .writeStderr(
-                        `Warning: scan limit ${resolvedScanLimit} reached. Results may be truncated.\n`
-                      )
-                      .pipe(Effect.catchAll(() => Effect.void))
-                  : Effect.void
-              )
-            )
-        : () => Effect.void;
+      const warnIfScanLimitReached = () =>
+        resolvedScanLimit === undefined || scanRefs.length === 0
+          ? Effect.void
+          : Effect.forEach(
+              scanRefs,
+              ({ store, ref }) =>
+                Ref.get(ref).pipe(
+                  Effect.flatMap((state) =>
+                    state.scanned >= resolvedScanLimit
+                      ? output
+                          .writeStderr(
+                            multiStore
+                              ? `Warning: scan limit ${resolvedScanLimit} reached for ${store.name}. Results may be truncated.\n`
+                              : `Warning: scan limit ${resolvedScanLimit} reached. Results may be truncated.\n`
+                          )
+                          .pipe(Effect.catchAll(() => Effect.void))
+                      : Effect.void
+                  )
+                ),
+              { discard: true }
+            );
+
+      const toOutput = (entry: StorePost) => {
+        const projected = project(entry.post);
+        return includeStoreLabel ? { store: entry.store.name, post: projected } : projected;
+      };
 
       if (count) {
         const canUseIndexCount =
           !hasFilter && Option.isNone(parsedRange);
         const total = canUseIndexCount
-          ? yield* index.count(storeRef)
+          ? yield* Effect.forEach(storeRefs, (store) => index.count(store), {
+              discard: false
+            }).pipe(
+              Effect.map((counts) => counts.reduce((sum, value) => sum + value, 0))
+            )
           : yield* Stream.runFold(stream, 0, (acc) => acc + 1);
         const limited = Option.match(limit, {
           onNone: () => total,
@@ -410,7 +551,7 @@ export const queryCommand = Command.make(
       if (outputFormat === "ndjson") {
         const countRef = yield* Ref.make(0);
         const counted = stream.pipe(
-          Stream.map(project),
+          Stream.map(toOutput),
           Stream.tap(() => Ref.update(countRef, (count) => count + 1))
         );
         yield* writeJsonStream(counted);
@@ -426,8 +567,8 @@ export const queryCommand = Command.make(
           Stream.fromIterable([value]).pipe(Stream.run(output.stdout));
         let isFirst = true;
         yield* writeChunk("[");
-        yield* Stream.runForEach(stream.pipe(Stream.map(project)), (post) => {
-          const json = JSON.stringify(post);
+        yield* Stream.runForEach(stream.pipe(Stream.map(toOutput)), (value) => {
+          const json = JSON.stringify(value);
           const prefix = isFirst ? "" : ",\n";
           isFirst = false;
           return writeChunk(`${prefix}${json}`);
@@ -441,13 +582,15 @@ export const queryCommand = Command.make(
       switch (outputFormat) {
         case "compact": {
           const countRef = yield* Ref.make(0);
-          const render = (post: Post) =>
-            ansi
-              ? renderAnsi(renderPostCompact(post), w)
-              : renderPlain(renderPostCompact(post), w);
-          yield* Stream.runForEach(stream, (post) =>
+          const render = (entry: StorePost) => {
+            const doc = includeStoreLabel
+              ? Doc.hsep([Doc.text(`[${entry.store.name}]`), renderPostCompact(entry.post)])
+              : renderPostCompact(entry.post);
+            return ansi ? renderAnsi(doc, w) : renderPlain(doc, w);
+          };
+          yield* Stream.runForEach(stream, (entry) =>
             Ref.update(countRef, (count) => count + 1).pipe(
-              Effect.zipRight(writeText(render(post)))
+              Effect.zipRight(writeText(render(entry)))
             )
           );
           const count = yield* Ref.get(countRef);
@@ -460,8 +603,11 @@ export const queryCommand = Command.make(
         case "card": {
           const countRef = yield* Ref.make(0);
           const rendered = stream.pipe(
-            Stream.map((post) => {
-              const doc = Doc.vsep(renderPostCard(post));
+            Stream.map((entry) => {
+              const lines = renderPostCard(entry.post);
+              const doc = includeStoreLabel
+                ? Doc.vsep([Doc.text(`[${entry.store.name}]`), ...lines])
+                : Doc.vsep(lines);
               return ansi ? renderAnsi(doc, w) : renderPlain(doc, w);
             }),
             Stream.mapAccum(true, (isFirst, text) => {
@@ -481,16 +627,31 @@ export const queryCommand = Command.make(
       }
 
       const collected = yield* Stream.runCollect(stream);
-      const posts = Chunk.toReadonlyArray(collected);
-      const projectedPosts = Option.isSome(selectorsOption) ? posts.map(project) : posts;
+      const entries = Chunk.toReadonlyArray(collected);
+      const posts = entries.map((entry) => entry.post);
+      const projectedPosts = entries.map(toOutput);
       yield* warnIfScanLimitReached();
 
       switch (outputFormat) {
         case "markdown":
-          yield* writeText(renderPostsMarkdown(posts));
+          yield* writeText(
+            includeStoreLabel
+              ? renderStorePostsMarkdown(entries.map((entry) => ({
+                  store: entry.store.name,
+                  post: entry.post
+                })))
+              : renderPostsMarkdown(posts)
+          );
           return;
         case "table":
-          yield* writeText(renderPostsTable(posts));
+          yield* writeText(
+            includeStoreLabel
+              ? renderStorePostsTable(entries.map((entry) => ({
+                  store: entry.store.name,
+                  post: entry.post
+                })))
+              : renderPostsTable(posts)
+          );
           return;
         case "thread": {
           if (posts.length === 0) {
@@ -529,7 +690,8 @@ export const queryCommand = Command.make(
         "skygent query my-store --format thread --ansi --width 120",
         "skygent query my-store --format compact --limit 50",
         "skygent query my-store --sort desc --limit 25",
-        "skygent query my-store --filter 'contains:ai' --count"
+        "skygent query my-store --filter 'contains:ai' --count",
+        "skygent query store-a,store-b --format ndjson"
       ],
       [
         "Tip: use --fields @minimal or --compact to reduce JSON output size."

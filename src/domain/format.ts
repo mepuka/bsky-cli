@@ -2,6 +2,7 @@ import { Post } from "./post.js";
 import { displayWidth, padEndDisplay } from "./text-width.js";
 
 const headers = ["Created At", "Author", "Text", "URI"];
+const headersWithStore = ["Store", ...headers];
 const textLimit = 80;
 
 export const normalizeWhitespace = (text: string) =>
@@ -39,6 +40,16 @@ const postToMarkdownRow = (post: Post) => [
   post.author,
   sanitizeMarkdown(post.text),
   post.uri.replace(/\|/g, "\\|")
+];
+
+const storePostToRow = (entry: { readonly store: string; readonly post: Post }) => [
+  entry.store,
+  ...postToRow(entry.post)
+];
+
+const storePostToMarkdownRow = (entry: { readonly store: string; readonly post: Post }) => [
+  entry.store,
+  ...postToMarkdownRow(entry.post)
 ];
 
 const renderTable = (
@@ -89,3 +100,13 @@ export const renderPostsTable = (posts: ReadonlyArray<Post>) =>
 
 export const renderPostsMarkdown = (posts: ReadonlyArray<Post>) =>
   renderMarkdownTable(headers, posts.map(postToMarkdownRow));
+
+export const renderStorePostsTable = (
+  entries: ReadonlyArray<{ readonly store: string; readonly post: Post }>
+) =>
+  renderTable(headersWithStore, entries.map(storePostToRow));
+
+export const renderStorePostsMarkdown = (
+  entries: ReadonlyArray<{ readonly store: string; readonly post: Post }>
+) =>
+  renderMarkdownTable(headersWithStore, entries.map(storePostToMarkdownRow));
