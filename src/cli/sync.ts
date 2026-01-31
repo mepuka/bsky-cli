@@ -9,6 +9,7 @@ import { logInfo, makeSyncReporter } from "./logging.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { OutputManager } from "../services/output-manager.js";
+import { StoreIndex } from "../services/store-index.js";
 import { CliOutput, writeJson } from "./output.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { withExamples } from "./help.js";
@@ -273,6 +274,7 @@ const jetstreamCommand = Command.make(
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
       const outputManager = yield* OutputManager;
+      const index = yield* StoreIndex;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const expr = yield* parseFilterExpr(filter, filterJson);
       const filterHash = filterExprSignature(expr);
@@ -332,8 +334,9 @@ const jetstreamCommand = Command.make(
           filters: materialized.filters.map((spec) => spec.name)
         });
       }
+      const totalPosts = yield* index.count(storeRef);
       yield* logInfo("Sync complete", { source: "jetstream", store: storeRef.name });
-      yield* writeJson(result as SyncResult);
+      yield* writeJson({ ...(result as SyncResult), totalPosts });
     })
 ).pipe(
   Command.withDescription(

@@ -13,6 +13,8 @@ import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { makeWatchCommandBody } from "./sync-factory.js";
+import { parseOptionalDuration } from "./interval.js";
+import { CliInputError } from "./errors.js";
 import {
   feedUriArg,
   listUriArg,
@@ -40,6 +42,14 @@ const intervalOption = Options.text("interval").pipe(
   ),
   Options.optional
 );
+const maxCyclesOption = Options.integer("max-cycles").pipe(
+  Options.withDescription("Stop after N watch cycles"),
+  Options.optional
+);
+const untilOption = Options.text("until").pipe(
+  Options.withDescription("Stop after a duration (e.g. \"10 minutes\")"),
+  Options.optional
+);
 const depthOption = Options.integer("depth").pipe(
   Options.withDescription("Thread reply depth to include (0-1000, default 6)"),
   Options.optional
@@ -56,6 +66,8 @@ const timelineCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
+    maxCycles: maxCyclesOption,
+    until: untilOption,
     quiet: quietOption,
     refresh: refreshOption
   },
@@ -81,6 +93,8 @@ const feedCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
+    maxCycles: maxCyclesOption,
+    until: untilOption,
     quiet: quietOption,
     refresh: refreshOption
   },
@@ -105,6 +119,8 @@ const listCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
+    maxCycles: maxCyclesOption,
+    until: untilOption,
     quiet: quietOption,
     refresh: refreshOption
   },
@@ -128,6 +144,8 @@ const notificationsCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
+    maxCycles: maxCyclesOption,
+    until: untilOption,
     quiet: quietOption,
     refresh: refreshOption
   },
@@ -152,10 +170,12 @@ const authorCommand = Command.make(
     postFilter: postFilterOption,
     postFilterJson: postFilterJsonOption,
     interval: intervalOption,
+    maxCycles: maxCyclesOption,
+    until: untilOption,
     quiet: quietOption,
     refresh: refreshOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, interval, store, quiet, refresh }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, interval, maxCycles, until, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const resolvedActor = yield* decodeActor(actor);
       const apiFilter = Option.getOrUndefined(filter);
@@ -173,6 +193,8 @@ const authorCommand = Command.make(
         filter: postFilter,
         filterJson: postFilterJson,
         interval,
+        maxCycles,
+        until,
         quiet,
         refresh
       });
@@ -200,10 +222,12 @@ const threadCommand = Command.make(
     filter: filterOption,
     filterJson: filterJsonOption,
     interval: intervalOption,
+    maxCycles: maxCyclesOption,
+    until: untilOption,
     quiet: quietOption,
     refresh: refreshOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, interval, store, quiet, refresh }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, interval, maxCycles, until, store, quiet, refresh }) =>
     Effect.gen(function* () {
       const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
       const parsedParentHeight = yield* parseBoundedIntOption(
@@ -223,7 +247,7 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, interval, quiet, refresh });
+      return yield* run({ store, filter, filterJson, interval, maxCycles, until, quiet, refresh });
     })
 ).pipe(
   Command.withDescription(
@@ -251,6 +275,8 @@ const jetstreamCommand = Command.make(
     cursor: jetstreamOptions.cursor,
     compress: jetstreamOptions.compress,
     maxMessageSize: jetstreamOptions.maxMessageSize,
+    maxCycles: maxCyclesOption,
+    until: untilOption,
     strict: strictOption,
     maxErrors: maxErrorsOption
   },
@@ -265,6 +291,8 @@ const jetstreamCommand = Command.make(
     cursor,
     compress,
     maxMessageSize,
+    maxCycles,
+    until,
     strict,
     maxErrors
   }) =>
@@ -287,6 +315,19 @@ const jetstreamCommand = Command.make(
         filterHash
       );
       const parsedMaxErrors = yield* parseMaxErrors(maxErrors);
+      const parsedUntil = yield* parseOptionalDuration(until);
+      const parsedMaxCycles = yield* Option.match(maxCycles, {
+        onNone: () => Effect.succeed(Option.none<number>()),
+        onSome: (value) =>
+          value <= 0
+            ? Effect.fail(
+                CliInputError.make({
+                  message: "--max-cycles must be a positive integer.",
+                  cause: { maxCycles: value }
+                })
+              )
+            : Effect.succeed(Option.some(value))
+      });
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
@@ -310,7 +351,13 @@ const jetstreamCommand = Command.make(
             makeSyncReporter(quiet, monitor, output)
           )
         );
-        return yield* writeJsonStream(outputStream);
+        const limited = Option.isSome(parsedMaxCycles)
+          ? outputStream.pipe(Stream.take(parsedMaxCycles.value))
+          : outputStream;
+        const timed = Option.isSome(parsedUntil)
+          ? limited.pipe(Stream.interruptWhen(Effect.sleep(parsedUntil.value)))
+          : limited;
+        return yield* writeJsonStream(timed);
       }).pipe(Effect.provide(engineLayer));
     })
 ).pipe(
