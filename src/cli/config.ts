@@ -8,6 +8,13 @@ import type { SyncSettingsValue } from "../services/sync-settings.js";
 import type { CredentialsOverridesValue } from "../services/credential-store.js";
 
 
+const compactOption = Options.boolean("full", {
+  negationNames: ["compact"]
+}).pipe(
+  Options.withDescription("Use full JSON output (disables compact default)"),
+  Options.map((full) => !full)
+);
+
 export const configOptions = {
   service: Options.text("service").pipe(
     Options.optional,
@@ -31,9 +38,7 @@ export const configOptions = {
     Options.optional,
     Options.withDescription("Override Bluesky password (redacted)")
   ),
-  compact: Options.boolean("compact").pipe(
-    Options.withDescription("Reduce JSON output verbosity for agent consumption")
-  ),
+  compact: compactOption,
   logFormat: Options.choice("log-format", ["json", "human"]).pipe(
     Options.optional,
     Options.withDescription("Override log format (json or human)")

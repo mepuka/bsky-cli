@@ -253,7 +253,7 @@ Operators: `AND` / `&&`, `OR` / `||`, `NOT` / `!`, parentheses for grouping.
 
 ### Global flags
 
-- `--compact` -- Reduce JSON output size
+- `--full` -- Use verbose JSON output (compact is the default)
 - `--quiet` -- Suppress progress output
 - `--log-format json|human` -- Control log format
 

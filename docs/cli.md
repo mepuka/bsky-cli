@@ -15,11 +15,11 @@ These can be used with any command and override config/env defaults:
 - `--output-format <json|ndjson|markdown|table>`: Default output format (used by `query`).
 - `--identifier <handle>`: Override Bluesky identifier.
 - `--password <value>`: Override Bluesky password (redacted).
-- `--compact`: Reduce JSON output verbosity for agent consumption.
+- `--full`: Use verbose JSON output (compact is the default).
 
 Tips:
 
-- Prefer `--compact` for agent workflows to reduce output size.
+- Compact output is the default; use `--full` for verbose JSON payloads.
 - For sync/watch commands, add `--quiet` to suppress progress logs.
 
 ## Commands
