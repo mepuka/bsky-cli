@@ -1,12 +1,11 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Option, Stream } from "effect";
-import { renderTableLegacy } from "./doc/table.js";
+import { renderFeedTable, renderProfileTable } from "./doc/table-renderers.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { PostParser } from "../services/post-parser.js";
 import { StoreIndex } from "../services/store-index.js";
 import { renderPostsTable } from "../domain/format.js";
 import { AppConfigService } from "../services/app-config.js";
-import type { FeedGeneratorView, ProfileView } from "../domain/bsky.js";
 import { StoreName } from "../domain/primitives.js";
 import { storeOptions } from "./store.js";
 import { withExamples } from "./help.js";
@@ -115,32 +114,6 @@ const requireNonEmptyQuery = (raw: string) =>
 
 type LocalSort = "relevance" | "newest" | "oldest";
 
-const renderProfileTable = (
-  actors: ReadonlyArray<ProfileView>,
-  cursor: string | undefined
-) => {
-  const rows = actors.map((actor) => [
-    actor.handle,
-    actor.displayName ?? "",
-    actor.did
-  ]);
-  const table = renderTableLegacy(["HANDLE", "DISPLAY NAME", "DID"], rows);
-  return cursor ? `${table}\n\nCursor: ${cursor}` : table;
-};
-
-const renderFeedTable = (
-  feeds: ReadonlyArray<FeedGeneratorView>,
-  cursor: string | undefined
-) => {
-  const rows = feeds.map((feed) => [
-    feed.displayName,
-    feed.creator.handle,
-    feed.uri,
-    typeof feed.likeCount === "number" ? String(feed.likeCount) : ""
-  ]);
-  const table = renderTableLegacy(["NAME", "CREATOR", "URI", "LIKES"], rows);
-  return cursor ? `${table}\n\nCursor: ${cursor}` : table;
-};
 
 const handlesCommand = Command.make(
   "handles",

@@ -1,5 +1,5 @@
 import { ParseResult } from "effect";
-import { safeParseJson, issueDetails } from "./shared.js";
+import { safeParseJson, issueDetails } from "./parse-errors.js";
 import { formatAgentError } from "./errors.js";
 
 const storeConfigExample = {
