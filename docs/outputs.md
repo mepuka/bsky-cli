@@ -21,6 +21,7 @@ Notes:
 - `query` defaults to `compact` unless `--format` or a non-`ndjson` `outputFormat` is set.
 - Compact JSON is the default for agent workflows (store list/show, query, derive). Use `--full` for verbose JSON.
 - Use `--fields` on `query` to select specific fields (supports dot notation and presets like `@minimal`).
+- Multi-store `query` includes the store name in output by default; use `--include-store` to force store labels for single-store JSON/NDJSON.
 
 ## Logs and progress
 

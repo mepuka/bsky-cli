@@ -159,26 +159,27 @@ These items are used to justify API choices and deterministic stream behavior:
 
 **Chosen resolution:**
 - `--scan-limit` is **per-store**; `--limit` is global after merge.
-- Output includes `store` on JSON/NDJSON; non-JSON formats are rejected for multi-store unless explicitly supported.
+- Multi-store output includes `store` by default for JSON/NDJSON and prefixes table/markdown/compact/card renders.
+- `--include-store` can force store labels for single-store JSON/NDJSON output.
+- Thread output remains single-store only.
 
 **Implementation details**
-- CLI: allow `store` arg list (`store1,store2`) and/or repeat `--store`.
+- CLI: allow positional `store` args to repeat and/or accept comma-separated lists.
 - For each store: `StoreIndex.query(store, StoreQuery)`.
 - Apply any non-pushdown filtering per store (`FilterRuntime`) before merge.
-- Merge streams deterministically using `Stream.combine` and a k-way heap by `(createdAt, uri)`.
+- Merge streams deterministically via a pull-based k-way merge by `(createdAt, uri, store)` to keep ordering stable.
   - `Stream.mergeAll` is **not** deterministic and is intentionally avoided.
-- Optional `--dedupe` by `PostUri` to collapse duplicates across stores.
 
 **Files**
 - `src/cli/query.ts` (multi-store resolution + output)
+- `src/cli/stream-merge.ts` (deterministic merge helper)
+- `src/domain/format.ts` (store-aware table/markdown rendering)
 - `src/services/store-index.ts` (no change; reuse)
-- `src/cli/output-format.ts` (format restrictions for multi-store)
 
 **Tests**
 - Ordering with tie-breakers across stores
 - `limit` applied globally
 - `scan-limit` applied per store
-- Dedupe correctness
 
 **Risk**: Medium-high (ordering + perf).
 
@@ -222,4 +223,3 @@ These items are used to justify API choices and deterministic stream behavior:
 - Use `Effect.gen` + `Effect.fn` for naming and instrumentation.
 - Use `Context.Tag` + `Layer` to add new CLI services (e.g., `CliInput`).
 - For stream merges, use `Stream.combine` for deterministic ordered merging; avoid `Stream.mergeAll` where ordering matters. (See Effect sources cited above.)
-
