@@ -135,12 +135,15 @@ skygent derive source-store target-store --filter 'hashtag:#ai'
 
 ### `filter` -- Filter management and testing
 
+Tip: run `skygent filter help` for a compact list of predicates and aliases.
+
 | Subcommand | Description |
 |---|---|
 | `filter create <name>` | Save a named filter |
 | `filter list` | List saved filters |
 | `filter show <name>` | Show a saved filter |
 | `filter delete <name>` | Delete a saved filter |
+| `filter help` | Show filter DSL and JSON help |
 | `filter validate` | Validate a filter expression |
 | `filter test` | Test a filter against a post |
 | `filter explain` | Explain why a post matches |

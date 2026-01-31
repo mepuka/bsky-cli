@@ -95,6 +95,16 @@ describe("filter DSL", () => {
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") {
       expect(result.left.message).toContain("not supported");
+      expect(result.left.message).toContain("skygent filter help");
+    }
+  });
+
+  test("rejects unknown has: value with valid options", async () => {
+    const result = await runDslEither("has:gif");
+
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left.message).toContain("images|video|links|media|embed");
     }
   });
 

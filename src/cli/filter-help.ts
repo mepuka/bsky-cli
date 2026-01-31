@@ -24,6 +24,7 @@ export const filterJsonDescription = (extra?: string) =>
     "Filter expression as JSON string.",
     "Sync/query filters run at ingestion or query time; store config filters are materialized views.",
     ...(extra ? [extra] : []),
+    "Tip: run \"skygent filter help\" for all predicates and aliases.",
     "",
     filterJsonExamples
   ].join("\n");
@@ -31,6 +32,7 @@ export const filterJsonDescription = (extra?: string) =>
 const filterDslExamples = [
   "Examples:",
   "  hashtag:#ai AND author:user.bsky.social",
+  "  from:alice.bsky.social",
   "  authorin:alice.bsky.social,bob.bsky.social",
   "  hashtagin:#tech,#coding",
   "  contains:\"typescript\",caseSensitive=false",
@@ -40,6 +42,7 @@ const filterDslExamples = [
   "  engagement:minLikes=100,minReplies=5",
   "  hasmedia",
   "  hasembed",
+  "  has:images",
   "  language:en,es",
   "  @tech AND author:user.bsky.social",
   "  date:2024-01-01T00:00:00Z..2024-01-31T00:00:00Z",
@@ -68,6 +71,7 @@ export const filterDslDescription = () =>
     "Options are comma-separated (no spaces); quote values with spaces.",
     "Lists use commas (e.g. authorin:alice,bob). Named filters use @name.",
     "Defaults: onError defaults to include for trending and exclude for links.",
+    "Tip: run \"skygent filter help\" for all predicates and aliases.",
     "",
     filterDslExamples
   ].join("\n");

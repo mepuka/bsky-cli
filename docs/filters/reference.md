@@ -1,6 +1,7 @@
 # Filter Reference
 
 Each entry shows a DSL example and the equivalent JSON.
+Need a quick predicate list? Run `skygent filter help`.
 
 ## Basics
 

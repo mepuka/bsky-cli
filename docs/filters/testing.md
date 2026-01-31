@@ -1,6 +1,7 @@
 # Filter Testing Tools
 
 Use these commands for fast feedback before running a full sync.
+Need predicate examples? Run `skygent filter help`.
 
 ## Validate
 
