@@ -2,29 +2,24 @@
 
 Goal: group the current open issues, identify shared root causes, and define an Effect-native refactor plan that eliminates the classes of bugs (format routing, error handling, and input validation).
 
-Status: none of the open issues are ready to close yet; all require code changes and tests.
+Status: Phase 0–3 implemented; issues #119–#128 are ready to close pending PR/merge. Open enhancement remains (#96).
 
-## Open issues (grouped)
+## Open issues
 
-**Group A — Output formats + compact/full behavior**
-- #119 query command broken for all non-JSON output formats (P0)
-- #120 --compact help text identical to --full (P2)
-- #126 markdown output format silently falls back to JSON for graph/feed/post (P2)
-- #127 --compact and --full produce identical output for graph/feed/post (P3)
+- #96 Add skygent digest command (enhancement)
 
-**Group B — Pipe/NDJSON compatibility**
-- #121 pipe command incompatible with query ndjson output (P1)
+## Resolved in Phase 0–3 (ready to close)
 
-**Group C — Input validation + sync limits**
-- #122 sync/feed/post commands don't validate URI format (P2)
-- #128 sync commands lack --limit flag (P3)
-
-**Group D — Store operation semantics**
-- #124 store delete on nonexistent store gives misleading error (P2)
-- #125 store rename reports moved:false on success (P2)
-
-**Group E — Auth error handling**
-- #123 inconsistent auth error handling in graph commands (P3)
+- #119 query command broken for all non-JSON output formats
+- #120 --compact help text identical to --full
+- #121 pipe command incompatible with query ndjson output
+- #122 sync/feed/post commands don't validate URI format
+- #123 inconsistent auth error handling in graph commands
+- #124 store delete on nonexistent store gives misleading error
+- #125 store rename reports moved:false on success
+- #126 markdown output format silently falls back to JSON for graph/feed/post
+- #127 --compact and --full produce identical output for graph/feed/post
+- #128 sync commands lack --limit flag
 
 ## Root cause synthesis
 
@@ -71,7 +66,7 @@ Grounded in Effect sources (`@effect/cli` HelpDoc + ValidationError) and effect-
 - Use `Args.withSchema(AtUri)` in shared CLI options.
 - For `pipe`, introduce a `PipeInput` schema: union of `RawPost` and `Post` (and `{ store, post }` if needed). Map to a single internal shape.
 
-## Phased implementation plan
+## Phased implementation plan (original scope)
 
 ### Phase 0 — Foundations (shared abstractions)
 **Outcome:** reduce duplication and enable consistent fixes.
@@ -106,6 +101,55 @@ Grounded in Effect sources (`@effect/cli` HelpDoc + ValidationError) and effect-
 - #127: integrate `CliPreferences.compact` with graph/feed/post JSON output so compact/full differs, or explicitly scope compact/full to commands that support it.
 - #128: add `--limit` to non-jetstream sync subcommands and propagate into sync options.
 
+## Phase 4 — Effect-native hardening (post-merge refactors)
+
+Goal: reduce code duplication, strengthen input validation, and align errors with Effect-native patterns.
+
+1) **Schema-driven CLI options**
+   - Use `Options.withSchema` for numeric options (`limit`, `batch-size`, `max-errors`, `width`, `depth`, `parent-height`).
+   - Consider `Schema.Duration` (or equivalent) for any time window inputs (e.g. `--since`).
+   - Replace ad-hoc `Schema.decodeUnknown` in CLI handlers with `Args.withSchema` / `Options.withSchema` (e.g., `view-thread`).
+
+2) **ParseError normalization**
+   - Map `ParseResult.ParseError` to a consistent CLI error (exit code 2).
+   - Reuse `formatSchemaError` to avoid leaking raw parse details.
+   - Consolidate parse formatters (`formatSchemaError`, `formatFilterParseError`, `formatStoreConfigParseError`) into one shared helper.
+
+3) **Equivalence/Order consolidation**
+   - Define `Equivalence`/`Order` for key domain types (e.g., StoreId, AtUri, RecordKey) and reuse for sorting/dedup.
+   - Replace ad-hoc comparators across CLI and services with the shared instances.
+
+4) **Graph utility surface (Effect Graph module)**
+   - Evaluate Effect Graph module for representing follow/list relationships.
+   - Prototype a lightweight graph builder that accepts `getFollows/getFollowers` streams.
+
+5) **Multi-store query cleanup**
+   - Normalize multi-store query inputs into a single algebraic shape.
+   - Centralize query planner logic (filters, pagination, ordering) and reuse in CLI/query/pipe.
+
+## Phase 5 — Enhancement #96 (skygent digest)
+
+Goal: add a CLI command that summarizes a store for a time window.
+
+- Command surface: `skygent digest <store> --since 24h [--format json|markdown|table]`
+- Data points: top posts by engagement, trending hashtags, new authors, post volume.
+- Implementation: derive from query + aggregation pipeline; prefer Effect Stream + Schema decoders.
+
+## Phase 6 — Auth + graph UX enhancements (AT Protocol deep dive)
+
+1) **Session refresh + 2FA**
+   - Support `com.atproto.server.refreshSession` using stored refresh tokens.
+   - Add `--auth-factor` / `SKYGENT_AUTH_FACTOR_TOKEN` handling for `AuthFactorTokenRequired`.
+
+2) **Public vs authed clarity**
+   - Surface a hint when using the public API host and explain missing viewer fields in graph output.
+
+3) **Graph/list command coverage**
+   - Add list-level mutes/blocks commands: `graph list-mutes`, `graph list-blocks`.
+   - Add `graph lists-with-membership <actor>` for membership discovery.
+   - Consider `graph follow/unfollow` commands (record create/delete).
+   - Optional: list CRUD (`graph list-create`, `graph list-add`, `graph list-remove`, `graph list-delete`).
+
 ## Verification + close criteria (per issue)
 
 - #119: `skygent query <store> --format table` works without `--fields`, and still rejects explicit `--fields`.
@@ -124,4 +168,6 @@ Grounded in Effect sources (`@effect/cli` HelpDoc + ValidationError) and effect-
 1) **Markdown behavior (#126):** implement markdown tables for graph/feed/post vs reject w/ validation error.  
 2) **NDJSON empty output rule:** output nothing (true NDJSON) vs `[]` sentinel.  
 3) **Store rename semantics (#125):** keep `moved` as disk move indicator or switch to “rename succeeded”.
-
+6) **Streaming safety**
+   - Avoid unbounded `Stream.runCollect` on large stores; prefer `Stream.runForEach` or apply a default `--limit`.
+   - If new async streams are introduced, set explicit `bufferSize`/`strategy` to avoid unbounded buffers.
