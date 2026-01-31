@@ -112,6 +112,7 @@ describe("StoreCleaner", () => {
         const cleaner = yield* StoreCleaner;
         const result = yield* cleaner.deleteStore(sampleName);
         expect(result.deleted).toBe(false);
+        expect(result.reason).toBe("missing");
       });
 
       await Effect.runPromise(program.pipe(Effect.provide(layer)));

@@ -11,7 +11,10 @@ export class StoreCleaner extends Context.Tag("@skygent/StoreCleaner")<
   {
     readonly deleteStore: (
       name: StoreName
-    ) => Effect.Effect<{ readonly deleted: boolean }, StoreError>;
+    ) => Effect.Effect<
+      { readonly deleted: boolean; readonly reason?: "missing" },
+      StoreError
+    >;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -26,7 +29,7 @@ export class StoreCleaner extends Context.Tag("@skygent/StoreCleaner")<
         Effect.gen(function* () {
           const storeOption = yield* manager.getStore(name);
           if (Option.isNone(storeOption)) {
-            return { deleted: false } as const;
+            return { deleted: false, reason: "missing" } as const;
           }
           const store = storeOption.value;
           yield* eventLog.clear(store);

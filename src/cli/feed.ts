@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Effect, Stream } from "effect";
+import { Effect, Option, Stream } from "effect";
 import { renderTableLegacy } from "./doc/table.js";
 import { renderFeedTable } from "./doc/table-renderers.js";
 import { BskyClient } from "../services/bsky-client.js";
@@ -41,6 +41,17 @@ const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
   Options.optional
 );
 
+const ensureSupportedFormat = (
+  format: Option.Option<typeof jsonNdjsonTableFormats[number]>,
+  configFormat: string
+) =>
+  Option.isNone(format) && configFormat === "markdown"
+    ? CliInputError.make({
+        message: 'Output format "markdown" is not supported for feed commands. Use --format json|ndjson|table.',
+        cause: { format: configFormat }
+      })
+    : Effect.void;
+
 
 const renderFeedInfoTable = (
   view: FeedGeneratorView,
@@ -58,6 +69,7 @@ const showCommand = Command.make(
   ({ uri, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const result = yield* client.getFeedGenerator(uri);
       yield* emitWithFormat(
@@ -86,6 +98,7 @@ const batchCommand = Command.make(
   ({ uris, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       if (uris.length === 0) {
         return yield* CliInputError.make({
@@ -120,6 +133,7 @@ const byActorCommand = Command.make(
   ({ actor, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const resolvedActor = yield* decodeActor(actor);

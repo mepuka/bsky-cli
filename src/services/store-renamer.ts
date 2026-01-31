@@ -13,6 +13,7 @@ type StoreRenameResult = {
   readonly from: StoreName;
   readonly to: StoreName;
   readonly moved: boolean;
+  readonly movedOnDisk: boolean;
   readonly lineagesUpdated: number;
   readonly checkpointsUpdated: number;
 };
@@ -262,7 +263,8 @@ export class StoreRenamer extends Context.Tag("@skygent/StoreRenamer")<
               return {
                 from,
                 to,
-                moved: fromExists,
+                moved: true,
+                movedOnDisk: fromExists,
                 lineagesUpdated,
                 checkpointsUpdated
               } satisfies StoreRenameResult;

@@ -248,6 +248,10 @@ export const storeDelete = Command.make(
       const cleaner = yield* StoreCleaner;
       const result = yield* cleaner.deleteStore(name);
       if (!result.deleted) {
+        if (result.reason === "missing") {
+          yield* writeJson(result);
+          return;
+        }
         return yield* CliInputError.make({
           message: `Store "${name}" was not deleted.`,
           cause: result

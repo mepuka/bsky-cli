@@ -14,6 +14,7 @@ import { renderProfileTable } from "./doc/table-renderers.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
+import { CliInputError } from "./errors.js";
 
 const limitOption = baseLimitOption.pipe(
   Options.withDescription("Maximum number of results")
@@ -27,6 +28,17 @@ const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
   Options.withDescription("Output format (default: json)"),
   Options.optional
 );
+
+const ensureSupportedFormat = (
+  format: Option.Option<typeof jsonNdjsonTableFormats[number]>,
+  configFormat: string
+) =>
+  Option.isNone(format) && configFormat === "markdown"
+    ? CliInputError.make({
+        message: 'Output format "markdown" is not supported for post commands. Use --format json|ndjson|table.',
+        cause: { format: configFormat }
+      })
+    : Effect.void;
 
 const cidOption = Options.text("cid").pipe(
   Options.withDescription("Filter engagement by specific record CID"),
@@ -60,6 +72,7 @@ const likesCommand = Command.make(
   ({ uri, cid, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const result = yield* client.getLikes(uri, {
@@ -94,6 +107,7 @@ const repostedByCommand = Command.make(
   ({ uri, cid, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const result = yield* client.getRepostedBy(uri, {
@@ -127,6 +141,7 @@ const quotesCommand = Command.make(
   ({ uri, cid, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const parser = yield* PostParser;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);

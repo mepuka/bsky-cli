@@ -1,4 +1,4 @@
-import { Options } from "@effect/cli";
+import { HelpDoc, Options } from "@effect/cli";
 import { Option, Redacted } from "effect";
 import { pickDefined } from "../services/shared.js";
 import { OutputFormat } from "../domain/config.js";
@@ -8,11 +8,30 @@ import type { SyncSettingsValue } from "../services/sync-settings.js";
 import type { CredentialsOverridesValue } from "../services/credential-store.js";
 
 
-const compactOption = Options.boolean("full", {
-  negationNames: ["compact"]
+const compactOption = Options.all({
+  full: Options.boolean("full").pipe(
+    Options.withDescription("Use full JSON output")
+  ),
+  compact: Options.boolean("compact").pipe(
+    Options.withDescription("Use compact JSON output (default)")
+  )
 }).pipe(
-  Options.withDescription("Use full JSON output (disables compact default)"),
-  Options.map((full) => !full)
+  Options.mapTryCatch(
+    ({ full, compact }) => {
+      if (full && compact) {
+        throw new Error("Use either --full or --compact, not both.");
+      }
+      if (full) return false;
+      if (compact) return true;
+      return true;
+    },
+    (error) =>
+      HelpDoc.p(
+        typeof error === "object" && error !== null && "message" in error
+          ? String((error as { readonly message?: unknown }).message ?? error)
+          : String(error)
+      )
+  )
 );
 
 export const configOptions = {

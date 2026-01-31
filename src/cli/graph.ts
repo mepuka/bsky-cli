@@ -44,6 +44,17 @@ const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
   Options.optional
 );
 
+const ensureSupportedFormat = (
+  format: Option.Option<typeof jsonNdjsonTableFormats[number]>,
+  configFormat: string
+) =>
+  Option.isNone(format) && configFormat === "markdown"
+    ? CliInputError.make({
+        message: 'Output format "markdown" is not supported for graph commands. Use --format json|ndjson|table.',
+        cause: { format: configFormat }
+      })
+    : Effect.void;
+
 const purposeOption = Options.choice("purpose", ["modlist", "curatelist"]).pipe(
   Options.withDescription("List purpose filter"),
   Options.optional
@@ -123,6 +134,7 @@ const followersCommand = Command.make(
   ({ actor, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
@@ -158,6 +170,7 @@ const followsCommand = Command.make(
   ({ actor, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
@@ -193,6 +206,7 @@ const knownFollowersCommand = Command.make(
   ({ actor, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
@@ -227,6 +241,7 @@ const relationshipsCommand = Command.make(
   ({ actor, others, format, raw }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const identities = yield* IdentityResolver;
       const profiles = yield* ProfileResolver;
@@ -354,6 +369,7 @@ const listsCommand = Command.make(
   ({ actor, limit, cursor, purpose, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
@@ -390,6 +406,7 @@ const listCommand = Command.make(
   ({ uri, limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
@@ -425,6 +442,7 @@ const blocksCommand = Command.make(
   ({ limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
@@ -461,6 +479,7 @@ const mutesCommand = Command.make(
   ({ limit, cursor, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
