@@ -8,7 +8,7 @@ import type { FeedGeneratorView } from "../domain/bsky.js";
 import { AtUri } from "../domain/primitives.js";
 import { CliPreferences } from "./preferences.js";
 import { compactFeedGeneratorView } from "./compact-output.js";
-import { decodeActor } from "./shared-options.js";
+import { actorArg } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
@@ -24,10 +24,6 @@ const feedUriArg = Args.text({ name: "uri" }).pipe(
 const feedUrisArg = Args.text({ name: "uri" }).pipe(
   Args.repeated,
   Args.withDescription("Feed URIs to fetch")
-);
-
-const actorArg = Args.text({ name: "actor" }).pipe(
-  Args.withDescription("Bluesky handle or DID")
 );
 
 const limitOption = baseLimitOption.pipe(
@@ -154,8 +150,7 @@ const byActorCommand = Command.make(
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
       const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
-      const resolvedActor = yield* decodeActor(actor);
-      const result = yield* client.getActorFeeds(resolvedActor, {
+      const result = yield* client.getActorFeeds(actor, {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       });

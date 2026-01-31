@@ -1,4 +1,4 @@
-import { Effect, Option, Stream } from "effect";
+import { Duration, Effect, Option, Stream } from "effect";
 import { DataSource, SyncResult, WatchConfig } from "../domain/sync.js";
 import { SyncEngine } from "../services/sync-engine.js";
 import { SyncReporter } from "../services/sync-reporter.js";
@@ -70,9 +70,9 @@ export const makeSyncCommandBody = (
 
 /** Common options for watch API-based commands */
 export interface WatchCommandInput extends CommonCommandInput {
-  readonly interval: Option.Option<string>;
+  readonly interval: Option.Option<Duration.Duration>;
   readonly maxCycles: Option.Option<number>;
-  readonly until: Option.Option<string>;
+  readonly until: Option.Option<Duration.Duration>;
 }
 
 /** Build the command body for a watch command (timeline, feed, notifications). */
@@ -91,8 +91,8 @@ export const makeWatchCommandBody = (
       const expr = yield* parseFilterExpr(input.filter, input.filterJson);
       const basePolicy = storeConfig.syncPolicy ?? "dedupe";
       const policy = input.refresh ? "refresh" : basePolicy;
-      const parsedInterval = yield* parseInterval(input.interval);
-      const parsedUntil = yield* parseOptionalDuration(input.until);
+      const parsedInterval = parseInterval(input.interval);
+      const parsedUntil = parseOptionalDuration(input.until);
       yield* logInfo("Starting watch", { source: sourceName, store: storeRef.name, ...extraLogFields });
       if (policy === "refresh") {
         yield* logWarn("Refresh mode updates existing posts and may grow the event log.", {

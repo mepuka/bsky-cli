@@ -33,8 +33,17 @@ export type PostUri = typeof PostUri.Type;
 export const PostCid = Schema.String.pipe(Schema.brand("PostCid"));
 export type PostCid = typeof PostCid.Type;
 
-export const Did = Schema.String.pipe(Schema.brand("Did"));
+export const Did = Schema.String.pipe(
+  Schema.pattern(/^did:\S+$/),
+  Schema.brand("Did")
+);
 export type Did = typeof Did.Type;
+
+export const ActorId = Schema.String.pipe(
+  Schema.pattern(/^(did:\S+|[a-z0-9][a-z0-9.-]{1,251})$/),
+  Schema.brand("ActorId")
+);
+export type ActorId = typeof ActorId.Type;
 
 export const Timestamp = Schema.Union(
   Schema.DateFromString,

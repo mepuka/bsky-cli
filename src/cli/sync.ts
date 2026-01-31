@@ -1,5 +1,5 @@
 import { Command, Options } from "@effect/cli";
-import { Duration, Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { Jetstream } from "effect-jetstream";
 import { filterExprSignature } from "../domain/filter.js";
 import { DataSource, SyncResult } from "../domain/sync.js";
@@ -28,7 +28,6 @@ import {
   postFilterJsonOption,
   authorFilterOption,
   includePinsOption,
-  decodeActor,
   quietOption,
   refreshOption,
   strictOption,
@@ -39,7 +38,7 @@ import {
   parentHeightOption as threadParentHeightOption,
   parseThreadDepth
 } from "./thread-options.js";
-import { PositiveInt } from "./option-schemas.js";
+import { DurationInput, PositiveInt } from "./option-schemas.js";
 
 const syncLimitOption = Options.integer("limit").pipe(
   Options.withSchema(PositiveInt),
@@ -52,6 +51,7 @@ const jetstreamLimitOption = Options.integer("limit").pipe(
   Options.optional
 );
 const durationOption = Options.text("duration").pipe(
+  Options.withSchema(DurationInput),
   Options.withDescription("Stop after a duration (e.g. \"2 minutes\")"),
   Options.optional
 );
@@ -62,30 +62,6 @@ const parentHeightOption = threadParentHeightOption(
   "Thread parent height to include (0-1000, default 80)"
 );
 
-const parseDuration = (value: Option.Option<string>) =>
-  Option.match(value, {
-    onNone: () => Effect.succeed(Option.none()),
-    onSome: (raw) =>
-      Effect.try({
-        try: () => Duration.decode(raw as Duration.DurationInput),
-        catch: (cause) =>
-          CliInputError.make({
-            message: `Invalid duration: ${raw}. Use formats like \"2 minutes\".`,
-            cause
-          })
-      }).pipe(
-        Effect.flatMap((duration) =>
-          Duration.toMillis(duration) < 0
-            ? Effect.fail(
-                CliInputError.make({
-                  message: "Duration must be non-negative.",
-                  cause: duration
-                })
-              )
-            : Effect.succeed(Option.some(duration))
-        )
-      )
-  });
 
 const timelineCommand = Command.make(
   "timeline",
@@ -165,14 +141,13 @@ const authorCommand = Command.make(
   },
   ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh, limit }) =>
     Effect.gen(function* () {
-      const resolvedActor = yield* decodeActor(actor);
       const apiFilter = Option.getOrUndefined(filter);
-      const source = DataSource.author(resolvedActor, {
+      const source = DataSource.author(actor, {
         ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
         ...(includePins ? { includePins: true } : {})
       });
       const run = makeSyncCommandBody("author", () => source, {
-        actor: resolvedActor,
+        actor,
         ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
         ...(includePins ? { includePins: true } : {})
       });
@@ -293,7 +268,7 @@ const jetstreamCommand = Command.make(
         storeRef,
         filterHash
       );
-      const parsedDuration = yield* parseDuration(duration);
+      const parsedDuration = duration;
       if (Option.isNone(limit) && Option.isNone(parsedDuration)) {
         return yield* CliInputError.make({
           message:

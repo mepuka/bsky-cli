@@ -1,5 +1,5 @@
 import { ParseResult } from "effect";
-import { safeParseJson, issueDetails } from "./parse-errors.js";
+import { safeParseJson, issueDetails, findJsonParseIssue, jsonParseTip } from "./parse-errors.js";
 import { formatAgentError, type AgentErrorPayload } from "./errors.js";
 
 const validFilterTags = [
@@ -76,19 +76,15 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
   const received = safeParseJson(raw);
   const receivedValue = received === undefined ? raw : received;
 
-  const jsonParseIssue = issues.find(
-    (issue) =>
-      issue._tag === "Transformation" &&
-      typeof issue.message === "string" &&
-      issue.message.startsWith("JSON Parse error")
-  );
+  const jsonParseIssue = findJsonParseIssue(issues);
   if (jsonParseIssue) {
+    const jsonMessage = jsonParseIssue.message ?? "Invalid JSON input.";
     return jsonParseError({
       message: "Invalid JSON in --filter-json.",
       received: raw,
       details: [
-        jsonParseIssue.message,
-        "Tip: wrap JSON in single quotes to avoid shell escaping issues."
+        jsonMessage,
+        jsonParseTip
       ]
     });
   }

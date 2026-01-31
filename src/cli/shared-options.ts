@@ -1,6 +1,6 @@
 import { Args, Options } from "@effect/cli";
 import { Effect, Schema } from "effect";
-import { AtUri, Did, Handle, PostUri, StoreName } from "../domain/primitives.js";
+import { ActorId, AtUri, PostUri, StoreName } from "../domain/primitives.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { CliInputError } from "./errors.js";
 import { formatSchemaError } from "./shared.js";
@@ -72,6 +72,7 @@ export const listUriArg = Args.text({ name: "uri" }).pipe(
 
 /** Positional arg for author handle or DID */
 export const actorArg = Args.text({ name: "actor" }).pipe(
+  Args.withSchema(ActorId),
   Args.withDescription("Bluesky handle or DID")
 );
 
@@ -105,23 +106,12 @@ export const includePinsOption = Options.boolean("include-pins").pipe(
 );
 
 /** Validate --max-errors value is non-negative */
-export const decodeActor = (actor: string) => {
-  if (actor.startsWith("did:")) {
-    return Schema.decodeUnknown(Did)(actor).pipe(
-      Effect.mapError((error) =>
-        CliInputError.make({
-          message: `Invalid DID: ${formatSchemaError(error)}`,
-          cause: { actor }
-        })
-      )
-    );
-  }
-  return Schema.decodeUnknown(Handle)(actor).pipe(
+export const decodeActor = (actor: string) =>
+  Schema.decodeUnknown(ActorId)(actor).pipe(
     Effect.mapError((error) =>
       CliInputError.make({
-        message: `Invalid handle: ${formatSchemaError(error)}`,
+        message: `Invalid actor: ${formatSchemaError(error)}`,
         cause: { actor }
       })
     )
   );
-};

@@ -6,7 +6,7 @@ import { IdentityResolver } from "../services/identity-resolver.js";
 import { ProfileResolver } from "../services/profile-resolver.js";
 import type { ListItemView, ListView } from "../domain/bsky.js";
 import { AtUri } from "../domain/primitives.js";
-import { decodeActor } from "./shared-options.js";
+import { actorArg, decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
@@ -23,10 +23,6 @@ import {
   type RelationshipEntry,
   type RelationshipNode
 } from "../graph/relationships.js";
-
-const actorArg = Args.text({ name: "actor" }).pipe(
-  Args.withDescription("Bluesky handle or DID")
-);
 
 const listUriArg = Args.text({ name: "uri" }).pipe(
   Args.withSchema(AtUri),
@@ -139,13 +135,12 @@ const followersCommand = Command.make(
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
-      const result = yield* client.getFollowers(resolvedActor, options);
+      const result = yield* client.getFollowers(actor, options);
       const subject = preferences.compact
         ? compactProfileView(result.subject)
         : result.subject;
@@ -188,13 +183,12 @@ const followsCommand = Command.make(
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
-      const result = yield* client.getFollows(resolvedActor, options);
+      const result = yield* client.getFollows(actor, options);
       const subject = preferences.compact
         ? compactProfileView(result.subject)
         : result.subject;
@@ -237,13 +231,12 @@ const knownFollowersCommand = Command.make(
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
-      const result = yield* client.getKnownFollowers(resolvedActor, options);
+      const result = yield* client.getKnownFollowers(actor, options);
       const subject = preferences.compact
         ? compactProfileView(result.subject)
         : result.subject;
@@ -294,7 +287,9 @@ const relationshipsCommand = Command.make(
             ? actorValue
             : yield* identities.resolveDid(actorValue);
         });
-      const resolvedActor = yield* resolveDid(actor);
+      const resolvedActor = actor.startsWith("did:")
+        ? actor
+        : yield* identities.resolveDid(actor);
       const parsedOthers = others
         .split(",")
         .map((item) => item.trim())
@@ -413,14 +408,13 @@ const listsCommand = Command.make(
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const preferences = yield* CliPreferences;
       const client = yield* BskyClient;
-      const resolvedActor = yield* decodeActor(actor);
       const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
       const options = {
         ...(limitValue !== undefined ? { limit: limitValue } : {}),
         ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
         ...(Option.isSome(purpose) ? { purposes: [purpose.value] } : {})
       };
-      const result = yield* client.getLists(resolvedActor, options);
+      const result = yield* client.getLists(actor, options);
       const lists = preferences.compact
         ? result.lists.map(compactListView)
         : result.lists;

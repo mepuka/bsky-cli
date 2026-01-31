@@ -26,7 +26,6 @@ import {
   postFilterJsonOption,
   authorFilterOption,
   includePinsOption,
-  decodeActor,
   quietOption,
   refreshOption,
   strictOption,
@@ -37,9 +36,10 @@ import {
   parentHeightOption as threadParentHeightOption,
   parseThreadDepth
 } from "./thread-options.js";
-import { PositiveInt } from "./option-schemas.js";
+import { DurationInput, PositiveInt } from "./option-schemas.js";
 
 const intervalOption = Options.text("interval").pipe(
+  Options.withSchema(DurationInput),
   Options.withDescription(
     "Polling interval (e.g. \"30 seconds\", \"500 millis\") (default: 30 seconds)"
   ),
@@ -51,6 +51,7 @@ const maxCyclesOption = Options.integer("max-cycles").pipe(
   Options.optional
 );
 const untilOption = Options.text("until").pipe(
+  Options.withSchema(DurationInput),
   Options.withDescription("Stop after a duration (e.g. \"10 minutes\")"),
   Options.optional
 );
@@ -179,14 +180,13 @@ const authorCommand = Command.make(
   },
   ({ actor, filter, includePins, postFilter, postFilterJson, interval, maxCycles, until, store, quiet, refresh }) =>
     Effect.gen(function* () {
-      const resolvedActor = yield* decodeActor(actor);
       const apiFilter = Option.getOrUndefined(filter);
-      const source = DataSource.author(resolvedActor, {
+      const source = DataSource.author(actor, {
         ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
         ...(includePins ? { includePins: true } : {})
       });
       const run = makeWatchCommandBody("author", () => source, {
-        actor: resolvedActor,
+        actor,
         ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
         ...(includePins ? { includePins: true } : {})
       });
@@ -309,7 +309,7 @@ const jetstreamCommand = Command.make(
         storeRef,
         filterHash
       );
-      const parsedUntil = yield* parseOptionalDuration(until);
+      const parsedUntil = parseOptionalDuration(until);
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
