@@ -583,10 +583,10 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                 Stream.interruptWhen(
                   Effect.sleep(config.duration).pipe(
                     Effect.zipRight(
-                      Effect.logWarning(
-                        "Jetstream sync exceeded duration; shutting down.",
-                        { durationMs: Duration.toMillis(config.duration) }
-                      )
+                      reporter.warn("Jetstream sync exceeded duration; shutting down.", {
+                        durationMs: Duration.toMillis(config.duration),
+                        store: config.store.name
+                      })
                     ),
                     Effect.zipRight(safeShutdown)
                   )

@@ -14,7 +14,7 @@ import { StoreCleaner } from "../services/store-cleaner.js";
 import { LineageStore } from "../services/lineage-store.js";
 import { CliInputError } from "./errors.js";
 import { OutputManager } from "../services/output-manager.js";
-import { formatStoreConfigParseError } from "./store-errors.js";
+import { formatStoreConfigHelp, formatStoreConfigParseError } from "./store-errors.js";
 import { formatFilterExpr } from "../domain/filter-describe.js";
 import { CliPreferences } from "./preferences.js";
 import { StoreStats } from "../services/store-stats.js";
@@ -267,7 +267,9 @@ export const storeMaterialize = Command.make(
 
       if (config.filters.length === 0) {
         return yield* CliInputError.make({
-          message: `Store "${name}" has no configured filters to materialize. Update the store config to add filters.`,
+          message: formatStoreConfigHelp(
+            `Store "${name}" has no configured filters to materialize. Add filters to the store config.`
+          ),
           cause: { store: name }
         });
       }
