@@ -5,12 +5,14 @@ export class SyncReporter extends Context.Tag("@skygent/SyncReporter")<
   SyncReporter,
   {
     readonly report: (progress: SyncProgress) => Effect.Effect<void>;
+    readonly warn: (message: string, data?: Record<string, unknown>) => Effect.Effect<void>;
   }
 >() {
   static readonly layer = Layer.succeed(
     SyncReporter,
     SyncReporter.of({
-      report: () => Effect.void
+      report: () => Effect.void,
+      warn: () => Effect.void
     })
   );
 }

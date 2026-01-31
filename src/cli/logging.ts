@@ -132,5 +132,13 @@ export const makeSyncReporter = (
             { discard: true }
           );
         }
+      }).pipe(Effect.orElseSucceed(() => undefined)),
+    warn: (message, data) =>
+      Effect.gen(function* () {
+        const format = yield* resolveLogFormat;
+        yield* logEventWith(output, format, "WARN", {
+          message,
+          ...data
+        });
       }).pipe(Effect.orElseSucceed(() => undefined))
   });

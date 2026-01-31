@@ -5,18 +5,26 @@ import { formatAgentError } from "./errors.js";
 const storeConfigExample = {
   format: { json: true, markdown: false },
   autoSync: false,
-  filters: [
-    {
-      name: "tech",
-      expr: { _tag: "Hashtag", tag: "#tech" },
-      output: { path: "views/tech", json: true, markdown: true }
-    }
-  ]
+  filters: []
 };
+
+const storeConfigExampleJson = JSON.stringify(storeConfigExample);
+const storeConfigDocHint = "See docs/cli.md for a minimal StoreConfig JSON example.";
 
 
 const hasPath = (issue: { readonly path: ReadonlyArray<unknown> }, key: string) =>
   issue.path.length > 0 && issue.path[0] === key;
+
+export const formatStoreConfigHelp = (
+  message: string,
+  error = "StoreConfigValidationError"
+): string =>
+  formatAgentError({
+    error,
+    message: `${message} ${storeConfigDocHint}`,
+    expected: storeConfigExample,
+    fix: `Start with: --config-json '${storeConfigExampleJson}'`
+  });
 
 
 export const formatStoreConfigParseError = (
@@ -36,7 +44,7 @@ export const formatStoreConfigParseError = (
   if (jsonParseIssue) {
     return formatAgentError({
       error: "StoreConfigJsonParseError",
-      message: "Invalid JSON in --config-json.",
+      message: `Invalid JSON in --config-json. ${storeConfigDocHint}`,
       received: raw,
       details: [
         jsonParseIssue.message,
@@ -49,7 +57,7 @@ export const formatStoreConfigParseError = (
   if (issues.some((issue) => issue._tag === "Missing" && hasPath(issue, "filters"))) {
     return formatAgentError({
       error: "StoreConfigValidationError",
-      message: "Store config requires a filters array.",
+      message: `Store config requires a filters array. ${storeConfigDocHint}`,
       received: receivedValue,
       expected: storeConfigExample,
       fix:
@@ -60,7 +68,7 @@ export const formatStoreConfigParseError = (
   if (issues.some((issue) => hasPath(issue, "filters"))) {
     return formatAgentError({
       error: "StoreConfigValidationError",
-      message: "Store config filters must include name, expr, and output fields.",
+      message: `Store config filters must include name, expr, and output fields. ${storeConfigDocHint}`,
       received: receivedValue,
       expected: storeConfigExample,
       fix: "Each filter requires name, expr (filter JSON), and output (path/json/markdown).",
@@ -68,12 +76,15 @@ export const formatStoreConfigParseError = (
     });
   }
 
+  const details = issueDetails(issues);
+  const primaryIssue = details[0];
+  const issueHint = primaryIssue ? ` (${primaryIssue})` : "";
   return formatAgentError({
     error: "StoreConfigValidationError",
-    message: "Store config failed validation.",
+    message: `Store config failed validation${issueHint}. ${storeConfigDocHint}`,
     received: receivedValue,
     expected: storeConfigExample,
-    details: issueDetails(issues),
+    details,
     fix:
       "Check required fields (format, autoSync, filters). For ingestion filters, use --filter/--filter-json on sync/query."
   });
