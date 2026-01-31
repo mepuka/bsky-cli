@@ -22,12 +22,14 @@ describe("filter JSON error formatting", () => {
       received?: Record<string, unknown>;
       expected?: Record<string, unknown>;
       fix?: string;
+      details?: ReadonlyArray<string>;
     };
 
     expect(payload.error).toBe("FilterValidationError");
     expect(payload.received?._tag).toBe("Regex");
     expect(payload.expected?._tag).toBe("Regex");
     expect(payload.fix ?? "").toContain("patterns");
+    expect(payload.details?.join(" ")).toContain("skygent filter help");
   });
 
   test("formats invalid JSON with agent-friendly payload", async () => {
@@ -41,10 +43,12 @@ describe("filter JSON error formatting", () => {
       error: string;
       message: string;
       received?: unknown;
+      details?: ReadonlyArray<string>;
     };
 
     expect(payload.error).toBe("FilterJsonParseError");
     expect(payload.message).toContain("Invalid JSON");
     expect(payload.received).toBe(raw);
+    expect(payload.details?.join(" ")).toContain("skygent filter help");
   });
 });

@@ -59,6 +59,13 @@ const postC = makePost(
   "2026-01-03T00:00:00.000Z"
 );
 
+const makeRecord = (post: Post, id: string) =>
+  PostEventRecord.make({
+    id: eventId(id),
+    version: 1,
+    event: PostUpsert.make({ post, meta: sampleMeta })
+  });
+
 const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
 
 const decodeChunk = (chunk: string | Uint8Array) =>
@@ -138,27 +145,50 @@ const buildLayer = (storeRoot: string) => {
   ).pipe(Layer.provideMerge(BunContext.layer));
 };
 
+const makeTempDir = () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return yield* fs.makeTempDirectory();
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const removeTempDir = (path: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(path, { recursive: true });
+    }).pipe(Effect.provide(BunContext.layer))
+  );
+
+const setupAppLayer = (storeRoot: string) => {
+  const { layer: outputLayer, stdoutRef, stderrRef } = makeOutputCapture();
+  const appLayer = Layer.mergeAll(
+    outputLayer,
+    Layer.succeed(CliPreferences, { compact: false }),
+    buildLayer(storeRoot)
+  );
+  return { appLayer, stdoutRef, stderrRef };
+};
+
+const parseNdjson = (stdout: ReadonlyArray<string>) =>
+  stdout
+    .join("")
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as { store?: string; post?: { uri: string } });
+
 describe("query multi-store", () => {
   test("merges ordered results and includes store name", async () => {
     const run = Command.run(queryCommand, {
       name: "skygent",
       version: "0.0.0"
     });
-    const { layer: outputLayer, stdoutRef } = makeOutputCapture();
-    const tempDir = await Effect.runPromise(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        return yield* fs.makeTempDirectory();
-      }).pipe(Effect.provide(BunContext.layer))
-    );
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(tempDir);
 
     try {
-      const appLayer = Layer.mergeAll(
-        outputLayer,
-        Layer.succeed(CliPreferences, { compact: false }),
-        buildLayer(tempDir)
-      );
-
       await Effect.runPromise(
         Effect.gen(function* () {
           const manager = yield* StoreManager;
@@ -173,37 +203,16 @@ describe("query multi-store", () => {
             sampleConfig
           );
 
-          const recordA = PostEventRecord.make({
-            id: eventId("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
-            version: 1,
-            event: PostUpsert.make({ post: postA, meta: sampleMeta })
-          });
-          const recordB = PostEventRecord.make({
-            id: eventId("01ARZ3NDEKTSV4RRFFQ69G5FAW"),
-            version: 1,
-            event: PostUpsert.make({ post: postB, meta: sampleMeta })
-          });
-          const recordC = PostEventRecord.make({
-            id: eventId("01ARZ3NDEKTSV4RRFFQ69G5FAX"),
-            version: 1,
-            event: PostUpsert.make({ post: postC, meta: sampleMeta })
-          });
-
-          yield* index.apply(storeA, recordA);
-          yield* index.apply(storeB, recordB);
-          yield* index.apply(storeA, recordC);
+          yield* index.apply(storeA, makeRecord(postA, "01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+          yield* index.apply(storeB, makeRecord(postB, "01ARZ3NDEKTSV4RRFFQ69G5FAW"));
+          yield* index.apply(storeA, makeRecord(postC, "01ARZ3NDEKTSV4RRFFQ69G5FAX"));
 
           yield* run(["node", "skygent", "alpha,bravo", "--format", "ndjson"]);
         }).pipe(Effect.provide(appLayer))
       );
 
       const stdout = await Effect.runPromise(Ref.get(stdoutRef));
-      const items = stdout
-        .join("")
-        .trim()
-        .split("\n")
-        .filter((line) => line.length > 0)
-        .map((line) => JSON.parse(line) as { store?: string; post?: { uri: string } });
+      const items = parseNdjson(stdout);
 
       expect(items.length).toBe(3);
       expect(items[0]?.store).toBe("alpha");
@@ -213,12 +222,206 @@ describe("query multi-store", () => {
       expect(items[2]?.store).toBe("alpha");
       expect(items[2]?.post?.uri).toBe(postC.uri);
     } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("orders by uri before store when timestamps match", async () => {
+    const run = Command.run(queryCommand, {
+      name: "skygent",
+      version: "0.0.0"
+    });
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(tempDir);
+
+    try {
       await Effect.runPromise(
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          yield* fs.remove(tempDir, { recursive: true });
-        }).pipe(Effect.provide(BunContext.layer))
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+
+          const storeA = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("alpha"),
+            sampleConfig
+          );
+          const storeB = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("bravo"),
+            sampleConfig
+          );
+
+          const sharedTime = "2026-01-04T00:00:00.000Z";
+          const alphaPost = makePost(
+            "at://did:plc:example/app.bsky.feed.post/2",
+            "alpha.bsky",
+            sharedTime
+          );
+          const bravoPost = makePost(
+            "at://did:plc:example/app.bsky.feed.post/1",
+            "bravo.bsky",
+            sharedTime
+          );
+
+          yield* index.apply(
+            storeA,
+            makeRecord(alphaPost, "01ARZ3NDEKTSV4RRFFQ69G5FBA")
+          );
+          yield* index.apply(
+            storeB,
+            makeRecord(bravoPost, "01ARZ3NDEKTSV4RRFFQ69G5FBB")
+          );
+
+          yield* run(["node", "skygent", "alpha,bravo", "--format", "ndjson"]);
+        }).pipe(Effect.provide(appLayer))
       );
+
+      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
+      const items = parseNdjson(stdout);
+
+      expect(items.length).toBe(2);
+      expect(items[0]?.store).toBe("bravo");
+      expect(items[0]?.post?.uri).toBe("at://did:plc:example/app.bsky.feed.post/1");
+      expect(items[1]?.store).toBe("alpha");
+      expect(items[1]?.post?.uri).toBe("at://did:plc:example/app.bsky.feed.post/2");
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("applies limit after merge", async () => {
+    const run = Command.run(queryCommand, {
+      name: "skygent",
+      version: "0.0.0"
+    });
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(tempDir);
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+
+          const storeA = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("alpha"),
+            sampleConfig
+          );
+          const storeB = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("bravo"),
+            sampleConfig
+          );
+
+          const post1 = makePost(
+            "at://did:plc:example/app.bsky.feed.post/10",
+            "alpha.bsky",
+            "2026-01-01T00:00:00.000Z"
+          );
+          const post2 = makePost(
+            "at://did:plc:example/app.bsky.feed.post/20",
+            "bravo.bsky",
+            "2026-01-02T00:00:00.000Z"
+          );
+          const post3 = makePost(
+            "at://did:plc:example/app.bsky.feed.post/30",
+            "alpha.bsky",
+            "2026-01-03T00:00:00.000Z"
+          );
+
+          yield* index.apply(storeA, makeRecord(post1, "01ARZ3NDEKTSV4RRFFQ69G5FBC"));
+          yield* index.apply(storeB, makeRecord(post2, "01ARZ3NDEKTSV4RRFFQ69G5FBD"));
+          yield* index.apply(storeA, makeRecord(post3, "01ARZ3NDEKTSV4RRFFQ69G5FBE"));
+
+          yield* run([
+            "node",
+            "skygent",
+            "alpha,bravo",
+            "--format",
+            "ndjson",
+            "--limit",
+            "2"
+          ]);
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
+      const items = parseNdjson(stdout);
+
+      expect(items.length).toBe(2);
+      expect(items[0]?.post?.uri).toBe("at://did:plc:example/app.bsky.feed.post/10");
+      expect(items[1]?.post?.uri).toBe("at://did:plc:example/app.bsky.feed.post/20");
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("applies scan limit per store", async () => {
+    const run = Command.run(queryCommand, {
+      name: "skygent",
+      version: "0.0.0"
+    });
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(tempDir);
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+
+          const storeA = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("alpha"),
+            sampleConfig
+          );
+          const storeB = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("bravo"),
+            sampleConfig
+          );
+
+          const post1 = makePost(
+            "at://did:plc:example/app.bsky.feed.post/40",
+            "alpha.bsky",
+            "2026-01-01T00:00:00.000Z"
+          );
+          const post2 = makePost(
+            "at://did:plc:example/app.bsky.feed.post/50",
+            "alpha.bsky",
+            "2026-01-03T00:00:00.000Z"
+          );
+          const post3 = makePost(
+            "at://did:plc:example/app.bsky.feed.post/41",
+            "bravo.bsky",
+            "2026-01-02T00:00:00.000Z"
+          );
+          const post4 = makePost(
+            "at://did:plc:example/app.bsky.feed.post/51",
+            "bravo.bsky",
+            "2026-01-04T00:00:00.000Z"
+          );
+
+          yield* index.apply(storeA, makeRecord(post1, "01ARZ3NDEKTSV4RRFFQ69G5FBF"));
+          yield* index.apply(storeA, makeRecord(post2, "01ARZ3NDEKTSV4RRFFQ69G5FBG"));
+          yield* index.apply(storeB, makeRecord(post3, "01ARZ3NDEKTSV4RRFFQ69G5FBH"));
+          yield* index.apply(storeB, makeRecord(post4, "01ARZ3NDEKTSV4RRFFQ69G5FBJ"));
+
+          yield* run([
+            "node",
+            "skygent",
+            "alpha,bravo",
+            "--format",
+            "ndjson",
+            "--scan-limit",
+            "1"
+          ]);
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
+      const items = parseNdjson(stdout);
+
+      expect(items.length).toBe(2);
+      expect(items[0]?.post?.uri).toBe("at://did:plc:example/app.bsky.feed.post/40");
+      expect(items[1]?.post?.uri).toBe("at://did:plc:example/app.bsky.feed.post/41");
+    } finally {
+      await removeTempDir(tempDir);
     }
   });
 });
