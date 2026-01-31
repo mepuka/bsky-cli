@@ -80,7 +80,7 @@ Goal: resolve remaining enhancement issues with Effect-native, type-safe impleme
   - Catalog update (single transaction).
   - Lineage KV update for the renamed store and dependent stores.
   - Derivation checkpoint updates across all stores.
-- Optional `--rewrite-provenance` to rewrite event log provenance references (opt-in; expensive).
+- Defer `event_log` provenance rewrite; add a follow-up issue if needed (expensive + audit-sensitive).
 - Provide clear CLI errors for missing store, name conflict, or in-use/locked store.
 
 **Effect notes**
