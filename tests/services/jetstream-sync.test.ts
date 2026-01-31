@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { Duration, Effect, Fiber, Layer, Option, Schema, Stream, TestClock, TestContext } from "effect";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { Jetstream, JetstreamMessage } from "effect-jetstream";
@@ -115,13 +115,16 @@ const commitInvalid = Schema.decodeUnknownSync(JetstreamMessage.CommitCreate)({
   }
 });
 
-const makeJetstreamLayer = (stream: Stream.Stream<JetstreamMessage.JetstreamMessage>) =>
+const makeJetstreamLayer = (
+  stream: Stream.Stream<JetstreamMessage.JetstreamMessage>,
+  shutdown: Effect.Effect<void> = Effect.void
+) =>
   Layer.succeed(Jetstream.Jetstream, {
     [Jetstream.TypeId]: Jetstream.TypeId,
     stream,
     send: () => Effect.void,
     updateOptions: () => Effect.void,
-    shutdown: Effect.void
+    shutdown
   });
 
 const profileLayer = Layer.succeed(
@@ -155,10 +158,16 @@ const removeTempDir = (path: string) =>
 
 const makeTestLayer = (
   storeRoot: string,
-  stream: Stream.Stream<JetstreamMessage.JetstreamMessage>
+  stream: Stream.Stream<JetstreamMessage.JetstreamMessage>,
+  overrides?: {
+    readonly jetstreamLayer?: Layer.Layer<never, never, Jetstream.Jetstream>;
+    readonly reporterLayer?: Layer.Layer<never, never, SyncReporter>;
+  }
 ) => {
-  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
-  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
+  const configOverridesLayer = Layer.succeed(ConfigOverrides, { storeRoot });
+  const appConfigLayer = AppConfigService.layer.pipe(
+    Layer.provide(configOverridesLayer)
+  );
   const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
   const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
   const indexLayer = StoreIndex.layer.pipe(
@@ -174,8 +183,11 @@ const makeTestLayer = (
     Layer.provideMerge(storeDbLayer)
   );
 
+  const jetstreamLayer = overrides?.jetstreamLayer ?? makeJetstreamLayer(stream);
+  const reporterLayer = overrides?.reporterLayer ?? SyncReporter.layer;
+
   return JetstreamSyncEngine.layer.pipe(
-    Layer.provideMerge(makeJetstreamLayer(stream)),
+    Layer.provideMerge(jetstreamLayer),
     Layer.provideMerge(profileLayer),
     Layer.provideMerge(PostParser.layer),
     Layer.provideMerge(filterRuntimeLayer),
@@ -183,7 +195,7 @@ const makeTestLayer = (
     Layer.provideMerge(indexLayer),
     Layer.provideMerge(eventLogLayer),
     Layer.provideMerge(checkpointLayer),
-    Layer.provideMerge(SyncReporter.layer),
+    Layer.provideMerge(reporterLayer),
     Layer.provideMerge(appConfigLayer),
     Layer.provideMerge(storeDbLayer),
     Layer.provideMerge(BunContext.layer)
@@ -451,6 +463,61 @@ describe("JetstreamSyncEngine", () => {
       );
 
       expect(result._tag).toBe("Left");
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("duration interrupt warns and shuts down jetstream", async () => {
+    const warnings: Array<{ message: string; data?: Record<string, unknown> }> = [];
+    let shutdowns = 0;
+    const reporterLayer = Layer.succeed(
+      SyncReporter,
+      SyncReporter.of({
+        report: () => Effect.void,
+        warn: (message, data) =>
+          Effect.sync(() => {
+            warnings.push({ message, data });
+          })
+      })
+    );
+    const shutdownEffect = Effect.sync(() => {
+      shutdowns += 1;
+    });
+
+    const filter = all();
+    const source = DataSource.jetstream() as Extract<DataSource, { _tag: "Jetstream" }>;
+
+    const program = Effect.gen(function* () {
+      const engine = yield* JetstreamSyncEngine;
+      const fiber = yield* engine
+        .sync({
+          source,
+          store: sampleStore,
+          filter,
+          command: "sync jetstream",
+          duration: Duration.seconds(5)
+        })
+        .pipe(Effect.fork);
+      yield* TestClock.adjust("5 seconds");
+      return yield* Fiber.join(fiber);
+    });
+
+    const tempDir = await makeTempDir();
+    const jetstreamLayer = makeJetstreamLayer(Stream.never, shutdownEffect);
+    const layer = makeTestLayer(tempDir, Stream.never, {
+      jetstreamLayer,
+      reporterLayer
+    });
+    try {
+      const result = await Effect.runPromise(
+        program.pipe(Effect.provide(layer), Effect.provide(TestContext.TestContext))
+      );
+
+      expect(result.postsAdded).toBe(0);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.message).toContain("Jetstream sync exceeded duration");
+      expect(shutdowns).toBeGreaterThanOrEqual(1);
     } finally {
       await removeTempDir(tempDir);
     }

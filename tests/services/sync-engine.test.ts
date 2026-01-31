@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { Chunk, Duration, Effect, Fiber, Layer, Option, Schema, Stream, TestClock, TestContext } from "effect";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { BskyClient } from "../../src/services/bsky-client.js";
@@ -21,7 +21,7 @@ import { SyncSettings, SyncSettingsOverrides } from "../../src/services/sync-set
 import { all, none } from "../../src/domain/filter.js";
 import { RawPost } from "../../src/domain/raw.js";
 import { StoreRef } from "../../src/domain/store.js";
-import { DataSource, SyncCheckpoint } from "../../src/domain/sync.js";
+import { DataSource, SyncCheckpoint, WatchConfig } from "../../src/domain/sync.js";
 import { makeBskyClient } from "../support/bsky-client.js";
 
 const sampleRaw = Schema.decodeUnknownSync(RawPost)({
@@ -350,6 +350,39 @@ describe("SyncEngine", () => {
       if (Option.isSome(checkpoint)) {
         expect(checkpoint.value.cursor).toBe("cursor-page-1");
       }
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("watch repeats sync on schedule", async () => {
+    const program = Effect.gen(function* () {
+      const sync = yield* SyncEngine;
+      const stream = sync.watch(
+        WatchConfig.make({
+          source: DataSource.timeline(),
+          store: sampleStore,
+          filter: all(),
+          interval: Duration.seconds(10)
+        })
+      );
+      const fiber = yield* Stream.runCollect(stream.pipe(Stream.take(2))).pipe(
+        Effect.fork
+      );
+      yield* TestClock.adjust("20 seconds");
+      const results = yield* Fiber.join(fiber);
+      return Chunk.toReadonlyArray(results);
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const outcome = await Effect.runPromise(
+        program.pipe(Effect.provide(layer), Effect.provide(TestContext.TestContext))
+      );
+
+      expect(outcome).toHaveLength(2);
+      expect(outcome[0]?.result.postsAdded).toBe(1);
     } finally {
       await removeTempDir(tempDir);
     }
