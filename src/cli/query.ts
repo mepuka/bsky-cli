@@ -31,6 +31,7 @@ import { filterOption, filterJsonOption } from "./shared-options.js";
 import { filterByFlags } from "../typeclass/chunk.js";
 import { StoreManager } from "../services/store-manager.js";
 import { StoreNotFound } from "../domain/errors.js";
+import { StorePostOrder } from "../domain/order.js";
 import { formatSchemaError } from "./shared.js";
 import { mergeOrderedStreams } from "./stream-merge.js";
 
@@ -477,11 +478,8 @@ export const queryCommand = Command.make(
         )
         .filter((entry): entry is { store: StoreRef; ref: Ref.Ref<{ scanned: number; matched: number }> } => entry !== undefined);
 
-      const baseOrder = Order.mapInput(
-        Order.tuple(Order.Date, Order.string, Order.string),
-        (entry: StorePost) => [entry.post.createdAt, entry.post.uri, entry.store.name] as const
-      );
-      const storePostOrder = order === "desc" ? Order.reverse(baseOrder) : baseOrder;
+      const storePostOrder =
+        order === "desc" ? Order.reverse(StorePostOrder) : StorePostOrder;
       const compareStorePosts = (left: StorePost, right: StorePost) =>
         storePostOrder(left, right);
 

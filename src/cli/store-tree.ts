@@ -1,5 +1,5 @@
 import * as Doc from "@effect/printer/Doc";
-import { Chunk, Context, Effect, Option } from "effect";
+import { Chunk, Context, Effect, Option, Order } from "effect";
 import { StoreIndex } from "../services/store-index.js";
 import { StoreManager } from "../services/store-manager.js";
 import { LineageStore } from "../services/lineage-store.js";
@@ -9,6 +9,7 @@ import { StoreEventLog } from "../services/store-event-log.js";
 import { DataSource } from "../domain/sync.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { formatFilterExpr } from "../domain/filter-describe.js";
+import { updatedAtOrder } from "../domain/order.js";
 import type { StoreName } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
 import type { StoreLineage } from "../domain/derivation.js";
@@ -123,9 +124,10 @@ const resolveSyncInfo = (
     if (candidates.length === 0) {
       return { syncStatus: "unknown" as const };
     }
-    const latest = candidates.sort(
-      (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
-    )[0];
+    const checkpointOrder = updatedAtOrder<(typeof candidates)[number]>();
+    const latest = candidates.reduce((acc, candidate) =>
+      Order.max(checkpointOrder)(acc, candidate)
+    );
     if (!latest) {
       return { syncStatus: "unknown" as const };
     }
