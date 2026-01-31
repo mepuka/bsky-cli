@@ -206,7 +206,9 @@ export const queryCommand = Command.make(
       const parsedRange = yield* parseRangeOptions(range, since, until);
       const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
       const expr = Option.getOrElse(parsedFilter, () => all());
-      const outputFormat = Option.getOrElse(format, () => appConfig.outputFormat);
+      const outputFormat = Option.getOrElse(format, () =>
+        appConfig.outputFormat === "ndjson" ? "compact" : appConfig.outputFormat
+      );
       const compact = preferences.compact;
       const selectorsOption = yield* resolveFieldSelectors(fields, compact);
       const project = (post: Post) =>

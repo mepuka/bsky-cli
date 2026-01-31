@@ -24,6 +24,7 @@ import { renderTableLegacy } from "./doc/table.js";
 import { withExamples } from "./help.js";
 import { filterOption, filterJsonOption } from "./shared-options.js";
 import { jsonTableFormats, resolveOutputFormat, textJsonFormats } from "./output-format.js";
+import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 
 const filterNameArg = Args.text({ name: "name" }).pipe(
   Args.withSchema(StoreName),
@@ -481,8 +482,20 @@ export const filterDescribe = Command.make(
   )
 );
 
+export const filterHelp = Command.make("help", {}, () =>
+  Effect.gen(function* () {
+    const body = [filterDslDescription(), "", filterJsonDescription()].join("\n");
+    yield* writeText(body);
+  })
+).pipe(
+  Command.withDescription(
+    withExamples("Show filter DSL and JSON help", ["skygent filter help"])
+  )
+);
+
 export const filterCommand = Command.make("filter", {}).pipe(
   Command.withSubcommands([
+    filterHelp,
     filterList,
     filterShow,
     filterCreate,

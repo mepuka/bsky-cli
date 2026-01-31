@@ -42,6 +42,16 @@ const purposeOption = Options.choice("purpose", ["modlist", "curatelist"]).pipe(
 const othersOption = Options.text("others").pipe(
   Options.withDescription("Comma-separated list of actors to compare" )
 );
+const rawOption = Options.boolean("raw").pipe(
+  Options.withDescription("Output raw relationship data (no wrapper fields)")
+);
+
+type RelationshipEntry = {
+  readonly actor: string;
+  readonly otherInput: string;
+  readonly relationship: RelationshipView;
+  readonly otherDid?: string;
+};
 
 const renderProfileTable = (
   actors: ReadonlyArray<ProfileView>,
@@ -71,10 +81,20 @@ const renderListTable = (
   return cursor ? `${table}\n\nCursor: ${cursor}` : table;
 };
 
-const renderRelationshipsTable = (relationships: ReadonlyArray<RelationshipView>) => {
-  const rows = relationships.map((rel) => {
+const renderRelationshipsTable = (entries: ReadonlyArray<RelationshipEntry>) => {
+  const rows = entries.map((entry) => {
+    const rel = entry.relationship;
     if ("notFound" in rel && rel.notFound) {
-      return [String(rel.actor), "not-found", "", "", "", "", ""];
+      return [
+        entry.otherInput,
+        entry.otherDid ?? "",
+        "not-found",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ];
     }
     const relationship = rel as RelationshipView & {
       did: string;
@@ -86,6 +106,7 @@ const renderRelationshipsTable = (relationships: ReadonlyArray<RelationshipView>
       blockedByList?: string;
     };
     return [
+      entry.otherInput,
       relationship.did,
       relationship.following ? "yes" : "",
       relationship.followedBy ? "yes" : "",
@@ -97,6 +118,7 @@ const renderRelationshipsTable = (relationships: ReadonlyArray<RelationshipView>
   });
   return renderTableLegacy(
     [
+      "ACTOR",
       "DID",
       "FOLLOWING",
       "FOLLOWED BY",
@@ -237,8 +259,8 @@ const knownFollowersCommand = Command.make(
 
 const relationshipsCommand = Command.make(
   "relationships",
-  { actor: actorArg, others: othersOption, format: formatOption },
-  ({ actor, others, format }) =>
+  { actor: actorArg, others: othersOption, format: formatOption, raw: rawOption },
+  ({ actor, others, format, raw }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
@@ -274,7 +296,35 @@ const relationshipsCommand = Command.make(
         (value) => resolveDid(value),
         { concurrency: "unbounded" }
       );
+      const didToInput = new Map<string, string>();
+      resolvedOthers.forEach((did, index) => {
+        const input = uniqueOthers[index];
+        if (input) {
+          didToInput.set(did, input);
+        }
+      });
       const result = yield* client.getRelationships(resolvedActor, resolvedOthers);
+      const entries: ReadonlyArray<RelationshipEntry> = result.relationships.map(
+        (relationship) => {
+          const fallbackInput =
+            "did" in relationship ? relationship.did : relationship.actor;
+          const otherDid =
+            "did" in relationship
+              ? relationship.did
+              : relationship.actor.startsWith("did:")
+                ? relationship.actor
+                : undefined;
+          const otherInput = otherDid
+            ? didToInput.get(otherDid) ?? fallbackInput
+            : fallbackInput;
+          const base = {
+            actor: result.actor,
+            otherInput,
+            relationship
+          };
+          return otherDid ? { ...base, otherDid } : base;
+        }
+      );
       const outputFormat = resolveOutputFormat(
         format,
         appConfig.outputFormat,
@@ -282,14 +332,26 @@ const relationshipsCommand = Command.make(
         "json"
       );
       if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(result.relationships));
+        if (raw) {
+          yield* writeJsonStream(Stream.fromIterable(result.relationships));
+          return;
+        }
+        yield* writeJsonStream(Stream.fromIterable(entries));
         return;
       }
       if (outputFormat === "table") {
-        yield* writeText(renderRelationshipsTable(result.relationships));
+        yield* writeText(renderRelationshipsTable(entries));
         return;
       }
-      yield* writeJson(result);
+      if (raw) {
+        yield* writeJson(result);
+        return;
+      }
+      yield* writeJson({
+        actor: result.actor,
+        actorInput: actor,
+        relationships: entries
+      });
     })
 ).pipe(
   Command.withDescription(
