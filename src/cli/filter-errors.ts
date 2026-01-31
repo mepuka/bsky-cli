@@ -31,6 +31,7 @@ const validFilterTags = [
 ];
 
 const filterDocs = "docs/filters/README.md";
+const filterHelpHint = "Tip: run \"skygent filter help\" for examples and aliases.";
 
 
 const getTag = (raw: string): string | undefined => {
@@ -48,13 +49,18 @@ const getTag = (raw: string): string | undefined => {
 const hasPath = (issue: { readonly path: ReadonlyArray<unknown> }, key: string) =>
   issue.path.length === 1 && issue.path[0] === key;
 
+const withHelpHint = (payload: Omit<AgentErrorPayload, "error">) => ({
+  ...payload,
+  details: payload.details ? [...payload.details, filterHelpHint] : [filterHelpHint]
+});
+
 const validationError = (
   payload: Omit<AgentErrorPayload, "error">
-) => formatAgentError({ error: "FilterValidationError", ...payload });
+) => formatAgentError({ error: "FilterValidationError", ...withHelpHint(payload) });
 
 const jsonParseError = (
   payload: Omit<AgentErrorPayload, "error">
-) => formatAgentError({ error: "FilterJsonParseError", ...payload });
+) => formatAgentError({ error: "FilterJsonParseError", ...withHelpHint(payload) });
 
 
 export const formatFilterParseError = (error: ParseResult.ParseError, raw: string): string => {

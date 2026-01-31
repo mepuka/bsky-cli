@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Clock, Effect, Option, Ref, Schema, Stream } from "effect";
+import { Chunk, Clock, Effect, Option, Order, Ref, Schema, Stream } from "effect";
 import * as Doc from "@effect/printer/Doc";
 import { all } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
@@ -477,20 +477,13 @@ export const queryCommand = Command.make(
         )
         .filter((entry): entry is { store: StoreRef; ref: Ref.Ref<{ scanned: number; matched: number }> } => entry !== undefined);
 
-      const compareStorePosts = (left: StorePost, right: StorePost) => {
-        const leftTime = left.post.createdAt.getTime();
-        const rightTime = right.post.createdAt.getTime();
-        if (leftTime !== rightTime) {
-          return order === "desc" ? rightTime - leftTime : leftTime - rightTime;
-        }
-        const storeCompare = left.store.name.localeCompare(right.store.name);
-        if (storeCompare !== 0) {
-          return storeCompare;
-        }
-        return order === "desc"
-          ? right.post.uri.localeCompare(left.post.uri)
-          : left.post.uri.localeCompare(right.post.uri);
-      };
+      const baseOrder = Order.mapInput(
+        Order.tuple(Order.Date, Order.string, Order.string),
+        (entry: StorePost) => [entry.post.createdAt, entry.post.uri, entry.store.name] as const
+      );
+      const storePostOrder = order === "desc" ? Order.reverse(baseOrder) : baseOrder;
+      const compareStorePosts = (left: StorePost, right: StorePost) =>
+        storePostOrder(left, right);
 
       const merged = mergeOrderedStreams(
         storeStreams.map((entry) => entry.stream),
