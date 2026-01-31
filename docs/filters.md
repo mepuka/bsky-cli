@@ -24,6 +24,7 @@ Use only one of `--filter` or `--filter-json`.
 Wrap JSON in single quotes to avoid shell escaping issues.
 
 Testing and validation tools are documented in `docs/filters/testing.md`.
+Run `skygent filter help` for the current DSL examples and JSON shapes.
 
 ## DSL rules
 

@@ -331,6 +331,7 @@ const defaultFilterExamples = [
   "hashtag:#ai",
   "text:\"hello\""
 ];
+const filterHelpHint = " Tip: run \"skygent filter help\" for all predicates.";
 
 const uniqueSuggestions = (items: ReadonlyArray<string>) =>
   Array.from(new Set(items));
@@ -1060,7 +1061,7 @@ class Parser {
           );
         }
         return yield* self.fail(
-          "Expected a filter expression like 'hashtag:#ai' or 'author:handle'.",
+          `Expected a filter expression like 'hashtag:#ai' or 'author:handle'.${filterHelpHint}`,
           token.position
         );
       }
@@ -1471,7 +1472,7 @@ class Parser {
             ? formatSuggestionHint(suggestions)
             : ` Try "${defaultFilterExamples[0]}", "${defaultFilterExamples[1]}", or "${defaultFilterExamples[2]}".`;
           return yield* self.fail(
-            `Unknown filter type "${rawKey}".${hint}`,
+            `Unknown filter type "${rawKey}".${hint}${filterHelpHint}`,
             token.position
           );
         }
