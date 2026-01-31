@@ -1,9 +1,10 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Stream } from "effect";
 import { renderTableLegacy } from "./doc/table.js";
+import { renderFeedTable } from "./doc/table-renderers.js";
 import { BskyClient } from "../services/bsky-client.js";
-import type { FeedGeneratorView } from "../domain/bsky.js";
 import { AppConfigService } from "../services/app-config.js";
+import type { FeedGeneratorView } from "../domain/bsky.js";
 import { decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
@@ -38,19 +39,6 @@ const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
   Options.optional
 );
 
-const renderFeedTable = (
-  feeds: ReadonlyArray<FeedGeneratorView>,
-  cursor: string | undefined
-) => {
-  const rows = feeds.map((feed) => [
-    feed.displayName,
-    feed.creator.handle,
-    feed.uri,
-    typeof feed.likeCount === "number" ? String(feed.likeCount) : ""
-  ]);
-  const table = renderTableLegacy(["NAME", "CREATOR", "URI", "LIKES"], rows);
-  return cursor ? `${table}\n\nCursor: ${cursor}` : table;
-};
 
 const renderFeedInfoTable = (
   view: FeedGeneratorView,

@@ -2,7 +2,7 @@ import { Command, Options } from "@effect/cli";
 import { Context, Effect, Option, Stream } from "effect";
 import { BskyClient } from "../services/bsky-client.js";
 import { PostParser } from "../services/post-parser.js";
-import type { PostLike, ProfileView } from "../domain/bsky.js";
+import type { PostLike } from "../domain/bsky.js";
 import type { RawPost } from "../domain/raw.js";
 import { renderPostsTable } from "../domain/format.js";
 import { AppConfigService } from "../services/app-config.js";
@@ -10,6 +10,7 @@ import { withExamples } from "./help.js";
 import { postUriArg } from "./shared-options.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { renderTableLegacy } from "./doc/table.js";
+import { renderProfileTable } from "./doc/table-renderers.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
@@ -32,18 +33,6 @@ const cidOption = Options.text("cid").pipe(
   Options.optional
 );
 
-const renderProfileTable = (
-  actors: ReadonlyArray<ProfileView>,
-  cursor: string | undefined
-) => {
-  const rows = actors.map((actor) => [
-    actor.handle,
-    actor.displayName ?? "",
-    actor.did
-  ]);
-  const table = renderTableLegacy(["HANDLE", "DISPLAY NAME", "DID"], rows);
-  return cursor ? `${table}\n\nCursor: ${cursor}` : table;
-};
 
 const renderLikesTable = (likes: ReadonlyArray<PostLike>, cursor: string | undefined) => {
   const rows = likes.map((like) => [

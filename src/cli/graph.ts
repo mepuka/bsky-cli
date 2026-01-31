@@ -4,12 +4,13 @@ import { BskyClient } from "../services/bsky-client.js";
 import { AppConfigService } from "../services/app-config.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import { ProfileResolver } from "../services/profile-resolver.js";
-import type { ListItemView, ListView, ProfileView } from "../domain/bsky.js";
+import type { ListItemView, ListView } from "../domain/bsky.js";
 import { decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { renderTableLegacy } from "./doc/table.js";
+import { renderProfileTable } from "./doc/table-renderers.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
@@ -52,19 +53,6 @@ const othersOption = Options.text("others").pipe(
 const rawOption = Options.boolean("raw").pipe(
   Options.withDescription("Output raw relationship data (no wrapper fields)")
 );
-
-const renderProfileTable = (
-  actors: ReadonlyArray<ProfileView>,
-  cursor: string | undefined
-) => {
-  const rows = actors.map((actor) => [
-    actor.handle,
-    actor.displayName ?? "",
-    actor.did
-  ]);
-  const table = renderTableLegacy(["HANDLE", "DISPLAY NAME", "DID"], rows);
-  return cursor ? `${table}\n\nCursor: ${cursor}` : table;
-};
 
 const renderListTable = (
   lists: ReadonlyArray<ListView>,
