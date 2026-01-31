@@ -3,13 +3,20 @@ import { Effect, Option, Stream } from "effect";
 import { BskyClient } from "../services/bsky-client.js";
 import { AppConfigService } from "../services/app-config.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
-import type { ListItemView, ListView, ProfileView, RelationshipView } from "../domain/bsky.js";
+import { ProfileResolver } from "../services/profile-resolver.js";
+import type { ListItemView, ListView, ProfileView } from "../domain/bsky.js";
 import { decodeActor, parseLimit } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { renderTableLegacy } from "./doc/table.js";
 import { jsonNdjsonTableFormats, resolveOutputFormat } from "./output-format.js";
+import {
+  buildRelationshipGraph,
+  relationshipEntries,
+  type RelationshipEntry,
+  type RelationshipNode
+} from "../graph/relationships.js";
 
 const actorArg = Args.text({ name: "actor" }).pipe(
   Args.withDescription("Bluesky handle or DID")
@@ -46,13 +53,6 @@ const rawOption = Options.boolean("raw").pipe(
   Options.withDescription("Output raw relationship data (no wrapper fields)")
 );
 
-type RelationshipEntry = {
-  readonly actor: string;
-  readonly otherInput: string;
-  readonly relationship: RelationshipView;
-  readonly otherDid?: string;
-};
-
 const renderProfileTable = (
   actors: ReadonlyArray<ProfileView>,
   cursor: string | undefined
@@ -83,45 +83,31 @@ const renderListTable = (
 
 const renderRelationshipsTable = (entries: ReadonlyArray<RelationshipEntry>) => {
   const rows = entries.map((entry) => {
+    const otherInputs = entry.other.inputs.join(", ");
+    const handle = entry.other.handle ?? "";
+    const did = entry.other.did ?? (entry.other.notFound ? "not-found" : "");
     const rel = entry.relationship;
-    if ("notFound" in rel && rel.notFound) {
-      return [
-        entry.otherInput,
-        entry.otherDid ?? "",
-        "not-found",
-        "",
-        "",
-        "",
-        "",
-        ""
-      ];
-    }
-    const relationship = rel as RelationshipView & {
-      did: string;
-      following?: string;
-      followedBy?: string;
-      blocking?: string;
-      blockedBy?: string;
-      blockingByList?: string;
-      blockedByList?: string;
-    };
     return [
-      entry.otherInput,
-      relationship.did,
-      relationship.following ? "yes" : "",
-      relationship.followedBy ? "yes" : "",
-      relationship.blocking ? "yes" : "",
-      relationship.blockedBy ? "yes" : "",
-      relationship.blockingByList ? "yes" : "",
-      relationship.blockedByList ? "yes" : ""
+      otherInputs,
+      handle,
+      did,
+      rel.following ? "yes" : "",
+      rel.followedBy ? "yes" : "",
+      rel.mutual ? "yes" : "",
+      rel.blocking ? "yes" : "",
+      rel.blockedBy ? "yes" : "",
+      rel.blockingByList ? "yes" : "",
+      rel.blockedByList ? "yes" : ""
     ];
   });
   return renderTableLegacy(
     [
-      "ACTOR",
+      "INPUTS",
+      "HANDLE",
       "DID",
       "FOLLOWING",
       "FOLLOWED BY",
+      "MUTUAL",
       "BLOCKING",
       "BLOCKED BY",
       "BLOCK BY LIST",
@@ -265,6 +251,7 @@ const relationshipsCommand = Command.make(
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const identities = yield* IdentityResolver;
+      const profiles = yield* ProfileResolver;
       const resolveDid = (value: string) =>
         Effect.gen(function* () {
           const decoded = yield* decodeActor(value);
@@ -296,35 +283,63 @@ const relationshipsCommand = Command.make(
         (value) => resolveDid(value),
         { concurrency: "unbounded" }
       );
-      const didToInput = new Map<string, string>();
+      const didToInputs = new Map<string, Array<string>>();
       resolvedOthers.forEach((did, index) => {
         const input = uniqueOthers[index];
         if (input) {
-          didToInput.set(did, input);
+          const existing = didToInputs.get(did);
+          if (existing) {
+            existing.push(input);
+          } else {
+            didToInputs.set(did, [input]);
+          }
         }
       });
       const result = yield* client.getRelationships(resolvedActor, resolvedOthers);
-      const entries: ReadonlyArray<RelationshipEntry> = result.relationships.map(
-        (relationship) => {
-          const fallbackInput =
-            "did" in relationship ? relationship.did : relationship.actor;
-          const otherDid =
-            "did" in relationship
-              ? relationship.did
-              : relationship.actor.startsWith("did:")
-                ? relationship.actor
-                : undefined;
-          const otherInput = otherDid
-            ? didToInput.get(otherDid) ?? fallbackInput
-            : fallbackInput;
-          const base = {
-            actor: result.actor,
-            otherInput,
-            relationship
-          };
-          return otherDid ? { ...base, otherDid } : base;
-        }
+      const handleFromInputs = (inputs: ReadonlyArray<string>) =>
+        inputs.find((input) => !input.startsWith("did:"));
+      const inputsForActor = [actor];
+      const didsNeedingHandle = [resolvedActor, ...resolvedOthers].filter((did) => {
+        const inputs = did === resolvedActor ? inputsForActor : didToInputs.get(did) ?? [];
+        return handleFromInputs(inputs) === undefined;
+      });
+      const handles = yield* Effect.forEach(
+        didsNeedingHandle,
+        (did) =>
+          profiles.handleForDid(did).pipe(
+            Effect.either,
+            Effect.map((result) => [did, result] as const)
+          ),
+        { concurrency: "unbounded" }
       );
+      const handleMap = new Map<string, string>();
+      for (const [did, result] of handles) {
+        if (result._tag === "Right") {
+          handleMap.set(did, String(result.right));
+        }
+      }
+      const buildNode = (
+        did: string,
+        inputs: ReadonlyArray<string>,
+        handle?: string
+      ): RelationshipNode => ({
+        did,
+        inputs,
+        ...(handle ? { handle } : {})
+      });
+      const actorHandle = handleFromInputs(inputsForActor) ?? handleMap.get(resolvedActor);
+      const nodesByKey = new Map<string, RelationshipNode>();
+      nodesByKey.set(resolvedActor, buildNode(resolvedActor, inputsForActor, actorHandle));
+      for (const [did, inputs] of didToInputs.entries()) {
+        const handle = handleFromInputs(inputs) ?? handleMap.get(did);
+        nodesByKey.set(did, buildNode(did, inputs, handle));
+      }
+      const graphResult = buildRelationshipGraph(
+        resolvedActor,
+        nodesByKey,
+        result.relationships
+      );
+      const entries = relationshipEntries(graphResult.graph);
       const outputFormat = resolveOutputFormat(
         format,
         appConfig.outputFormat,
@@ -348,8 +363,10 @@ const relationshipsCommand = Command.make(
         return;
       }
       yield* writeJson({
-        actor: result.actor,
-        actorInput: actor,
+        actor: nodesByKey.get(resolvedActor) ?? {
+          did: resolvedActor,
+          inputs: [actor]
+        },
         relationships: entries
       });
     })
