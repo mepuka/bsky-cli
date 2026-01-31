@@ -22,6 +22,7 @@ import { LinkValidator } from "../services/link-validator.js";
 import { TrendingTopics } from "../services/trending-topics.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { CliOutput } from "./output.js";
+import { CliInput } from "./input.js";
 import { DerivationEngine } from "../services/derivation-engine.js";
 import { DerivationValidator } from "../services/derivation-validator.js";
 import { DerivationSettings } from "../services/derivation-settings.js";
@@ -157,6 +158,7 @@ export const CliLive = Layer.mergeAll(
   appConfigLayer,
   filterSettingsLayer,
   credentialLayer,
+  CliInput.layer,
   CliOutput.layer,
   resourceMonitorLayer,
   managerLayer,
