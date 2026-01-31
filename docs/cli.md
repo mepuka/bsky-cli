@@ -34,6 +34,7 @@ Manage stores.
 - `store stats <name>`
 - `store summary`
 - `store tree [--format <tree|table|json>] [--ansi] [--width <n>]`
+- `store rename <from> <to>`
 - `store delete <name> --force`
 - `store materialize <name> [--filter <filter-name>]`
 
@@ -46,6 +47,7 @@ bun run index.ts store stats my-store
 bun run index.ts store summary
 bun run index.ts store tree --format table
 bun run index.ts store tree --ansi --width 100
+bun run index.ts store rename old-store new-store
 bun run index.ts store delete my-store --force
 ```
 

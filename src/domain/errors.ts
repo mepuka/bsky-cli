@@ -42,6 +42,11 @@ export class StoreNotFound extends Schema.TaggedError<StoreNotFound>()(
   { name: StoreName }
 ) {}
 
+export class StoreAlreadyExists extends Schema.TaggedError<StoreAlreadyExists>()(
+  "StoreAlreadyExists",
+  { name: StoreName }
+) {}
+
 export class StoreIoError extends Schema.TaggedError<StoreIoError>()(
   "StoreIoError",
   { path: StorePath, cause: Schema.Unknown }
@@ -68,4 +73,4 @@ export class FilterLibraryError extends Schema.TaggedError<FilterLibraryError>()
   }
 ) {}
 
-export type StoreError = StoreNotFound | StoreIoError | StoreIndexError;
+export type StoreError = StoreNotFound | StoreAlreadyExists | StoreIoError | StoreIndexError;

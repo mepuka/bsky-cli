@@ -63,7 +63,7 @@ import * as MigratorFileSystem from "@effect/sql/Migrator/FileSystem";
 import * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import { SqliteClient } from "@effect/sql-sqlite-bun";
-import { StoreIoError } from "../domain/errors.js";
+import { StoreAlreadyExists, StoreIoError, StoreNotFound } from "../domain/errors.js";
 import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
 import { StoreName, StorePath } from "../domain/primitives.js";
 import { AppConfigService } from "./app-config.js";
@@ -188,6 +188,23 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
     readonly deleteStore: (
       name: StoreName
     ) => Effect.Effect<void, StoreIoError>;
+
+    /**
+     * Renames a store in the catalog.
+     *
+     * This updates the store name and root path while preserving creation time.
+     *
+     * @param from - Existing store name
+     * @param to - New store name
+     * @returns Effect resolving to the updated StoreRef
+     * @throws {StoreNotFound} If the source store does not exist
+     * @throws {StoreAlreadyExists} If the target store already exists
+     * @throws {StoreIoError} When database operations fail
+     */
+    readonly renameStore: (
+      from: StoreName,
+      to: StoreName
+    ) => Effect.Effect<StoreRef, StoreNotFound | StoreAlreadyExists | StoreIoError>;
   }
 >() {
   /**
@@ -267,6 +284,21 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
           client`DELETE FROM stores WHERE name = ${name}`
       });
 
+      const renameStoreSql = SqlSchema.void({
+        Request: Schema.Struct({
+          oldName: StoreName,
+          newName: StoreName,
+          root: StorePath,
+          updatedAt: Schema.String
+        }),
+        execute: ({ oldName, newName, root, updatedAt }) =>
+          client`UPDATE stores
+            SET name = ${newName},
+                root = ${root},
+                updated_at = ${updatedAt}
+            WHERE name = ${oldName}`
+      });
+
       const createStore = Effect.fn("StoreManager.createStore")(
         (name: StoreName, config: StoreConfig) =>
           decodeStorePath(storeRootKey(name)).pipe(
@@ -337,6 +369,34 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
         );
       });
 
+      const renameStore = Effect.fn("StoreManager.renameStore")(
+        (from: StoreName, to: StoreName) =>
+          Effect.gen(function* () {
+            const newRoot = yield* decodeStorePath(storeRootKey(to));
+            const existing = yield* findStore(from).pipe(
+              Effect.mapError(toStoreIoError(manifestPath))
+            );
+            if (existing.length === 0) {
+              return yield* StoreNotFound.make({ name: from });
+            }
+            const conflict = yield* findStore(to).pipe(
+              Effect.mapError(toStoreIoError(manifestPath))
+            );
+            if (conflict.length > 0) {
+              return yield* StoreAlreadyExists.make({ name: to });
+            }
+            const nowMillis = yield* Clock.currentTimeMillis;
+            const now = new Date(nowMillis).toISOString();
+            yield* renameStoreSql({
+              oldName: from,
+              newName: to,
+              root: newRoot,
+              updatedAt: now
+            }).pipe(Effect.mapError(toStoreIoError(manifestPath)));
+            return StoreRef.make({ name: to, root: newRoot });
+          })
+      );
+
       const listStores = Effect.fn("StoreManager.listStores")(() =>
         Effect.gen(function* () {
           const rows = yield* listStoresSql(undefined);
@@ -352,7 +412,14 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
         }).pipe(Effect.mapError(toStoreIoError(manifestPath)))
       );
 
-      return StoreManager.of({ createStore, getStore, listStores, getConfig, deleteStore });
+      return StoreManager.of({
+        createStore,
+        getStore,
+        listStores,
+        getConfig,
+        deleteStore,
+        renameStore
+      });
     })
   ).pipe(Layer.provide(Reactivity.layer));
 }

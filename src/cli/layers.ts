@@ -18,6 +18,7 @@ import { SyncCheckpointStore } from "../services/sync-checkpoint-store.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { SyncSettings } from "../services/sync-settings.js";
 import { StoreCleaner } from "../services/store-cleaner.js";
+import { StoreRenamer } from "../services/store-renamer.js";
 import { LinkValidator } from "../services/link-validator.js";
 import { TrendingTopics } from "../services/trending-topics.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
@@ -115,6 +116,12 @@ const viewCheckpointLayer = ViewCheckpointStore.layer.pipe(
 const lineageLayer = LineageStore.layer.pipe(
   Layer.provideMerge(storageLayer)
 );
+const storeRenamerLayer = StoreRenamer.layer.pipe(
+  Layer.provideMerge(appConfigLayer),
+  Layer.provideMerge(managerLayer),
+  Layer.provideMerge(storeDbLayer),
+  Layer.provideMerge(lineageLayer)
+);
 const compilerLayer = FilterCompiler.layer;
 const postParserLayer = PostParser.layer;
 const derivationEngineLayer = DerivationEngine.layer.pipe(
@@ -166,6 +173,7 @@ export const CliLive = Layer.mergeAll(
   indexLayer,
   eventLogLayer,
   cleanerLayer,
+  storeRenamerLayer,
   syncLayer,
   checkpointLayer,
   viewCheckpointLayer,
