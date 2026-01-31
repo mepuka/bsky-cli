@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Effect, Option, Stream } from "effect";
+import { Effect, Option, Schema, Stream } from "effect";
 import { renderTableLegacy } from "./doc/table.js";
 import { renderFeedTable } from "./doc/table-renderers.js";
 import { BskyClient } from "../services/bsky-client.js";
@@ -23,6 +23,7 @@ const feedUriArg = Args.text({ name: "uri" }).pipe(
 
 const feedUrisArg = Args.text({ name: "uri" }).pipe(
   Args.repeated,
+  Args.withSchema(Schema.mutable(Schema.Array(AtUri))),
   Args.withDescription("Feed URIs to fetch")
 );
 

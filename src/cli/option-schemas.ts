@@ -1,4 +1,5 @@
-import { Duration, Effect, Option, ParseResult, Schema } from "effect";
+import { Duration, Effect, ParseResult, Schema } from "effect";
+import { parseDurationInput } from "./time.js";
 
 export const PositiveInt = Schema.Int.pipe(Schema.greaterThan(0));
 
@@ -13,11 +14,9 @@ export const boundedInt = (min: number, max: number) =>
 export const DurationInput = Schema.transformOrFail(Schema.String, Schema.DurationFromSelf, {
   strict: true,
   decode: (raw, _options, ast) =>
-    Option.match(Duration.decodeUnknown(raw), {
-      onNone: () =>
-        Effect.fail(new ParseResult.Type(ast, raw, "Invalid duration")),
-      onSome: (duration) => Effect.succeed(duration)
-    }),
+    parseDurationInput(raw).pipe(
+      Effect.mapError((error) => new ParseResult.Type(ast, raw, error.message))
+    ),
   encode: (duration) =>
     Effect.succeed(`${Duration.toMillis(duration)} millis`)
 }).pipe(Schema.greaterThanOrEqualToDuration(0));

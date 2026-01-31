@@ -8,6 +8,7 @@ import { renderPostsTable } from "../domain/format.js";
 import { AppConfigService } from "../services/app-config.js";
 import { withExamples } from "./help.js";
 import { postUriArg } from "./shared-options.js";
+import { PostCid } from "../domain/primitives.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { renderTableLegacy } from "./doc/table.js";
 import { renderProfileTable } from "./doc/table-renderers.js";
@@ -43,6 +44,7 @@ const ensureSupportedFormat = (
     : Effect.void;
 
 const cidOption = Options.text("cid").pipe(
+  Options.withSchema(PostCid),
   Options.withDescription("Filter engagement by specific record CID"),
   Options.optional
 );
