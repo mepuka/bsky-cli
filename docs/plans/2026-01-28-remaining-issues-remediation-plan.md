@@ -27,6 +27,128 @@ High‑severity items now addressed:
 - **Event log ↔ index atomicity** is enforced via a shared transaction.
 - **Signal/interrupt checkpointing** is handled with finalizers on sync streams.
 
+## Status Update (2026-01-31)
+
+Completed enhancements since last update:
+- **#97** NDJSON pipe filtering: `skygent pipe` now supports NDJSON input filtering.
+- **#87 / #84 / #83** Structured jetstream duration warning + clearer store config errors.
+- **#81 / #95** Graph relationships using Effect Graph module (relationship metadata + richer graph output).
+- **#88** Compact output default (opt out via `--full`).
+
+Open enhancement issues:
+- **#68** Filter DSL discoverability (help text / aliases / error hints).
+- **#93** Store rename command.
+- **#96** Digest command.
+- **#99** Multi-store query.
+
+## Enhancement Phases (2026-01-31)
+
+Goal: resolve remaining enhancement issues with Effect-native, type-safe implementations.
+
+### Phase 1: Filter DSL Discoverability (#68) - Low risk
+
+**Scope**
+- Improve discoverability of the filter DSL without changing semantics.
+
+**Plan**
+- Append a one-line hint to the `--filter` / `--filter-json` option descriptions:
+  - `Tip: run "skygent filter help" for all predicates and aliases.`
+- Improve DSL error messages in `src/cli/filter-dsl.ts`:
+  - When `unsupportedFilterKeys` matches, append the help hint.
+  - When `has:` receives an unknown value, include valid values in the error.
+- Expand examples in `filter help` to include natural guesses (e.g., `from:`, `has:images`).
+- Update docs to surface `skygent filter help` (README + filters docs).
+
+**Tests**
+- Extend `tests/cli/filter-dsl.test.ts` to assert help hint inclusion and valid `has:` value guidance.
+- Add a CLI test to ensure `skygent filter help` prints aliases and examples.
+
+**Acceptance**
+- Users are guided to `filter help` from error messages and `--help` output.
+- No change to filter semantics or parsing behavior.
+
+---
+
+### Phase 2: Store Rename Command (#93) - Medium risk
+
+**Scope**
+- Add `skygent store rename <old> <new>` with safe, atomic updates.
+
+**Plan**
+- Introduce `StoreRenamer` service to orchestrate:
+  - Filesystem rename of store directory (case-only rename safe).
+  - Catalog update (single transaction).
+  - Lineage KV update for the renamed store and dependent stores.
+  - Derivation checkpoint updates across all stores.
+- Optional `--rewrite-provenance` to rewrite event log provenance references (opt-in; expensive).
+- Provide clear CLI errors for missing store, name conflict, or in-use/locked store.
+
+**Effect notes**
+- Use `Effect.acquireUseRelease` for rollback on failure.
+- Use `Effect.onError` to attempt compensating filesystem rename if later steps fail.
+
+**Tests**
+- Service-level rename happy path (catalog, filesystem, lineage, checkpoints).
+- Rename with derived stores (checkpoint references updated).
+- CLI errors: old missing, new exists, same name.
+
+**Acceptance**
+- Renamed store appears with new name across catalog, lineage, and derivation checkpoints.
+- No partial state on failure; rollback attempts occur.
+
+---
+
+### Phase 3: Digest Command (#96) - Medium risk
+
+**Scope**
+- Add `skygent digest <store> --since/--range` for daily briefings.
+
+**Plan**
+- Implement `skygent digest` with JSON output by default; add `--format markdown|table`.
+- Aggregate via `StoreIndex.query` + streaming folds:
+  - Top posts by engagement (like/repost/reply/quote weighted score).
+  - Trending hashtags (count + rank).
+  - New authors (first seen in range).
+  - Post volume buckets (hourly/daily).
+- Keep memory bounded by using `Stream.runFoldEffect` + capped heaps/maps.
+- Reuse existing time parsing (`parseTimeInput`, `parseRange`) for range options.
+
+**Tests**
+- Deterministic digest snapshot on a fixed store fixture.
+- Validate sorting + counts for hashtags/authors.
+
+**Acceptance**
+- Digest runs in bounded memory on large stores.
+- Output is stable and deterministic for a fixed input store.
+
+---
+
+### Phase 4: Multi-store Query (#99) - Higher complexity
+
+**Scope**
+- Support querying across multiple stores with stable ordering.
+
+**Plan**
+- Add store selection options:
+  - `--store` (repeatable), `--stores a,b,c`, and `--all-stores`.
+- Resolve to `StoreRef[]`; fail with a single error listing missing stores.
+- Merge per-store ordered streams using a k-way merge (stable by createdAt, then store + uri).
+- Apply `--limit` after merge to avoid full collection.
+- Ensure output includes `store` for multi-store queries (auto-enable `--include-store`).
+
+**Effect notes**
+- Use `Stream.toPull` + custom merge with a priority queue.
+- Keep progress accounting aggregated across stores with `Ref`.
+
+**Tests**
+- Multi-store merge order correctness.
+- Output includes store label when multiple stores are used.
+- Limit respected across merged streams.
+
+**Acceptance**
+- Multi-store queries return a globally ordered stream with correct filtering.
+
+
 ## Research Notes (Effect Sources Consulted)
 
 Effect solutions topics reviewed: `services-and-layers`, `error-handling`, `config`, `testing`, `cli`.

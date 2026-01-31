@@ -6,6 +6,7 @@ Filters are used to select posts in two different contexts:
 - **Store config filters**: stored in `StoreConfig.filters` and materialized via `store materialize`. These produce saved outputs (views) on disk.
 
 Named filters (`skygent filter create`) can be referenced in the DSL with `@name`.
+Tip: run `skygent filter help` for a compact list of predicates and aliases.
 
 ## Quick start
 

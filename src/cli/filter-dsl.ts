@@ -213,7 +213,8 @@ const normalizeOptionKey = (key: string) =>
 const normalizeFilterKey = (key: string) => key.trim().toLowerCase();
 
 const unsupportedFilterKeys = new Map<string, string>([
-  ["label", "Label filters are not supported yet."]
+  ["label", "Label filters are not supported yet."],
+  ["labels", "Label filters are not supported yet."]
 ]);
 
 const filterKeyHints = new Map<string, string>([
@@ -1049,7 +1050,7 @@ class Parser {
         const unsupported = unsupportedFilterKeys.get(lower);
         if (unsupported) {
           return yield* self.fail(
-            `Unknown filter type "${value}". ${unsupported}`,
+            `Unknown filter type "${value}". ${unsupported}${filterHelpHint}`,
             token.position
           );
         }
@@ -1217,7 +1218,10 @@ class Parser {
             case "embeds":
               return { _tag: "HasEmbed" };
             default:
-              return yield* self.fail(`Unknown has: filter "${baseValue}".`, token.position);
+              return yield* self.fail(
+                `Unknown has: filter "${baseValue}". Use images|video|links|media|embed.`,
+                token.position
+              );
           }
         }
         case "engagement": {
@@ -1463,7 +1467,7 @@ class Parser {
           const unsupported = unsupportedFilterKeys.get(key);
           if (unsupported) {
             return yield* self.fail(
-              `Unknown filter type "${rawKey}". ${unsupported}`,
+              `Unknown filter type "${rawKey}". ${unsupported}${filterHelpHint}`,
               token.position
             );
           }
