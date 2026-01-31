@@ -34,9 +34,13 @@ import {
   strictOption,
   maxErrorsOption,
   parseMaxErrors,
-  parseLimit,
-  parseBoundedIntOption
+  parseLimit
 } from "./shared-options.js";
+import {
+  depthOption as threadDepthOption,
+  parentHeightOption as threadParentHeightOption,
+  parseThreadDepth
+} from "./thread-options.js";
 
 const limitOption = Options.integer("limit").pipe(
   Options.withDescription("Maximum number of Jetstream events to process"),
@@ -46,13 +50,11 @@ const durationOption = Options.text("duration").pipe(
   Options.withDescription("Stop after a duration (e.g. \"2 minutes\")"),
   Options.optional
 );
-const depthOption = Options.integer("depth").pipe(
-  Options.withDescription("Thread reply depth to include (0-1000, default 6)"),
-  Options.optional
+const depthOption = threadDepthOption(
+  "Thread reply depth to include (0-1000, default 6)"
 );
-const parentHeightOption = Options.integer("parent-height").pipe(
-  Options.withDescription("Thread parent height to include (0-1000, default 80)"),
-  Options.optional
+const parentHeightOption = threadParentHeightOption(
+  "Thread parent height to include (0-1000, default 80)"
 );
 
 const parseDuration = (value: Option.Option<string>) =>
@@ -203,15 +205,8 @@ const threadCommand = Command.make(
   },
   ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh }) =>
     Effect.gen(function* () {
-      const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
-      const parsedParentHeight = yield* parseBoundedIntOption(
-        parentHeight,
-        "parent-height",
-        0,
-        1000
-      );
-      const depthValue = Option.getOrUndefined(parsedDepth);
-      const parentHeightValue = Option.getOrUndefined(parsedParentHeight);
+      const { depth: depthValue, parentHeight: parentHeightValue } =
+        yield* parseThreadDepth(depth, parentHeight);
       const source = DataSource.thread(uri, {
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})

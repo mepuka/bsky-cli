@@ -7,19 +7,19 @@ import type { RawPost } from "../domain/raw.js";
 import { renderPostsTable } from "../domain/format.js";
 import { AppConfigService } from "../services/app-config.js";
 import { withExamples } from "./help.js";
-import { postUriArg, parseLimit } from "./shared-options.js";
+import { postUriArg } from "./shared-options.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { renderTableLegacy } from "./doc/table.js";
-import { jsonNdjsonTableFormats, resolveOutputFormat } from "./output-format.js";
+import { jsonNdjsonTableFormats } from "./output-format.js";
+import { emitWithFormat } from "./output-render.js";
+import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
 
-const limitOption = Options.integer("limit").pipe(
-  Options.withDescription("Maximum number of results"),
-  Options.optional
+const limitOption = baseLimitOption.pipe(
+  Options.withDescription("Maximum number of results")
 );
 
-const cursorOption = Options.text("cursor").pipe(
-  Options.withDescription("Pagination cursor"),
-  Options.optional
+const cursorOption = baseCursorOption.pipe(
+  Options.withDescription("Pagination cursor")
 );
 
 const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
@@ -72,27 +72,23 @@ const likesCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
-      const parsedLimit = yield* parseLimit(limit);
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const result = yield* client.getLikes(uri, {
-        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {}),
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
         ...(Option.isSome(cid) ? { cid: cid.value } : {})
       });
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
+        "json",
+        {
+          json: writeJson(result),
+          ndjson: writeJsonStream(Stream.fromIterable(result.likes)),
+          table: writeText(renderLikesTable(result.likes, result.cursor))
+        }
       );
-      if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(result.likes));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderLikesTable(result.likes, result.cursor));
-        return;
-      }
-      yield* writeJson(result);
     })
 ).pipe(
   Command.withDescription(
@@ -110,27 +106,23 @@ const repostedByCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
-      const parsedLimit = yield* parseLimit(limit);
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const result = yield* client.getRepostedBy(uri, {
-        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {}),
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
         ...(Option.isSome(cid) ? { cid: cid.value } : {})
       });
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
+        "json",
+        {
+          json: writeJson(result),
+          ndjson: writeJsonStream(Stream.fromIterable(result.repostedBy)),
+          table: writeText(renderProfileTable(result.repostedBy, result.cursor))
+        }
       );
-      if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(result.repostedBy));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderProfileTable(result.repostedBy, result.cursor));
-        return;
-      }
-      yield* writeJson(result);
     })
 ).pipe(
   Command.withDescription(
@@ -148,31 +140,27 @@ const quotesCommand = Command.make(
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const parser = yield* PostParser;
-      const parsedLimit = yield* parseLimit(limit);
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const result = yield* client.getQuotes(uri, {
-        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {}),
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
         ...(Option.isSome(cid) ? { cid: cid.value } : {})
       });
       const posts = yield* parseRawPosts(parser, result.posts);
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
+        "json",
+        {
+          json: writeJson({
+            ...result,
+            posts
+          }),
+          ndjson: writeJsonStream(Stream.fromIterable(posts)),
+          table: writeText(renderPostsTable(posts))
+        }
       );
-      if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(posts));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderPostsTable(posts));
-        return;
-      }
-      yield* writeJson({
-        ...result,
-        posts
-      });
     })
 ).pipe(
   Command.withDescription(

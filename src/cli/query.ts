@@ -480,12 +480,10 @@ export const queryCommand = Command.make(
 
       const storePostOrder =
         order === "desc" ? Order.reverse(StorePostOrder) : StorePostOrder;
-      const compareStorePosts = (left: StorePost, right: StorePost) =>
-        storePostOrder(left, right);
 
       const merged = mergeOrderedStreams(
         storeStreams.map((entry) => entry.stream),
-        compareStorePosts
+        storePostOrder
       );
 
       const stream = Option.match(limit, {

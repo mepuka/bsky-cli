@@ -32,9 +32,13 @@ import {
   refreshOption,
   strictOption,
   maxErrorsOption,
-  parseMaxErrors,
-  parseBoundedIntOption
+  parseMaxErrors
 } from "./shared-options.js";
+import {
+  depthOption as threadDepthOption,
+  parentHeightOption as threadParentHeightOption,
+  parseThreadDepth
+} from "./thread-options.js";
 
 const intervalOption = Options.text("interval").pipe(
   Options.withDescription(
@@ -50,13 +54,11 @@ const untilOption = Options.text("until").pipe(
   Options.withDescription("Stop after a duration (e.g. \"10 minutes\")"),
   Options.optional
 );
-const depthOption = Options.integer("depth").pipe(
-  Options.withDescription("Thread reply depth to include (0-1000, default 6)"),
-  Options.optional
+const depthOption = threadDepthOption(
+  "Thread reply depth to include (0-1000, default 6)"
 );
-const parentHeightOption = Options.integer("parent-height").pipe(
-  Options.withDescription("Thread parent height to include (0-1000, default 80)"),
-  Options.optional
+const parentHeightOption = threadParentHeightOption(
+  "Thread parent height to include (0-1000, default 80)"
 );
 
 const timelineCommand = Command.make(
@@ -229,15 +231,8 @@ const threadCommand = Command.make(
   },
   ({ uri, depth, parentHeight, filter, filterJson, interval, maxCycles, until, store, quiet, refresh }) =>
     Effect.gen(function* () {
-      const parsedDepth = yield* parseBoundedIntOption(depth, "depth", 0, 1000);
-      const parsedParentHeight = yield* parseBoundedIntOption(
-        parentHeight,
-        "parent-height",
-        0,
-        1000
-      );
-      const depthValue = Option.getOrUndefined(parsedDepth);
-      const parentHeightValue = Option.getOrUndefined(parsedParentHeight);
+      const { depth: depthValue, parentHeight: parentHeightValue } =
+        yield* parseThreadDepth(depth, parentHeight);
       const source = DataSource.thread(uri, {
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})

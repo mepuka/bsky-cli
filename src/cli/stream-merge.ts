@@ -1,8 +1,8 @@
-import { Chunk, Effect, Option, Stream } from "effect";
+import { Chunk, Effect, Option, Order, Stream } from "effect";
 
 export const mergeOrderedStreams = <A, E, R>(
   streams: ReadonlyArray<Stream.Stream<A, E, R>>,
-  compare: (left: A, right: A) => number
+  order: Order.Order<A>
 ): Stream.Stream<A, E, R> => {
   if (streams.length === 0) {
     return Stream.empty;
@@ -76,7 +76,7 @@ export const mergeOrderedStreams = <A, E, R>(
           for (let index = 0; index < heads.length; index += 1) {
             const value = heads[index];
             if (value === undefined) continue;
-            if (selectedIndex < 0 || compare(value, selectedValue as A) < 0) {
+            if (selectedIndex < 0 || order(value, selectedValue as A) < 0) {
               selectedIndex = index;
               selectedValue = value;
             }

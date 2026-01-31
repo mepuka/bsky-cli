@@ -5,12 +5,14 @@ import { AppConfigService } from "../services/app-config.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import { ProfileResolver } from "../services/profile-resolver.js";
 import type { ListItemView, ListView, ProfileView } from "../domain/bsky.js";
-import { decodeActor, parseLimit } from "./shared-options.js";
+import { decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { renderTableLegacy } from "./doc/table.js";
-import { jsonNdjsonTableFormats, resolveOutputFormat } from "./output-format.js";
+import { jsonNdjsonTableFormats } from "./output-format.js";
+import { emitWithFormat } from "./output-render.js";
+import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
 import {
   buildRelationshipGraph,
   relationshipEntries,
@@ -26,14 +28,12 @@ const listUriArg = Args.text({ name: "uri" }).pipe(
   Args.withDescription("Bluesky list URI (at://...)")
 );
 
-const limitOption = Options.integer("limit").pipe(
-  Options.withDescription("Maximum number of results"),
-  Options.optional
+const limitOption = baseLimitOption.pipe(
+  Options.withDescription("Maximum number of results")
 );
 
-const cursorOption = Options.text("cursor").pipe(
-  Options.withDescription("Pagination cursor"),
-  Options.optional
+const cursorOption = baseCursorOption.pipe(
+  Options.withDescription("Pagination cursor")
 );
 
 const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
@@ -135,27 +135,23 @@ const followersCommand = Command.make(
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
-      const parsedLimit = yield* parseLimit(limit);
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
-        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getFollowers(resolvedActor, options);
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
+        "json",
+        {
+          json: writeJson(result),
+          ndjson: writeJsonStream(Stream.fromIterable(result.followers)),
+          table: writeText(renderProfileTable(result.followers, result.cursor))
+        }
       );
-      if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(result.followers));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderProfileTable(result.followers, result.cursor));
-        return;
-      }
-      yield* writeJson(result);
     })
 ).pipe(
   Command.withDescription(
@@ -174,27 +170,23 @@ const followsCommand = Command.make(
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
-      const parsedLimit = yield* parseLimit(limit);
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
-        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getFollows(resolvedActor, options);
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
+        "json",
+        {
+          json: writeJson(result),
+          ndjson: writeJsonStream(Stream.fromIterable(result.follows)),
+          table: writeText(renderProfileTable(result.follows, result.cursor))
+        }
       );
-      if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(result.follows));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderProfileTable(result.follows, result.cursor));
-        return;
-      }
-      yield* writeJson(result);
     })
 ).pipe(
   Command.withDescription(
@@ -213,27 +205,23 @@ const knownFollowersCommand = Command.make(
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
-      const parsedLimit = yield* parseLimit(limit);
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
-        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getKnownFollowers(resolvedActor, options);
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
+        "json",
+        {
+          json: writeJson(result),
+          ndjson: writeJsonStream(Stream.fromIterable(result.followers)),
+          table: writeText(renderProfileTable(result.followers, result.cursor))
+        }
       );
-      if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(result.followers));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderProfileTable(result.followers, result.cursor));
-        return;
-      }
-      yield* writeJson(result);
     })
 ).pipe(
   Command.withDescription(
@@ -340,35 +328,27 @@ const relationshipsCommand = Command.make(
         result.relationships
       );
       const entries = relationshipEntries(graphResult.graph);
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
-      );
-      if (outputFormat === "ndjson") {
-        if (raw) {
-          yield* writeJsonStream(Stream.fromIterable(result.relationships));
-          return;
+        "json",
+        {
+          json: raw
+            ? writeJson(result)
+            : writeJson({
+                actor: nodesByKey.get(resolvedActor) ?? {
+                  did: resolvedActor,
+                  inputs: [actor]
+                },
+                relationships: entries
+              }),
+          ndjson: raw
+            ? writeJsonStream(Stream.fromIterable(result.relationships))
+            : writeJsonStream(Stream.fromIterable(entries)),
+          table: writeText(renderRelationshipsTable(entries))
         }
-        yield* writeJsonStream(Stream.fromIterable(entries));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderRelationshipsTable(entries));
-        return;
-      }
-      if (raw) {
-        yield* writeJson(result);
-        return;
-      }
-      yield* writeJson({
-        actor: nodesByKey.get(resolvedActor) ?? {
-          did: resolvedActor,
-          inputs: [actor]
-        },
-        relationships: entries
-      });
+      );
     })
 ).pipe(
   Command.withDescription(
@@ -386,28 +366,24 @@ const listsCommand = Command.make(
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
       const resolvedActor = yield* decodeActor(actor);
-      const parsedLimit = yield* parseLimit(limit);
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
-        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {}),
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
         ...(Option.isSome(purpose) ? { purposes: [purpose.value] } : {})
       };
       const result = yield* client.getLists(resolvedActor, options);
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
+        "json",
+        {
+          json: writeJson(result),
+          ndjson: writeJsonStream(Stream.fromIterable(result.lists)),
+          table: writeText(renderListTable(result.lists, result.cursor))
+        }
       );
-      if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(result.lists));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderListTable(result.lists, result.cursor));
-        return;
-      }
-      yield* writeJson(result);
     })
 ).pipe(
   Command.withDescription(
@@ -425,29 +401,25 @@ const listCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
-      const parsedLimit = yield* parseLimit(limit);
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
-        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getList(uri, options);
-      const outputFormat = resolveOutputFormat(
+      const header = `${result.list.name} (${result.list.purpose}) by ${result.list.creator.handle}`;
+      const body = renderListItemsTable(result.items, result.cursor);
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
+        "json",
+        {
+          json: writeJson(result),
+          ndjson: writeJsonStream(Stream.fromIterable(result.items)),
+          table: writeText(`${header}\n\n${body}`)
+        }
       );
-      if (outputFormat === "ndjson") {
-        yield* writeJsonStream(Stream.fromIterable(result.items));
-        return;
-      }
-      if (outputFormat === "table") {
-        const header = `${result.list.name} (${result.list.purpose}) by ${result.list.creator.handle}`;
-        const body = renderListItemsTable(result.items, result.cursor);
-        yield* writeText(`${header}\n\n${body}`);
-        return;
-      }
-      yield* writeJson(result);
     })
 ).pipe(
   Command.withDescription(
@@ -464,31 +436,26 @@ const blocksCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
-      const parsedLimit = yield* parseLimit(limit);
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
-        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getBlocks(options);
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
-      );
-      if (outputFormat === "ndjson") {
-        if (result.blocks.length === 0) {
-          yield* writeText("[]");
-          return;
+        "json",
+        {
+          json: writeJson(result),
+          ndjson:
+            result.blocks.length === 0
+              ? writeText("[]")
+              : writeJsonStream(Stream.fromIterable(result.blocks)),
+          table: writeText(renderProfileTable(result.blocks, result.cursor))
         }
-        yield* writeJsonStream(Stream.fromIterable(result.blocks));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderProfileTable(result.blocks, result.cursor));
-        return;
-      }
-      yield* writeJson(result);
+      );
     })
 ).pipe(
   Command.withDescription(
@@ -505,31 +472,26 @@ const mutesCommand = Command.make(
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const client = yield* BskyClient;
-      const parsedLimit = yield* parseLimit(limit);
+      const { limit: limitValue, cursor: cursorValue } = yield* parsePagination(limit, cursor);
       const options = {
-        ...(Option.isSome(parsedLimit) ? { limit: parsedLimit.value } : {}),
-        ...(Option.isSome(cursor) ? { cursor: cursor.value } : {})
+        ...(limitValue !== undefined ? { limit: limitValue } : {}),
+        ...(cursorValue !== undefined ? { cursor: cursorValue } : {})
       };
       const result = yield* client.getMutes(options);
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         appConfig.outputFormat,
         jsonNdjsonTableFormats,
-        "json"
-      );
-      if (outputFormat === "ndjson") {
-        if (result.mutes.length === 0) {
-          yield* writeText("[]");
-          return;
+        "json",
+        {
+          json: writeJson(result),
+          ndjson:
+            result.mutes.length === 0
+              ? writeText("[]")
+              : writeJsonStream(Stream.fromIterable(result.mutes)),
+          table: writeText(renderProfileTable(result.mutes, result.cursor))
         }
-        yield* writeJsonStream(Stream.fromIterable(result.mutes));
-        return;
-      }
-      if (outputFormat === "table") {
-        yield* writeText(renderProfileTable(result.mutes, result.cursor));
-        return;
-      }
-      yield* writeJson(result);
+      );
     })
 ).pipe(
   Command.withDescription(
