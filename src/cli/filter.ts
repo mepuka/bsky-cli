@@ -4,7 +4,7 @@ import { Chunk, Clock, Effect, Option, Stream } from "effect";
 import { StoreQuery } from "../domain/events.js";
 import { RawPost } from "../domain/raw.js";
 import type { Post } from "../domain/post.js";
-import { StoreName } from "../domain/primitives.js";
+import { PostUri, StoreName } from "../domain/primitives.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { FilterCompiler } from "../services/filter-compiler.js";
 import { FilterLibrary } from "../services/filter-library.js";
@@ -37,6 +37,7 @@ const postJsonOption = Options.text("post-json").pipe(
   Options.optional
 );
 const postUriOption = Options.text("post-uri").pipe(
+  Options.withSchema(PostUri),
   Options.withDescription("Bluesky post URI (at://...)."),
   Options.optional
 );
