@@ -355,13 +355,12 @@ export const queryCommand = Command.make(
       }
 
       if (
-        hasFilter &&
         Option.isNone(limit) &&
-        (outputFormat === "thread" || outputFormat === "table")
+        (outputFormat === "thread" || outputFormat === "table" || outputFormat === "markdown")
       ) {
         yield* output
           .writeStderr(
-            "Warning: thread/table output collects all matched posts in memory. Consider adding --limit."
+            "Warning: table/markdown/thread output collects all matched posts in memory. Consider adding --limit."
           )
           .pipe(Effect.catchAll(() => Effect.void));
       }

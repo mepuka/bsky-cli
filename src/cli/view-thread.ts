@@ -11,7 +11,7 @@ import { StoreIndex } from "../services/store-index.js";
 import { SyncEngine } from "../services/sync-engine.js";
 import { renderThread } from "./doc/thread.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
-import { writeJson, writeText } from "./output.js";
+import { CliOutput, writeJson, writeText } from "./output.js";
 import { storeOptions } from "./store.js";
 import { withExamples } from "./help.js";
 import { CliInputError } from "./errors.js";
@@ -72,6 +72,7 @@ export const threadCommand = Command.make(
   },
   ({ uri, store, compact, ansi, width, format, depth, parentHeight }) =>
     Effect.gen(function* () {
+      const output = yield* CliOutput;
       const outputFormat = Option.getOrElse(format, () => "text" as const);
       const w = Option.getOrUndefined(width);
       const { depth: depthValue, parentHeight: parentHeightValue } =
@@ -84,6 +85,14 @@ export const threadCommand = Command.make(
       if (Option.isSome(store)) {
         const index = yield* StoreIndex;
         const storeRef = yield* storeOptions.loadStoreRef(store.value);
+        const totalPosts = yield* index.count(storeRef);
+        if (totalPosts > 20000) {
+          yield* output
+            .writeStderr(
+              `ℹ️  Store ${storeRef.name} has ${totalPosts} posts. Thread rendering will load all posts into memory.`
+            )
+            .pipe(Effect.catchAll(() => Effect.void));
+        }
         const hasTarget = yield* index.hasUri(storeRef, uri);
         if (!hasTarget) {
           const engine = yield* SyncEngine;
