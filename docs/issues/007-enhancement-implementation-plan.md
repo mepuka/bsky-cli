@@ -10,7 +10,7 @@
 - **Default output format:** Compact is the preferred "gold" default for agent-facing CLI outputs.
 - **`skygent pipe` input:** Accept **raw post NDJSON** (raw Bluesky post objects) to keep parsing consistent and robust.
 - **Open questions resolved (93 + 99):**
-  - **Store rename (#93):** Update catalog, store filesystem root, derivation checkpoints, and lineage records. **Do not rewrite historical event log provenance by default** (expensive); provide an optional `--rewrite-provenance` for full migration.
+  - **Store rename (#93):** Update catalog, store filesystem root, derivation checkpoints, and lineage records. **Do not rewrite historical event log provenance** (expensive + audit-sensitive); defer `--rewrite-provenance` to a follow-up issue if needed.
   - **Multi-store query (#99):** Treat `--scan-limit` as **per-store** to preserve current semantics and predictability; apply `--limit` **globally** after merge. For output, include `store` on JSON/NDJSON results and **reject non-JSON formats** unless `--format` explicitly supports multi-store (table/thread will warn + require `--format json|ndjson|compact`).
 
 ---
@@ -95,7 +95,7 @@ These items are used to justify API choices and deterministic stream behavior:
 
 **Chosen resolution:**
 - **Update**: catalog row, store root path, derivation checkpoints (source + target), lineage KV.
-- **Optional**: `--rewrite-provenance` updates `event_log` JSON payloads containing `sourceStore`.
+- **Out of scope**: `event_log` provenance rewrite (defer to follow-up issue if required).
 
 **Implementation details**
 1) Validate: new name passes `StoreName` schema, old exists, new does not.
@@ -105,7 +105,8 @@ These items are used to justify API choices and deterministic stream behavior:
    - `target_store` updates inside renamed store.
    - `source_store` updates across all stores.
 5) Update lineage KV (`stores/<name>/lineage` + sources list).
-6) Optional `--rewrite-provenance`: update `event_log` payload JSON.
+6) If directory is missing, still rename metadata; return `moved: false` in output.
+7) Case-only rename should use a temp name to avoid case-insensitive FS collisions.
 
 **Files**
 - `src/services/store-manager.ts` (new `renameStore` API)
@@ -113,10 +114,13 @@ These items are used to justify API choices and deterministic stream behavior:
 - `src/services/view-checkpoint-store.ts`
 - `src/services/lineage-store.ts`
 - `src/cli/store.ts` (new `rename` subcommand)
+ - `src/services/store-renamer.ts` (orchestrates rollback + case-only renames)
 
 **Tests**
 - Rename integration test: store exists after rename, old missing, derived checkpoints consistent.
 - Lineage test: `store tree` still resolves sources.
+ - Case-only rename path (macOS/Windows behavior).
+ - Missing directory returns `moved: false` but updates metadata.
 
 **Risk**: Medium (data integrity). Requires transactional updates and careful error handling.
 
