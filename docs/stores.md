@@ -28,6 +28,10 @@ The internal `kv/` structure is not stable; treat it as implementation detail.
 When creating a store you can provide a `StoreConfig` JSON. It controls filter materialization outputs.
 Currently only `filters` are used by the CLI; `format`, `autoSync`, and `syncInterval` are stored for future use.
 
+**Idempotency:** `store create` is idempotent — if the store already exists, it returns the
+existing store reference. The provided `--config-json` is ignored for existing stores; config
+is only applied on first creation. To change config, delete and recreate the store.
+
 Note: `StoreConfig.filters` are **materialized views**, not sync/query filters. Use `--filter` / `--filter-json` on
 `sync` or `query` to filter ingestion and query results.
 

@@ -8,7 +8,16 @@ bun run index.ts <command>
 
 ## Global options
 
-These can be used with any command and override config/env defaults:
+These options are defined on the root `skygent` command and override config/env defaults.
+**Placement:** global options must appear after the subcommand name, not before it.
+
+```bash
+# Correct — global flags after subcommand:
+skygent query my-store --full --limit 5
+
+# Wrong — will fail:
+skygent --full query my-store --limit 5
+```
 
 - `--service <url>`: Override Bluesky service URL.
 - `--store-root <path>`: Override storage root directory.
@@ -16,6 +25,7 @@ These can be used with any command and override config/env defaults:
 - `--identifier <handle>`: Override Bluesky identifier.
 - `--password <value>`: Override Bluesky password (redacted).
 - `--full`: Use verbose JSON output (compact is the default).
+- `--compact`: Use compact JSON output (default).
 
 Tips:
 
@@ -28,7 +38,7 @@ Tips:
 
 Manage stores.
 
-- `store create <name> [--config-json '<StoreConfig JSON>']`
+- `store create <name> [--config-json '<StoreConfig JSON>']` — idempotent: returns existing store if it already exists
 - `store list`
 - `store show <name>`
 - `store stats <name>`
@@ -60,6 +70,10 @@ Provide store config as JSON (single quotes recommended):
 bun run index.ts store create my-store \
   --config-json '{"format":{"json":true,"markdown":false},"autoSync":false,"filters":[]}'
 ```
+
+**Note:** `store create` is idempotent. If the store already exists, it returns the existing
+store reference and `--config-json` is silently ignored. There is currently no command to
+update a store's configuration after creation — delete and recreate to change config.
 
 ### sync
 

@@ -147,7 +147,11 @@ export const pipeCommand = Command.make(
         "cat posts.ndjson | skygent pipe --filter-json '{\"_tag\":\"All\"}'"
       ],
       [
-        "Note: stdin must be raw post NDJSON or skygent post NDJSON (from query --format ndjson)."
+        "Accepts three input formats: raw Bluesky API post NDJSON (with record field),",
+        "skygent Post NDJSON (from query --format ndjson), or {store, post} NDJSON",
+        "(from query --format ndjson --include-store).",
+        "Note: compact query output (default) works but has fewer fields for filtering.",
+        "Use --full for richer filtering: skygent --full query ... --format ndjson | skygent pipe ..."
       ]
     )
   )
