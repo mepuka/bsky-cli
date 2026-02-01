@@ -1,5 +1,16 @@
 # @mepuka/skygent
 
+## 0.3.2
+
+### Patch Changes
+
+- Fix global flag placement docs, add missing CLI commands, correct pipe compatibility
+
+  - Global flags must appear before the subcommand (not after) for commands with positional args
+  - Add missing commands to cli.md: sync list, watch list, view thread, pipe
+  - Add --max-cycles and --until to all watch command docs
+  - Correct pipe docs: compact output is not compatible with pipe (fails schema validation)
+
 ## 0.3.1
 
 ### Patch Changes
