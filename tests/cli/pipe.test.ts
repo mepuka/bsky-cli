@@ -64,7 +64,8 @@ const makeOutputCapture = () => {
 
 const makeInputLayer = (lines: ReadonlyArray<string>) => {
   const service: CliInputService = {
-    lines: Stream.fromIterable(lines)
+    lines: Stream.fromIterable(lines),
+    isTTY: false
   };
   return Layer.succeed(CliInput, CliInput.of(service));
 };
