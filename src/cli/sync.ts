@@ -5,7 +5,7 @@ import { filterExprSignature } from "../domain/filter.js";
 import { DataSource, SyncResult } from "../domain/sync.js";
 import { JetstreamSyncEngine } from "../services/jetstream-sync.js";
 import { storeOptions } from "./store.js";
-import { logInfo, makeSyncReporter } from "./logging.js";
+import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { OutputManager } from "../services/output-manager.js";
@@ -15,7 +15,8 @@ import { parseFilterExpr } from "./filter-input.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { CliInputError } from "./errors.js";
-import { makeSyncCommandBody } from "./sync-factory.js";
+import { makeSyncCommandBody, resolveCacheLimit, resolveCacheMode } from "./sync-factory.js";
+import { cacheStoreImages } from "./image-cache.js";
 import {
   feedUriArg,
   listUriArg,
@@ -30,6 +31,9 @@ import {
   includePinsOption,
   quietOption,
   refreshOption,
+  cacheImagesOption,
+  cacheImagesModeOption,
+  cacheImagesLimitOption,
   strictOption,
   maxErrorsOption
 } from "./shared-options.js";
@@ -65,7 +69,17 @@ const parentHeightOption = threadParentHeightOption(
 
 const timelineCommand = Command.make(
   "timeline",
-  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
+  {
+    store: storeNameOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    quiet: quietOption,
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption,
+    limit: syncLimitOption
+  },
   makeSyncCommandBody("timeline", () => DataSource.timeline())
 ).pipe(
   Command.withDescription(
@@ -82,7 +96,18 @@ const timelineCommand = Command.make(
 
 const feedCommand = Command.make(
   "feed",
-  { uri: feedUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
+  {
+    uri: feedUriArg,
+    store: storeNameOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    quiet: quietOption,
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption,
+    limit: syncLimitOption
+  },
   ({ uri, ...rest }) => makeSyncCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
 ).pipe(
   Command.withDescription(
@@ -98,7 +123,18 @@ const feedCommand = Command.make(
 
 const listCommand = Command.make(
   "list",
-  { uri: listUriArg, store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
+  {
+    uri: listUriArg,
+    store: storeNameOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    quiet: quietOption,
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption,
+    limit: syncLimitOption
+  },
   ({ uri, ...rest }) => makeSyncCommandBody("list", () => DataSource.list(uri), { uri })(rest)
 ).pipe(
   Command.withDescription(
@@ -114,7 +150,17 @@ const listCommand = Command.make(
 
 const notificationsCommand = Command.make(
   "notifications",
-  { store: storeNameOption, filter: filterOption, filterJson: filterJsonOption, quiet: quietOption, refresh: refreshOption, limit: syncLimitOption },
+  {
+    store: storeNameOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    quiet: quietOption,
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption,
+    limit: syncLimitOption
+  },
   makeSyncCommandBody("notifications", () => DataSource.notifications())
 ).pipe(
   Command.withDescription(
@@ -137,9 +183,12 @@ const authorCommand = Command.make(
     postFilterJson: postFilterJsonOption,
     quiet: quietOption,
     refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption,
     limit: syncLimitOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh, limit }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, limit }) =>
     Effect.gen(function* () {
       const apiFilter = Option.getOrUndefined(filter);
       const source = DataSource.author(actor, {
@@ -157,6 +206,9 @@ const authorCommand = Command.make(
         filterJson: postFilterJson,
         quiet,
         refresh,
+        cacheImages,
+        cacheImagesMode,
+        cacheImagesLimit,
         limit
       });
     })
@@ -184,9 +236,12 @@ const threadCommand = Command.make(
     filterJson: filterJsonOption,
     quiet: quietOption,
     refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption,
     limit: syncLimitOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh, limit }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, limit }) =>
     Effect.gen(function* () {
       const { depth: depthValue, parentHeight: parentHeightValue } =
         parseThreadDepth(depth, parentHeight);
@@ -199,7 +254,7 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, quiet, refresh, limit });
+      return yield* run({ store, filter, filterJson, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, limit });
     })
 ).pipe(
   Command.withDescription(
@@ -227,6 +282,9 @@ const jetstreamCommand = Command.make(
     cursor: jetstreamOptions.cursor,
     compress: jetstreamOptions.compress,
     maxMessageSize: jetstreamOptions.maxMessageSize,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption,
     limit: jetstreamLimitOption,
     duration: durationOption,
     strict: strictOption,
@@ -243,6 +301,9 @@ const jetstreamCommand = Command.make(
     cursor,
     compress,
     maxMessageSize,
+    cacheImages,
+    cacheImagesMode,
+    cacheImagesLimit,
     limit,
     duration,
     strict,
@@ -311,6 +372,39 @@ const jetstreamCommand = Command.make(
         });
       }
       const totalPosts = yield* index.count(storeRef);
+      if (cacheImages) {
+        const mode = resolveCacheMode(cacheImagesMode);
+        const cacheLimit = resolveCacheLimit(mode, result.postsAdded, cacheImagesLimit);
+        const shouldRun = mode === "full" || result.postsAdded > 0;
+        if (shouldRun && cacheLimit !== 0) {
+          yield* Effect.gen(function* () {
+            if (mode === "full") {
+              yield* logWarn("Running full image cache scan", {
+                store: storeRef.name,
+                source: "jetstream"
+              });
+            }
+            yield* logInfo("Caching image embeds", {
+              store: storeRef.name,
+              source: "jetstream",
+              postsAdded: result.postsAdded
+            });
+            const cacheResult = yield* cacheStoreImages(storeRef, {
+              includeThumbnails: true,
+              ...(cacheLimit !== undefined ? { limit: cacheLimit } : {})
+            });
+            yield* logInfo("Image cache complete", cacheResult);
+          }).pipe(
+            Effect.catchAll((error) =>
+              logWarn("Image cache failed", {
+                store: storeRef.name,
+                source: "jetstream",
+                error
+              }).pipe(Effect.orElseSucceed(() => undefined))
+            )
+          );
+        }
+      }
       yield* logInfo("Sync complete", { source: "jetstream", store: storeRef.name });
       yield* writeJson({ ...(result as SyncResult), totalPosts });
     })

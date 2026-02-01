@@ -4,7 +4,7 @@ import { ActorId, AtUri, PostUri, StoreName } from "../domain/primitives.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { CliInputError } from "./errors.js";
 import { formatSchemaError } from "./shared.js";
-import { NonNegativeInt } from "./option-schemas.js";
+import { NonNegativeInt, PositiveInt } from "./option-schemas.js";
 
 /** --store option with StoreName schema validation */
 export const storeNameOption = Options.text("store").pipe(
@@ -44,6 +44,28 @@ export const quietOption = Options.boolean("quiet").pipe(
 /** --refresh flag to update existing posts instead of deduping */
 export const refreshOption = Options.boolean("refresh").pipe(
   Options.withDescription("Refresh existing posts instead of deduping")
+);
+
+/** --cache-images flag to fetch image embeds after sync/watch */
+export const cacheImagesOption = Options.boolean("cache-images").pipe(
+  Options.withDescription("Fetch and cache image embeds after sync/watch")
+);
+
+export const cacheImagesModeValues = ["new", "full"] as const;
+export type CacheImagesMode = typeof cacheImagesModeValues[number];
+
+export const cacheImagesModeOption = Options.choice(
+  "cache-images-mode",
+  cacheImagesModeValues
+).pipe(
+  Options.withDescription("Cache images for new posts only (new) or full store scan (full)"),
+  Options.optional
+);
+
+export const cacheImagesLimitOption = Options.integer("cache-images-limit").pipe(
+  Options.withSchema(PositiveInt),
+  Options.withDescription("Maximum number of posts to scan when caching images"),
+  Options.optional
 );
 
 /** --strict flag to stop on first error */

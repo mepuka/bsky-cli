@@ -4,6 +4,8 @@ import { ann, metric } from "./primitives.js";
 import { collapseWhitespace, normalizeWhitespace, truncate } from "../../domain/format.js";
 import type { Post } from "../../domain/post.js";
 import type { PostEmbed } from "../../domain/bsky.js";
+import { isEmbedExternal, isEmbedImages, isEmbedVideo } from "../../domain/bsky.js";
+import { extractImageRefs } from "../../domain/embeds.js";
 
 type SDoc = Doc.Doc<Annotation>;
 
@@ -19,6 +21,27 @@ const renderEmbedSummary = (embed: PostEmbed): SDoc => {
           : "[Quote]"
       );
     case "RecordWithMedia":
+      if (isEmbedImages(embed.media)) {
+        return Doc.text(
+          embed.record._tag === "RecordView"
+            ? `[Quote: @${embed.record.author.handle} + ${embed.media.images.length} images]`
+            : `[Quote + ${embed.media.images.length} images]`
+        );
+      }
+      if (isEmbedExternal(embed.media)) {
+        return Doc.text(
+          embed.record._tag === "RecordView"
+            ? `[Quote: @${embed.record.author.handle} + Link]`
+            : "[Quote + Link]"
+        );
+      }
+      if (isEmbedVideo(embed.media)) {
+        return Doc.text(
+          embed.record._tag === "RecordView"
+            ? `[Quote: @${embed.record.author.handle} + Video]`
+            : "[Quote + Video]"
+        );
+      }
       return Doc.text(
         embed.record._tag === "RecordView"
           ? `[Quote: @${embed.record.author.handle} + media]`
@@ -26,6 +49,68 @@ const renderEmbedSummary = (embed: PostEmbed): SDoc => {
       );
     default:          return Doc.text("[Embed]");
   }
+};
+
+const compactEmbedLabel = (embed: PostEmbed): string => {
+  switch (embed._tag) {
+    case "Images":
+      return `${embed.images.length}img`;
+    case "External":
+      return "link";
+    case "Video":
+      return "video";
+    case "Record":
+      return "quote";
+    case "RecordWithMedia":
+      if (isEmbedImages(embed.media)) return `quote+${embed.media.images.length}img`;
+      if (isEmbedExternal(embed.media)) return "quote+link";
+      if (isEmbedVideo(embed.media)) return "quote+video";
+      return "quote+media";
+    default:
+      return "embed";
+  }
+};
+
+const detailMaxWidth = (lineWidth?: number) =>
+  lineWidth ? Math.max(20, lineWidth - 6) : 80;
+
+const renderEmbedDetails = (
+  embed: PostEmbed,
+  options?: { lineWidth?: number }
+): ReadonlyArray<SDoc> => {
+  const lines: SDoc[] = [ann("embed", renderEmbedSummary(embed))];
+  const maxWidth = detailMaxWidth(options?.lineWidth);
+  const addDetail = (label: string, value: string) => {
+    const normalized = truncate(collapseWhitespace(value), maxWidth);
+    if (normalized.length > 0) {
+      lines.push(ann("dim", Doc.text(`${label}: ${normalized}`)));
+    }
+  };
+
+  const imageRefs = extractImageRefs(embed);
+  const altTexts = imageRefs
+    .map((ref) => ref.alt)
+    .filter((alt): alt is string => typeof alt === "string" && alt.trim().length > 0);
+  const shownAlt = altTexts.slice(0, 2);
+  for (const alt of shownAlt) {
+    addDetail("alt", alt);
+  }
+  if (altTexts.length > shownAlt.length) {
+    lines.push(ann("dim", Doc.text(`alt: +${altTexts.length - shownAlt.length} more`)));
+  }
+
+  if (embed._tag === "Video" && embed.alt) {
+    addDetail("alt", embed.alt);
+  }
+
+  if (embed._tag === "External" && embed.description) {
+    addDetail("desc", embed.description);
+  }
+  if (embed._tag === "RecordWithMedia" && isEmbedExternal(embed.media) && embed.media.description) {
+    addDetail("desc", embed.media.description);
+  }
+
+  return lines;
 };
 
 const wrapText = (text: string, maxWidth?: number): ReadonlyArray<string> => {
@@ -86,6 +171,9 @@ export const renderPostCompact = (post: Post): SDoc => {
     if (m.repostCount != null && m.repostCount > 0) parts.push(metric("↻", m.repostCount));
     if (m.replyCount != null && m.replyCount > 0) parts.push(metric("💬", m.replyCount));
   }
+  if (post.embed) {
+    parts.push(ann("embed", Doc.text(compactEmbedLabel(post.embed))));
+  }
   return Doc.hsep(parts);
 };
 
@@ -104,7 +192,7 @@ export const renderPostCard = (post: Post): ReadonlyArray<SDoc> => {
   const paragraphs = normalizeWhitespace(text).split("\n");
   lines.push(Doc.vsep(paragraphs.map((paragraph) => Doc.reflow(paragraph))));
 
-  if (post.embed) lines.push(ann("embed", renderEmbedSummary(post.embed)));
+  if (post.embed) lines.push(...renderEmbedDetails(post.embed));
 
   if (post.metrics) {
     const parts: SDoc[] = [];
@@ -138,7 +226,7 @@ export const renderPostCardLines = (
   }
 
   if (post.embed) {
-    lines.push(ann("embed", renderEmbedSummary(post.embed)));
+    lines.push(...renderEmbedDetails(post.embed, options));
   }
 
   if (post.metrics) {

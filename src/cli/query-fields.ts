@@ -13,8 +13,11 @@ export type FieldSelectorsResolution = {
 };
 
 const fieldPresets: Record<string, ReadonlyArray<string>> = {
-  minimal: ["uri", "author", "text", "createdAt"],
-  social: ["uri", "author", "text", "metrics", "hashtags"],
+  minimal: ["uri", "author", "text", "createdAt", "embedSummary"],
+  social: ["uri", "author", "text", "metrics", "hashtags", "embedSummary"],
+  images: ["uri", "author", "text", "createdAt", "images"],
+  embeds: ["uri", "author", "text", "createdAt", "embedSummary"],
+  media: ["uri", "author", "text", "createdAt", "images", "embedSummary"],
   full: []
 };
 

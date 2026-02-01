@@ -238,6 +238,10 @@ const filterKeyHints = new Map<string, string>([
   ["tags", "hashtagin:#ai,#ml"],
   ["hashtags", "hashtagin:#ai,#ml"],
   ["engagement", "engagement:minLikes=100"],
+  ["min-images", "min-images:2"],
+  ["minimages", "min-images:2"],
+  ["alt-text", "alt-text:accessibility"],
+  ["alttext", "alt-text:accessibility"],
   ["since", "since:24h"],
   ["until", "until:2026-01-01T00:00:00Z"],
   ["age", "age:<24h"]
@@ -288,6 +292,18 @@ const filterSuggestions: ReadonlyArray<FilterSuggestion> = [
   {
     keys: ["hasembed", "embed", "embeds"],
     suggestions: ["has:embed"]
+  },
+  {
+    keys: ["mimages", "minimages", "min-images"],
+    suggestions: ["min-images:2"]
+  },
+  {
+    keys: ["alttext", "alt-text"],
+    suggestions: ["alt-text:accessibility"]
+  },
+  {
+    keys: ["noalttext", "no-alt-text"],
+    suggestions: ["no-alt-text"]
   },
   {
     keys: ["language", "lang"],
@@ -1029,6 +1045,9 @@ class Parser {
       if (lower === "hasimages" || lower === "hasimage" || lower === "images" || lower === "image") {
         return { _tag: "HasImages" };
       }
+      if (lower === "no-alt-text" || lower === "noalttext") {
+        return { _tag: "NoAltText" };
+      }
       if (lower === "hasvideo" || lower === "hasvideos" || lower === "video" || lower === "videos") {
         return { _tag: "HasVideo" };
       }
@@ -1202,7 +1221,8 @@ class Parser {
             return yield* self.fail(`Missing value for "${key}".`, token.position);
           }
           yield* ensureNoUnknownOptions(options, self.input);
-          switch (baseValue.toLowerCase()) {
+          const normalized = baseValue.toLowerCase().replace(/[-_]/g, "");
+          switch (normalized) {
             case "images":
             case "image":
               return { _tag: "HasImages" };
@@ -1217,12 +1237,56 @@ class Parser {
             case "embed":
             case "embeds":
               return { _tag: "HasEmbed" };
+            case "alttext":
+              return { _tag: "HasAltText" };
             default:
               return yield* self.fail(
-                `Unknown has: filter "${baseValue}". Use images|video|links|media|embed.`,
+                `Unknown has: filter "${baseValue}". Use images|video|links|media|embed|alt-text.`,
                 token.position
               );
           }
+        }
+        case "min-images":
+        case "minimages":
+        case "minimage": {
+          if (baseValue.length === 0) {
+            return yield* self.fail(`Missing value for "${key}".`, token.position);
+          }
+          yield* ensureNoUnknownOptions(options, self.input);
+          const min = Number(baseValue);
+          if (!Number.isInteger(min) || min < 1) {
+            return yield* self.fail("min-images must be an integer >= 1.", basePosition);
+          }
+          return { _tag: "MinImages", min };
+        }
+        case "alt-text":
+        case "alttext": {
+          if (baseValue.length === 0) {
+            return yield* self.fail(`Missing value for "${key}".`, token.position);
+          }
+          const flagsOption = yield* takeOption(options, ["flags"], "flags", self.input);
+          const trimmed = stripQuotes(baseValueRaw);
+          const isRegex = trimmed.startsWith("/") && trimmed.lastIndexOf("/") > 0;
+          if (isRegex || flagsOption) {
+            const { pattern, flags } = parseRegexValue(baseValueRaw);
+            if (pattern.length === 0) {
+              return yield* self.fail("Alt-text regex pattern cannot be empty.", token.position);
+            }
+            if (flags && flagsOption) {
+              return yield* self.fail("Alt-text regex flags specified twice.", flagsOption.position);
+            }
+            const optionFlags = flagsOption ? stripQuotes(flagsOption.value) : undefined;
+            if (flagsOption && optionFlags !== undefined && optionFlags.length === 0) {
+              return yield* self.fail("Alt-text regex flags cannot be empty.", flagsOption.position);
+            }
+            yield* ensureNoUnknownOptions(options, self.input);
+            const resolvedFlags = optionFlags ?? flags;
+            return resolvedFlags
+              ? { _tag: "AltTextRegex", pattern, flags: resolvedFlags }
+              : { _tag: "AltTextRegex", pattern };
+          }
+          yield* ensureNoUnknownOptions(options, self.input);
+          return { _tag: "AltText", text: baseValue };
         }
         case "engagement": {
           let resolvedValue = baseValue;

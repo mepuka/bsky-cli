@@ -22,7 +22,7 @@
  * - `Hashtag`, `HashtagIn`: Match by hashtag
  * - `Contains`: Text substring matching
  * - `IsReply`, `IsQuote`, `IsRepost`, `IsOriginal`: Post type matching
- * - `HasImages`, `HasVideo`, `HasLinks`, `HasMedia`, `HasEmbed`: Media detection
+ * - `HasImages`, `MinImages`, `HasAltText`, `NoAltText`, `AltText`, `AltTextRegex`, `HasVideo`, `HasLinks`, `HasMedia`, `HasEmbed`: Media detection
  * - `Engagement`: Threshold-based engagement matching
  * - `Language`: Language code matching
  * - `Regex`: Regular expression pattern matching
@@ -76,6 +76,7 @@ import type { FilterExpr } from "../domain/filter.js";
 import type { FilterErrorPolicy } from "../domain/policies.js";
 import type { Post } from "../domain/post.js";
 import type { FilterExplanation } from "../domain/filter-explain.js";
+import { extractImageRefs } from "../domain/embeds.js";
 import type { LinkValidatorService } from "./link-validator.js";
 import type { TrendingTopicsService } from "./trending-topics.js";
 
@@ -127,12 +128,30 @@ const hasExternalLink = (post: Post) => {
   return embedMediaTag(post.embed) === "External";
 };
 
-const hasImages = (post: Post) => {
-  const tag = embedTag(post.embed);
-  if (tag === "Images") {
-    return true;
+const imageRefs = (post: Post) => extractImageRefs(post.embed);
+
+const hasImages = (post: Post) => imageRefs(post).length > 0;
+
+const hasAltText = (post: Post) => {
+  const refs = imageRefs(post);
+  if (refs.length === 0) return false;
+  return refs.every((ref) => typeof ref.alt === "string" && ref.alt.trim().length > 0);
+};
+
+const hasMissingAltText = (post: Post) => {
+  const refs = imageRefs(post);
+  if (refs.length === 0) return false;
+  return refs.some((ref) => !ref.alt || ref.alt.trim().length === 0);
+};
+
+const altTextMatches = (post: Post, predicate: (value: string) => boolean) => {
+  const refs = imageRefs(post);
+  for (const ref of refs) {
+    if (ref.alt && predicate(ref.alt)) {
+      return true;
+    }
   }
-  return embedMediaTag(post.embed) === "Images";
+  return false;
 };
 
 const hasVideo = (post: Post) => {
@@ -352,6 +371,54 @@ const buildExplanation = (
             ok: hasImages(post),
             detail: `hasImages=${hasImages(post)}`
           });
+      case "MinImages":
+        return (post: Post) => {
+          const count = imageRefs(post).length;
+          const ok = count >= expr.min;
+          return Effect.succeed({
+            _tag: "MinImages",
+            ok,
+            detail: `imageCount=${count}, min=${expr.min}`
+          });
+        };
+      case "HasAltText":
+        return (post: Post) =>
+          Effect.succeed({
+            _tag: "HasAltText",
+            ok: hasAltText(post),
+            detail: `hasAltText=${hasAltText(post)}`
+          });
+      case "NoAltText":
+        return (post: Post) =>
+          Effect.succeed({
+            _tag: "NoAltText",
+            ok: hasMissingAltText(post),
+            detail: `missingAltText=${hasMissingAltText(post)}`
+          });
+      case "AltText": {
+        const needle = expr.text.toLowerCase();
+        return (post: Post) =>
+          Effect.succeed({
+            _tag: "AltText",
+            ok: altTextMatches(post, (value) => value.toLowerCase().includes(needle)),
+            detail: `needle=${expr.text}`
+          });
+      }
+      case "AltTextRegex": {
+        const compiled = yield* Effect.try({
+          try: () => new RegExp(expr.pattern, expr.flags),
+          catch: (error) =>
+            FilterCompileError.make({
+              message: `Invalid regex "${expr.pattern}": ${messageFromError(error)}`
+            })
+        });
+        return (post: Post) =>
+          Effect.succeed({
+            _tag: "AltTextRegex",
+            ok: altTextMatches(post, (value) => regexMatches(compiled, value)),
+            detail: `pattern=/${expr.pattern}/${expr.flags ?? ""}`
+          });
+      }
       case "HasVideo":
         return (post: Post) =>
           Effect.succeed({
@@ -603,6 +670,28 @@ const buildPredicate = (
         };
       case "HasImages":
         return (post: Post) => Effect.succeed(hasImages(post));
+      case "MinImages":
+        return (post: Post) => Effect.succeed(imageRefs(post).length >= expr.min);
+      case "HasAltText":
+        return (post: Post) => Effect.succeed(hasAltText(post));
+      case "NoAltText":
+        return (post: Post) => Effect.succeed(hasMissingAltText(post));
+      case "AltText": {
+        const needle = expr.text.toLowerCase();
+        return (post: Post) =>
+          Effect.succeed(altTextMatches(post, (value) => value.toLowerCase().includes(needle)));
+      }
+      case "AltTextRegex": {
+        const compiled = yield* Effect.try({
+          try: () => new RegExp(expr.pattern, expr.flags),
+          catch: (error) =>
+            FilterCompileError.make({
+              message: `Invalid regex "${expr.pattern}": ${messageFromError(error)}`
+            })
+        });
+        return (post: Post) =>
+          Effect.succeed(altTextMatches(post, (value) => regexMatches(compiled, value)));
+      }
       case "HasVideo":
         return (post: Post) => Effect.succeed(hasVideo(post));
       case "HasLinks":

@@ -5,12 +5,15 @@ import { CliOutput, type CliOutputService } from "../../src/cli/output.js";
 import { ResourceMonitor } from "../../src/services/resource-monitor.js";
 import { SyncEngine } from "../../src/services/sync-engine.js";
 import { StoreManager } from "../../src/services/store-manager.js";
+import { StoreIndex } from "../../src/services/store-index.js";
 import { FilterLibrary } from "../../src/services/filter-library.js";
 import { FilterNotFound } from "../../src/domain/errors.js";
 import { DataSource, SyncEvent, SyncResult } from "../../src/domain/sync.js";
 import { StoreRef } from "../../src/domain/store.js";
 import { StoreName } from "../../src/domain/primitives.js";
 import { defaultStoreConfig } from "../../src/domain/defaults.js";
+import { ImageCache } from "../../src/services/images/image-cache.js";
+import { ImageConfig } from "../../src/services/images/image-config.js";
 
 const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
 
@@ -89,6 +92,49 @@ const storeManagerLayer = Layer.succeed(
   })
 );
 
+const storeIndexLayer = Layer.succeed(
+  StoreIndex,
+  StoreIndex.of({
+    apply: () => Effect.die("unused"),
+    getByDate: () => Effect.die("unused"),
+    getByHashtag: () => Effect.die("unused"),
+    getPost: () => Effect.die("unused"),
+    hasUri: () => Effect.die("unused"),
+    clear: () => Effect.die("unused"),
+    loadCheckpoint: () => Effect.die("unused"),
+    saveCheckpoint: () => Effect.die("unused"),
+    query: () => Stream.empty,
+    searchPosts: () => Effect.die("unused"),
+    entries: () => Stream.empty,
+    count: () => Effect.die("unused"),
+    rebuild: () => Effect.die("unused")
+  })
+);
+
+const imageConfigLayer = Layer.succeed(
+  ImageConfig,
+  ImageConfig.of({
+    enabled: false,
+    cacheRoot: ".",
+    metaRoot: ".",
+    originalsRoot: ".",
+    thumbsRoot: ".",
+    cacheTtl: Duration.seconds(0),
+    failureTtl: Duration.seconds(0),
+    memCapacity: 0,
+    memTtl: Duration.seconds(0)
+  })
+);
+
+const imageCacheLayer = Layer.succeed(
+  ImageCache,
+  ImageCache.of({
+    get: () => Effect.die("unused"),
+    getCached: () => Effect.die("unused"),
+    invalidate: () => Effect.die("unused")
+  })
+);
+
 const makeResult = (postsAdded: number) =>
   SyncResult.make({
     postsAdded,
@@ -125,7 +171,10 @@ describe("watch command", () => {
       outputLayer,
       storeManagerLayer,
       libraryLayer,
-      ResourceMonitor.testLayer
+      ResourceMonitor.testLayer,
+      storeIndexLayer,
+      imageConfigLayer,
+      imageCacheLayer
     );
 
     const runWatch = makeWatchCommandBody("timeline", DataSource.timeline);
@@ -135,6 +184,9 @@ describe("watch command", () => {
       filterJson: Option.none(),
       quiet: true,
       refresh: false,
+      cacheImages: false,
+      cacheImagesMode: Option.none(),
+      cacheImagesLimit: Option.none(),
       interval: Option.none(),
       maxCycles: Option.some(2),
       until: Option.none()
@@ -168,7 +220,10 @@ describe("watch command", () => {
       outputLayer,
       storeManagerLayer,
       libraryLayer,
-      ResourceMonitor.testLayer
+      ResourceMonitor.testLayer,
+      storeIndexLayer,
+      imageConfigLayer,
+      imageCacheLayer
     );
 
     const runWatch = makeWatchCommandBody("timeline", DataSource.timeline);
@@ -178,6 +233,9 @@ describe("watch command", () => {
       filterJson: Option.none(),
       quiet: true,
       refresh: false,
+      cacheImages: false,
+      cacheImagesMode: Option.none(),
+      cacheImagesLimit: Option.none(),
       interval: Option.none(),
       maxCycles: Option.none(),
       until: Option.some(Duration.millis(2500))

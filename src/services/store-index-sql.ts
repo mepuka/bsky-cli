@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import type * as SqlClient from "@effect/sql/SqlClient";
 import { StoreIndexError } from "../domain/errors.js";
+import { extractImageRefs } from "../domain/embeds.js";
 import { Post } from "../domain/post.js";
 import type { PostUri } from "../domain/primitives.js";
 
@@ -50,14 +51,6 @@ const hasExternalLink = (post: Post) => {
   return embedMediaTag(post.embed) === "External";
 };
 
-const hasImages = (post: Post) => {
-  const tag = embedTag(post.embed);
-  if (tag === "Images") {
-    return true;
-  }
-  return embedMediaTag(post.embed) === "Images";
-};
-
 const hasVideo = (post: Post) => {
   const tag = embedTag(post.embed);
   if (tag === "Video") {
@@ -65,9 +58,6 @@ const hasVideo = (post: Post) => {
   }
   return embedMediaTag(post.embed) === "Video";
 };
-
-const hasMedia = (post: Post) =>
-  hasImages(post) || hasVideo(post) || hasExternalLink(post);
 
 const hasEmbed = (post: Post) =>
   post.embed != null || post.recordEmbed != null;
@@ -112,9 +102,14 @@ export const upsertPost = (
     const repost = isRepost(post);
     const original = !isReply && !quote && !repost;
     const links = hasExternalLink(post);
-    const images = hasImages(post);
+    const imageRefs = extractImageRefs(post.embed);
+    const imageCount = imageRefs.length;
+    const images = imageCount > 0;
+    const altTexts = imageRefs.flatMap((image) => image.alt ? [image.alt] : []);
+    const altText = altTexts.join("\n");
+    const hasAltText = imageCount > 0 && altTexts.length === imageCount;
     const video = hasVideo(post);
-    const media = hasMedia(post);
+    const media = images || video || links;
     const embed = hasEmbed(post);
     const metrics = post.metrics;
     const likeCount = metrics?.likeCount ?? 0;
@@ -136,6 +131,9 @@ export const upsertPost = (
         has_media,
         has_embed,
         has_images,
+        image_count,
+        alt_text,
+        has_alt_text,
         has_video,
         like_count,
         repost_count,
@@ -157,6 +155,9 @@ export const upsertPost = (
         ${toFlag(media)},
         ${toFlag(embed)},
         ${toFlag(images)},
+        ${imageCount},
+        ${altText},
+        ${toFlag(hasAltText)},
         ${toFlag(video)},
         ${likeCount},
         ${repostCount},
@@ -177,6 +178,9 @@ export const upsertPost = (
         has_media = excluded.has_media,
         has_embed = excluded.has_embed,
         has_images = excluded.has_images,
+        image_count = excluded.image_count,
+        alt_text = excluded.alt_text,
+        has_alt_text = excluded.has_alt_text,
         has_video = excluded.has_video,
         like_count = excluded.like_count,
         repost_count = excluded.repost_count,
@@ -213,9 +217,14 @@ export const insertPostIfMissing = (
     const repost = isRepost(post);
     const original = !isReply && !quote && !repost;
     const links = hasExternalLink(post);
-    const images = hasImages(post);
+    const imageRefs = extractImageRefs(post.embed);
+    const imageCount = imageRefs.length;
+    const images = imageCount > 0;
+    const altTexts = imageRefs.flatMap((image) => image.alt ? [image.alt] : []);
+    const altText = altTexts.join("\n");
+    const hasAltText = imageCount > 0 && altTexts.length === imageCount;
     const video = hasVideo(post);
-    const media = hasMedia(post);
+    const media = images || video || links;
     const embed = hasEmbed(post);
     const metrics = post.metrics;
     const likeCount = metrics?.likeCount ?? 0;
@@ -237,6 +246,9 @@ export const insertPostIfMissing = (
         has_media,
         has_embed,
         has_images,
+        image_count,
+        alt_text,
+        has_alt_text,
         has_video,
         like_count,
         repost_count,
@@ -258,6 +270,9 @@ export const insertPostIfMissing = (
         ${toFlag(media)},
         ${toFlag(embed)},
         ${toFlag(images)},
+        ${imageCount},
+        ${altText},
+        ${toFlag(hasAltText)},
         ${toFlag(video)},
         ${likeCount},
         ${repostCount},

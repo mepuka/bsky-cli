@@ -107,6 +107,16 @@ const formatLeafValue = (expr: FilterExpr): string => {
       return formatEngagement(expr);
     case "HasImages":
       return "images";
+    case "MinImages":
+      return `${expr.min}`;
+    case "HasAltText":
+      return "alt text";
+    case "NoAltText":
+      return "missing alt text";
+    case "AltText":
+      return formatValue(expr.text);
+    case "AltTextRegex":
+      return formatRegex(expr.pattern, expr.flags);
     case "HasVideo":
       return "video";
     case "HasLinks":
@@ -162,6 +172,16 @@ const formatLeafPhrase = (expr: FilterExpr): string => {
       return `with ${formatEngagement(expr)} engagement`;
     case "HasImages":
       return "with images";
+    case "MinImages":
+      return `with at least ${expr.min} images`;
+    case "HasAltText":
+      return "with alt text on all images";
+    case "NoAltText":
+      return "with missing alt text";
+    case "AltText":
+      return `with alt text containing ${formatValue(expr.text)}`;
+    case "AltTextRegex":
+      return `with alt text matching regex ${formatRegex(expr.pattern, expr.flags)}`;
     case "HasVideo":
       return "with video";
     case "HasLinks":
@@ -259,6 +279,16 @@ export const formatFilterExpr = (expr: FilterExpr, parentPrec = 0): string => {
     }
     case "HasImages":
       return "hasimages";
+    case "MinImages":
+      return `min-images:${expr.min}`;
+    case "HasAltText":
+      return "has:alt-text";
+    case "NoAltText":
+      return "no-alt-text";
+    case "AltText":
+      return formatWithOptions("alt-text", formatValue(expr.text), []);
+    case "AltTextRegex":
+      return formatWithOptions("alt-text", formatRegex(expr.pattern, expr.flags), []);
     case "HasVideo":
       return "hasvideo";
     case "HasLinks":
@@ -498,6 +528,16 @@ const conditionLine = (condition: FilterCondition) => {
       return `${prefix}meet engagement: ${condition.value}`;
     case "HasImages":
       return `${prefix}include images`;
+    case "MinImages":
+      return `${prefix}include at least ${condition.value} images`;
+    case "HasAltText":
+      return `${prefix}include alt text on all images`;
+    case "NoAltText":
+      return `${prefix}include images missing alt text`;
+    case "AltText":
+      return `${prefix}include alt text containing: ${condition.value}`;
+    case "AltTextRegex":
+      return `${prefix}include alt text matching regex: ${condition.value}`;
     case "HasVideo":
       return `${prefix}include video`;
     case "HasLinks":

@@ -126,11 +126,25 @@ const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError
       case "IsRepost":
       case "IsOriginal":
       case "HasImages":
+      case "HasAltText":
+      case "NoAltText":
       case "HasVideo":
       case "HasLinks":
       case "HasMedia":
       case "HasEmbed":
         return;
+      case "MinImages":
+        if (!Number.isInteger(expr.min) || expr.min < 1) {
+          return yield* invalid("MinImages requires min >= 1");
+        }
+        return;
+      case "AltText":
+        if (expr.text.trim().length === 0) {
+          return yield* invalid("AltText text must be non-empty");
+        }
+        return;
+      case "AltTextRegex":
+        return yield* validateRegex([expr.pattern], expr.flags);
       case "Language":
         if (expr.langs.length === 0) {
           return yield* invalid("Language langs must contain at least one entry");
@@ -180,7 +194,7 @@ const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError
  * **Supported Filter Types:**
  * - Basic: All, None, Author, Hashtag, Contains, IsReply, IsQuote, IsRepost
  * - Collections: AuthorIn, HashtagIn (require non-empty arrays)
- * - Media: HasImages, HasVideo, HasLinks, HasMedia, HasEmbed
+ * - Media: HasImages, MinImages, HasAltText, NoAltText, AltText, AltTextRegex, HasVideo, HasLinks, HasMedia, HasEmbed
  * - Metadata: Language (requires langs array), Engagement (requires at least one threshold)
  * - Time: DateRange (start must be before end)
  * - Text: Regex (validates pattern syntax)

@@ -11,6 +11,8 @@ import { storeOptions } from "./store.js";
 import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
 import { parseInterval, parseOptionalDuration } from "./interval.js";
 import type { StoreName } from "../domain/primitives.js";
+import { cacheStoreImages } from "./image-cache.js";
+import type { CacheImagesMode } from "./shared-options.js";
 
 /** Common options shared by sync and watch API-based commands */
 export interface CommonCommandInput {
@@ -19,8 +21,32 @@ export interface CommonCommandInput {
   readonly filterJson: Option.Option<string>;
   readonly quiet: boolean;
   readonly refresh: boolean;
+  readonly cacheImages: boolean;
+  readonly cacheImagesMode: Option.Option<CacheImagesMode>;
+  readonly cacheImagesLimit: Option.Option<number>;
   readonly limit?: Option.Option<number>;
 }
+
+export const resolveCacheMode = (mode: Option.Option<CacheImagesMode>): CacheImagesMode =>
+  Option.getOrElse(mode, () => "new");
+
+export const resolveCacheLimit = (
+  mode: CacheImagesMode,
+  postsAdded: number,
+  limitOverride: Option.Option<number>
+): number | undefined => {
+  const override = Option.getOrUndefined(limitOverride);
+  if (mode === "full") {
+    return override;
+  }
+  if (postsAdded <= 0) {
+    return 0;
+  }
+  if (override !== undefined) {
+    return Math.min(postsAdded, override);
+  }
+  return postsAdded;
+};
 
 /** Build the command body for a one-shot sync command (timeline, feed, notifications). */
 export const makeSyncCommandBody = (
@@ -64,6 +90,39 @@ export const makeSyncCommandBody = (
         });
       }
       const totalPosts = yield* index.count(storeRef);
+      if (input.cacheImages) {
+        const mode = resolveCacheMode(input.cacheImagesMode);
+        const cacheLimit = resolveCacheLimit(mode, result.postsAdded, input.cacheImagesLimit);
+        const shouldRun = mode === "full" || result.postsAdded > 0;
+        if (shouldRun && cacheLimit !== 0) {
+          yield* Effect.gen(function* () {
+            if (mode === "full") {
+              yield* logWarn("Running full image cache scan", {
+                store: storeRef.name,
+                source: sourceName
+              });
+            }
+            yield* logInfo("Caching image embeds", {
+              store: storeRef.name,
+              source: sourceName,
+              postsAdded: result.postsAdded
+            });
+            const cacheResult = yield* cacheStoreImages(storeRef, {
+              includeThumbnails: true,
+              ...(cacheLimit !== undefined ? { limit: cacheLimit } : {})
+            });
+            yield* logInfo("Image cache complete", cacheResult);
+          }).pipe(
+            Effect.catchAll((error) =>
+              logWarn("Image cache failed", {
+                store: storeRef.name,
+                source: sourceName,
+                error
+              }).pipe(Effect.orElseSucceed(() => undefined))
+            )
+          );
+        }
+      }
       yield* logInfo("Sync complete", { source: sourceName, store: storeRef.name, ...extraLogFields });
       yield* writeJson({ ...(result as SyncResult), totalPosts });
     });
@@ -93,6 +152,9 @@ export const makeWatchCommandBody = (
       const policy = input.refresh ? "refresh" : basePolicy;
       const parsedInterval = parseInterval(input.interval);
       const parsedUntil = parseOptionalDuration(input.until);
+      const cacheMode = input.cacheImages
+        ? resolveCacheMode(input.cacheImagesMode)
+        : "new";
       yield* logInfo("Starting watch", { source: sourceName, store: storeRef.name, ...extraLogFields });
       if (policy === "refresh") {
         yield* logWarn("Refresh mode updates existing posts and may grow the event log.", {
@@ -100,7 +162,30 @@ export const makeWatchCommandBody = (
           store: storeRef.name
         });
       }
-      let stream = sync
+      if (input.cacheImages && cacheMode === "full") {
+        yield* Effect.gen(function* () {
+          yield* logWarn("Running full image cache scan", {
+            store: storeRef.name,
+            source: sourceName
+          });
+          const cacheResult = yield* cacheStoreImages(storeRef, {
+            includeThumbnails: true,
+            ...(Option.isSome(input.cacheImagesLimit)
+              ? { limit: input.cacheImagesLimit.value }
+              : {})
+          });
+          yield* logInfo("Image cache complete", cacheResult);
+        }).pipe(
+          Effect.catchAll((error) =>
+            logWarn("Image cache failed", {
+              store: storeRef.name,
+              source: sourceName,
+              error
+            }).pipe(Effect.orElseSucceed(() => undefined))
+          )
+        );
+      }
+      const baseStream = sync
         .watch(
           WatchConfig.make({
             source: makeDataSource(),
@@ -114,6 +199,42 @@ export const makeWatchCommandBody = (
           Stream.map((event) => event.result),
           Stream.provideService(SyncReporter, makeSyncReporter(input.quiet, monitor, output))
         );
+      let stream = input.cacheImages
+        ? baseStream.pipe(
+            Stream.mapEffect((result) =>
+              result.postsAdded > 0
+                ? Effect.gen(function* () {
+                    const cacheLimit = resolveCacheLimit(
+                      "new",
+                      result.postsAdded,
+                      input.cacheImagesLimit
+                    );
+                    yield* logInfo("Caching image embeds", {
+                      store: storeRef.name,
+                      source: sourceName,
+                      postsAdded: result.postsAdded
+                    });
+                    const cacheResult = yield* cacheStoreImages(storeRef, {
+                      includeThumbnails: true,
+                      ...(cacheLimit !== undefined && cacheLimit > 0
+                        ? { limit: cacheLimit }
+                        : {})
+                    });
+                    yield* logInfo("Image cache complete", cacheResult);
+                  }).pipe(
+                    Effect.catchAll((error) =>
+                      logWarn("Image cache failed", {
+                        store: storeRef.name,
+                        source: sourceName,
+                        error
+                      }).pipe(Effect.orElseSucceed(() => undefined))
+                    ),
+                    Effect.as(result)
+                  )
+                : Effect.succeed(result)
+            )
+          )
+        : baseStream;
       if (Option.isSome(input.maxCycles)) {
         stream = stream.pipe(Stream.take(input.maxCycles.value));
       }

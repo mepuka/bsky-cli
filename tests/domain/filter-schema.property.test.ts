@@ -27,6 +27,7 @@ const regexFlagsArb = fc.option(
   fc.string({ minLength: 1, maxLength: 5 }),
   { nil: undefined }
 );
+const minImagesArb = fc.integer({ min: 1, max: 10 });
 
 const policyArb = fc.oneof(
   fc.constant(IncludeOnError.make({})),
@@ -89,6 +90,19 @@ const filterExprArb: fc.Arbitrary<FilterExpr> = fc.letrec((tie) => ({
         ...(minReplies !== undefined ? { minReplies } : {})
       })),
     fc.constant({ _tag: "HasImages" } as const),
+    minImagesArb.map((min) => ({ _tag: "MinImages", min } as const)),
+    fc.constant({ _tag: "HasAltText" } as const),
+    fc.constant({ _tag: "NoAltText" } as const),
+    fc
+      .string({ minLength: 1, maxLength: 50 })
+      .map((text) => ({ _tag: "AltText", text } as const)),
+    fc
+      .tuple(regexPatternArb, regexFlagsArb)
+      .map(([pattern, flags]) =>
+        flags
+          ? ({ _tag: "AltTextRegex", pattern, flags } as const)
+          : ({ _tag: "AltTextRegex", pattern } as const)
+      ),
     fc.constant({ _tag: "HasVideo" } as const),
     fc.constant({ _tag: "HasLinks" } as const),
     fc.constant({ _tag: "HasMedia" } as const),

@@ -1,5 +1,6 @@
 import type { FeedGeneratorView, ListItemView, ListView, PostLike, ProfileView } from "../domain/bsky.js";
 import type { Post } from "../domain/post.js";
+import { summarizeEmbed } from "../domain/embeds.js";
 
 type CompactProfile = {
   readonly did: ProfileView["did"];
@@ -44,9 +45,13 @@ export const compactPostLike = (like: PostLike) => ({
   indexedAt: like.indexedAt
 });
 
-export const compactPost = (post: Post) => ({
-  uri: post.uri,
-  author: post.author,
-  text: post.text,
-  createdAt: post.createdAt
-});
+export const compactPost = (post: Post) => {
+  const embedSummary = summarizeEmbed(post.embed);
+  return {
+    uri: post.uri,
+    author: post.author,
+    text: post.text,
+    createdAt: post.createdAt,
+    ...(embedSummary ? { embedSummary } : {})
+  };
+};

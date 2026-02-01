@@ -274,6 +274,21 @@ export const PostEmbed = Schema.Union(
 );
 export type PostEmbed = typeof PostEmbed.Type;
 
+const hasTag = (value: unknown, tag: string): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  "_tag" in value &&
+  (value as { readonly _tag?: unknown })._tag === tag;
+
+export const isEmbedImages = (value: unknown): value is EmbedImages =>
+  hasTag(value, "Images");
+
+export const isEmbedExternal = (value: unknown): value is EmbedExternal =>
+  hasTag(value, "External");
+
+export const isEmbedVideo = (value: unknown): value is EmbedVideo =>
+  hasTag(value, "Video");
+
 export const PostViewerState = Schema.Struct({
   repost: Schema.optional(AtUri),
   like: Schema.optional(AtUri),

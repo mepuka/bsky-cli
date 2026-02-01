@@ -32,6 +32,7 @@ describe("cli format", () => {
     expect(lines[0]).toContain("Created At");
     expect(lines[0]).toContain("Author");
     expect(lines[0]).toContain("Text");
+    expect(lines[0]).toContain("Embed");
     expect(lines[0]).toContain("URI");
     expect(lines[2]).toContain(post1.createdAt.toISOString());
     expect(lines[2]).toContain(post1.author);
@@ -43,8 +44,8 @@ describe("cli format", () => {
     const markdown = renderPostsMarkdown([post1, post2]);
     const lines = markdown.split("\n");
 
-    expect(lines[0]).toBe("| Created At | Author | Text | URI |");
-    expect(lines[1]).toBe("| ---------- | ------ | ---- | --- |");
+    expect(lines[0]).toBe("| Created At | Author | Text | Embed | URI |");
+    expect(lines[1]).toBe("| ---------- | ------ | ---- | ----- | --- |");
     expect(lines[2]).toContain(post1.createdAt.toISOString());
     expect(lines[3]).toContain(post2.createdAt.toISOString());
   });

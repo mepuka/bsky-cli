@@ -218,6 +218,45 @@ export interface FilterHasImages {
 }
 
 /**
+ * Filter posts with at least N images.
+ */
+export interface FilterMinImages {
+  readonly _tag: "MinImages";
+  readonly min: number;
+}
+
+/**
+ * Filter posts where every image has alt text.
+ */
+export interface FilterHasAltText {
+  readonly _tag: "HasAltText";
+}
+
+/**
+ * Filter posts that include images missing alt text.
+ */
+export interface FilterNoAltText {
+  readonly _tag: "NoAltText";
+}
+
+/**
+ * Filter posts with alt text matching a substring (case-insensitive).
+ */
+export interface FilterAltText {
+  readonly _tag: "AltText";
+  readonly text: string;
+}
+
+/**
+ * Filter posts with alt text matching a regex pattern.
+ */
+export interface FilterAltTextRegex {
+  readonly _tag: "AltTextRegex";
+  readonly pattern: string;
+  readonly flags?: string;
+}
+
+/**
  * Filter posts containing video.
  */
 export interface FilterHasVideo {
@@ -370,6 +409,11 @@ export type FilterExpr =
   | FilterIsOriginal
   | FilterEngagement
   | FilterHasImages
+  | FilterMinImages
+  | FilterHasAltText
+  | FilterNoAltText
+  | FilterAltText
+  | FilterAltTextRegex
   | FilterHasVideo
   | FilterHasLinks
   | FilterHasMedia
@@ -442,6 +486,25 @@ interface FilterEngagementEncoded {
 interface FilterHasImagesEncoded {
   readonly _tag: "HasImages";
 }
+interface FilterMinImagesEncoded {
+  readonly _tag: "MinImages";
+  readonly min: number;
+}
+interface FilterHasAltTextEncoded {
+  readonly _tag: "HasAltText";
+}
+interface FilterNoAltTextEncoded {
+  readonly _tag: "NoAltText";
+}
+interface FilterAltTextEncoded {
+  readonly _tag: "AltText";
+  readonly text: string;
+}
+interface FilterAltTextRegexEncoded {
+  readonly _tag: "AltTextRegex";
+  readonly pattern: string;
+  readonly flags?: string;
+}
 interface FilterHasVideoEncoded {
   readonly _tag: "HasVideo";
 }
@@ -496,6 +559,11 @@ type FilterExprEncoded =
   | FilterIsOriginalEncoded
   | FilterEngagementEncoded
   | FilterHasImagesEncoded
+  | FilterMinImagesEncoded
+  | FilterHasAltTextEncoded
+  | FilterNoAltTextEncoded
+  | FilterAltTextEncoded
+  | FilterAltTextRegexEncoded
   | FilterHasVideoEncoded
   | FilterHasLinksEncoded
   | FilterHasMediaEncoded
@@ -584,6 +652,27 @@ const FilterEngagementSchema: Schema.Schema<FilterEngagement, FilterEngagementEn
   ) as any;
 const FilterHasImagesSchema: Schema.Schema<FilterHasImages, FilterHasImagesEncoded, never> =
   Schema.TaggedStruct("HasImages", {});
+const MinImagesCount = Schema.NonNegativeInt.pipe(
+  Schema.filter((value) => value > 0 ? undefined : "MinImages requires min >= 1")
+);
+const FilterMinImagesSchema: Schema.Schema<FilterMinImages, FilterMinImagesEncoded, never> =
+  Schema.TaggedStruct("MinImages", {
+    min: required(MinImagesCount, "\"min\" is required")
+  });
+const FilterHasAltTextSchema: Schema.Schema<FilterHasAltText, FilterHasAltTextEncoded, never> =
+  Schema.TaggedStruct("HasAltText", {});
+const FilterNoAltTextSchema: Schema.Schema<FilterNoAltText, FilterNoAltTextEncoded, never> =
+  Schema.TaggedStruct("NoAltText", {});
+const AltTextPattern = Schema.NonEmptyString;
+const FilterAltTextSchema: Schema.Schema<FilterAltText, FilterAltTextEncoded, never> =
+  Schema.TaggedStruct("AltText", {
+    text: required(AltTextPattern, "\"text\" is required")
+  });
+const FilterAltTextRegexSchema: Schema.Schema<FilterAltTextRegex, FilterAltTextRegexEncoded, never> =
+  Schema.TaggedStruct("AltTextRegex", {
+    pattern: required(AltTextPattern, "\"pattern\" is required"),
+    flags: Schema.optionalWith(Schema.String, { exact: true })
+  });
 const FilterHasVideoSchema: Schema.Schema<FilterHasVideo, FilterHasVideoEncoded, never> = Schema.TaggedStruct(
   "HasVideo",
   {}
@@ -674,6 +763,11 @@ const FilterExprInternal: Schema.Schema<FilterExpr, FilterExprEncoded, never> = 
   FilterIsOriginalSchema,
   FilterEngagementSchema,
   FilterHasImagesSchema,
+  FilterMinImagesSchema,
+  FilterHasAltTextSchema,
+  FilterNoAltTextSchema,
+  FilterAltTextSchema,
+  FilterAltTextRegexSchema,
   FilterHasVideoSchema,
   FilterHasLinksSchema,
   FilterHasMediaSchema,

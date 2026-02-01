@@ -33,7 +33,7 @@
  * - **Content filters**: Hashtag, HashtagIn, Contains (text search)
  * - **Temporal filters**: DateRange (created_at bounds)
  * - **Post type filters**: IsReply, IsQuote, IsRepost, IsOriginal
- * - **Media filters**: HasLinks, HasMedia, HasEmbed, HasImages, HasVideo
+ * - **Media filters**: HasLinks, HasMedia, HasEmbed, HasImages, MinImages, HasAltText, NoAltText, AltText, HasVideo
  * - **Language filters**: Language (post language matching)
  * - **Engagement filters**: Engagement (min likes/reposts/replies)
  *
@@ -195,6 +195,14 @@ type PushdownExpr =
   | { readonly _tag: "HasEmbed" }
   /** Filter for posts with images */
   | { readonly _tag: "HasImages" }
+  /** Filter for posts with at least N images */
+  | { readonly _tag: "MinImages"; readonly min: number }
+  /** Filter for posts where all images have alt text */
+  | { readonly _tag: "HasAltText" }
+  /** Filter for posts with images missing alt text */
+  | { readonly _tag: "NoAltText" }
+  /** Filter for posts with alt text matching a substring */
+  | { readonly _tag: "AltText"; readonly text: string }
   /** Filter for posts with video */
   | { readonly _tag: "HasVideo" }
   /** Filter by post language */
@@ -298,6 +306,16 @@ const buildPushdown = (expr: FilterExpr | undefined): PushdownExpr => {
       return { _tag: "HasEmbed" };
     case "HasImages":
       return { _tag: "HasImages" };
+    case "MinImages":
+      return { _tag: "MinImages", min: expr.min };
+    case "HasAltText":
+      return { _tag: "HasAltText" };
+    case "NoAltText":
+      return { _tag: "NoAltText" };
+    case "AltText":
+      return { _tag: "AltText", text: expr.text };
+    case "AltTextRegex":
+      return pushdownTrue;
     case "HasVideo":
       return { _tag: "HasVideo" };
     case "Language":
@@ -375,6 +393,22 @@ const pushdownToSql = (
       return sql`p.has_embed = 1`;
     case "HasImages":
       return sql`p.has_images = 1`;
+    case "MinImages":
+      return sql`p.image_count >= ${expr.min}`;
+    case "HasAltText":
+      return sql`p.has_alt_text = 1`;
+    case "NoAltText":
+      return sql`p.image_count > 0 AND p.has_alt_text = 0`;
+    case "AltText": {
+      const text = expr.text;
+      if (text.length === 0) {
+        return undefined;
+      }
+      if (!isAscii(text)) {
+        return undefined;
+      }
+      return sql`instr(lower(p.alt_text), lower(${text})) > 0`;
+    }
     case "HasVideo":
       return sql`p.has_video = 1`;
     case "Language":

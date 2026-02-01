@@ -7,14 +7,21 @@ import { StoreQuery } from "../domain/events.js";
 import { StoreName, Timestamp } from "../domain/primitives.js";
 import type { Post } from "../domain/post.js";
 import type { StoreRef } from "../domain/store.js";
+import type { ImageRef, ImageVariant } from "../domain/images.js";
+import { extractImageRefs, summarizeEmbed } from "../domain/embeds.js";
+import { ImageArchive } from "../services/images/image-archive.js";
+import { ImageConfig } from "../services/images/image-config.js";
+import { ImagePipeline } from "../services/images/image-pipeline.js";
 import { FilterRuntime } from "../services/filter-runtime.js";
 import { AppConfigService } from "../services/app-config.js";
 import { StoreIndex } from "../services/store-index.js";
 import {
+  collapseWhitespace,
   renderPostsMarkdown,
   renderPostsTable,
   renderStorePostsMarkdown,
-  renderStorePostsTable
+  renderStorePostsTable,
+  truncate
 } from "../domain/format.js";
 import { renderPostCompact, renderPostCard } from "./doc/post.js";
 import { renderThread } from "./doc/thread.js";
@@ -34,8 +41,10 @@ import { StoreNotFound } from "../domain/errors.js";
 import { StorePostOrder } from "../domain/order.js";
 import { formatSchemaError } from "./shared.js";
 import { mergeOrderedStreams } from "./stream-merge.js";
-import { queryOutputFormats, resolveOutputFormat } from "./output-format.js";
+import { jsonNdjsonTableFormats, queryOutputFormats, resolveOutputFormat } from "./output-format.js";
 import { PositiveInt } from "./option-schemas.js";
+import { renderTableLegacy } from "./doc/table.js";
+import { logWarn } from "./logging.js";
 
 const storeNamesArg = Args.text({ name: "store" }).pipe(
   Args.repeated,
@@ -91,9 +100,18 @@ const widthOption = Options.integer("width").pipe(
 );
 const fieldsOption = Options.text("fields").pipe(
   Options.withDescription(
-    "Comma-separated fields to include (supports dot notation and presets: @minimal, @social, @full). Use author or authorProfile.handle for handles."
+    "Comma-separated fields to include (supports dot notation and presets: @minimal, @social, @images, @embeds, @media, @full). Use author or authorProfile.handle for handles."
   ),
   Options.optional
+);
+const extractImagesOption = Options.boolean("extract-images").pipe(
+  Options.withDescription("Emit one record per image embed (json/ndjson/table only)")
+);
+const resolveImagesOption = Options.boolean("resolve-images").pipe(
+  Options.withDescription("Replace image URLs with local cache paths when available")
+);
+const cacheImagesOption = Options.boolean("cache-images").pipe(
+  Options.withDescription("Fetch and cache images during query (implies --resolve-images)")
 );
 const progressOption = Options.boolean("progress").pipe(
   Options.withDescription("Show progress for filtered queries")
@@ -109,12 +127,35 @@ type StorePost = {
   readonly post: Post;
 };
 
+type ImageExtract = {
+  readonly postUri: Post["uri"];
+  readonly author: Post["author"];
+  readonly imageUrl: ImageRef["fullsizeUrl"];
+  readonly thumbUrl: ImageRef["thumbUrl"];
+  readonly alt?: ImageRef["alt"];
+  readonly aspectRatio?: ImageRef["aspectRatio"];
+};
+
+type FieldSelector = {
+  readonly path: ReadonlyArray<string>;
+  readonly wildcard: boolean;
+};
+
 const isAscii = (value: string) => /^[\x00-\x7F]*$/.test(value);
+
+const selectorsIncludeImages = (selectors: ReadonlyArray<FieldSelector>) =>
+  selectors.some(
+    (selector) =>
+      selector.path[0] === "images" ||
+      (selector.wildcard && selector.path.length === 0)
+  );
 
 const hasUnicodeInsensitiveContains = (expr: FilterExpr): boolean => {
   switch (expr._tag) {
     case "Contains":
       return !expr.caseSensitive && expr.text.length > 0 && !isAscii(expr.text);
+    case "AltText":
+      return expr.text.length > 0 && !isAscii(expr.text);
     case "And":
       return (
         hasUnicodeInsensitiveContains(expr.left) ||
@@ -264,10 +305,13 @@ export const queryCommand = Command.make(
     ansi: ansiOption,
     width: widthOption,
     fields: fieldsOption,
+    extractImages: extractImagesOption,
+    resolveImages: resolveImagesOption,
+    cacheImages: cacheImagesOption,
     progress: progressOption,
     count: countOption
   },
-  ({ stores, range, since, until, filter, filterJson, limit, scanLimit, sort, newestFirst, format, includeStore, ansi, width, fields, progress, count }) =>
+  ({ stores, range, since, until, filter, filterJson, limit, scanLimit, sort, newestFirst, format, includeStore, ansi, width, fields, extractImages, resolveImages, cacheImages, progress, count }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
@@ -287,19 +331,144 @@ export const queryCommand = Command.make(
         queryOutputFormats,
         "json"
       );
+      if (extractImages && !jsonNdjsonTableFormats.includes(outputFormat as typeof jsonNdjsonTableFormats[number])) {
+        return yield* CliInputError.make({
+          message: "--extract-images only supports json, ndjson, or table output.",
+          cause: { format: outputFormat }
+        });
+      }
       if (multiStore && outputFormat === "thread") {
         return yield* CliInputError.make({
           message: "Thread output is only supported for single-store queries.",
           cause: { format: outputFormat }
         });
       }
+      if (extractImages && Option.isSome(fields)) {
+        return yield* CliInputError.make({
+          message: "--fields is not supported with --extract-images.",
+          cause: { fields: fields.value }
+        });
+      }
       const compact = preferences.compact;
       const { selectors: selectorsOption, source: selectorsSource } =
-        yield* resolveFieldSelectors(fields, compact);
+        extractImages
+          ? { selectors: Option.none(), source: "implicit" as const }
+          : yield* resolveFieldSelectors(fields, compact);
+      const imagesInOutput =
+        extractImages ||
+        Option.match(selectorsOption, {
+          onNone: () => false,
+          onSome: selectorsIncludeImages
+        });
+      if ((resolveImages || cacheImages) && !imagesInOutput) {
+        return yield* CliInputError.make({
+          message:
+            "--resolve-images/--cache-images requires --extract-images or --fields including images.",
+          cause: { resolveImages, cacheImages, fields: Option.getOrUndefined(fields) }
+        });
+      }
+      if (cacheImages) {
+        const imageConfig = yield* ImageConfig;
+        if (!imageConfig.enabled) {
+          return yield* CliInputError.make({
+            message:
+              "Image cache is disabled. Set SKYGENT_IMAGE_CACHE_ENABLED=true to enable caching.",
+            cause: { cacheImages }
+          });
+        }
+      }
+      if (count && (resolveImages || cacheImages)) {
+        return yield* CliInputError.make({
+          message: "--count cannot be combined with --resolve-images or --cache-images.",
+          cause: { count, resolveImages, cacheImages }
+        });
+      }
+      const resolveImagesEffective = (resolveImages || cacheImages) && imagesInOutput;
+      const fieldImagesSelected = Option.match(selectorsOption, {
+        onNone: () => false,
+        onSome: selectorsIncludeImages
+      });
+      const resolveFieldImages = resolveImagesEffective && fieldImagesSelected;
+
+      let imagePipeline: ImagePipeline | undefined;
+      let imageArchive: ImageArchive | undefined;
+      if (resolveImagesEffective) {
+        imagePipeline = yield* ImagePipeline;
+        imageArchive = yield* ImageArchive;
+      }
+
+      const resolveCachedUrl = (url: string, variant: ImageVariant) =>
+        resolveImagesEffective
+          ? (cacheImages
+              ? imagePipeline!.ensureCached(url, variant)
+              : imagePipeline!.getCached(url, variant)
+            ).pipe(
+              Effect.map((cached) =>
+                Option.match(cached, {
+                  onNone: () => url,
+                  onSome: (asset) => imageArchive!.resolvePath(asset)
+                })
+              ),
+              Effect.catchAll((error) =>
+                logWarn("Image cache failed", {
+                  url,
+                  variant,
+                  error
+                }).pipe(Effect.orElseSucceed(() => undefined), Effect.as(url))
+              )
+            )
+          : Effect.succeed(url);
+
+      const resolveImageRefs = (images: ReadonlyArray<ImageRef>) =>
+        Effect.forEach(
+          images,
+          (image) =>
+            Effect.all([
+              resolveCachedUrl(image.fullsizeUrl, "original"),
+              resolveCachedUrl(image.thumbUrl, "thumb")
+            ]).pipe(
+              Effect.map(([fullsizeUrl, thumbUrl]) => ({
+                ...image,
+                fullsizeUrl,
+                thumbUrl
+              }))
+            ),
+          { concurrency: "unbounded" }
+        );
+      const augmentPost = (post: Post) => {
+        const embedSummary = summarizeEmbed(post.embed);
+        const images = fieldImagesSelected ? extractImageRefs(post.embed) : [];
+        return {
+          ...post,
+          ...(fieldImagesSelected ? { images } : {}),
+          ...(embedSummary ? { embedSummary } : {})
+        };
+      };
+      const augmentPostEffect = (post: Post) =>
+        Effect.gen(function* () {
+          const images = fieldImagesSelected ? extractImageRefs(post.embed) : [];
+          const resolvedImages = resolveFieldImages
+            ? yield* resolveImageRefs(images)
+            : images;
+          const embedSummary = summarizeEmbed(post.embed);
+          return {
+            ...post,
+            ...(fieldImagesSelected ? { images: resolvedImages } : {}),
+            ...(embedSummary ? { embedSummary } : {})
+          };
+        });
       const project = (post: Post) =>
         Option.match(selectorsOption, {
           onNone: () => post,
-          onSome: (selectors) => projectFields(post, selectors)
+          onSome: (selectors) => projectFields(augmentPost(post), selectors)
+        });
+      const projectEffect = (post: Post) =>
+        Effect.gen(function* () {
+          if (Option.isNone(selectorsOption)) {
+            return post;
+          }
+          const augmented = yield* augmentPostEffect(post);
+          return projectFields(augmented, selectorsOption.value);
         });
       if (selectorsSource === "explicit" && outputFormat !== "json" && outputFormat !== "ndjson") {
         return yield* CliInputError.make({
@@ -474,7 +643,7 @@ export const queryCommand = Command.make(
         storePostOrder
       );
 
-      const stream = Option.match(limit, {
+      const postStream = Option.match(limit, {
         onNone: () => merged,
         onSome: (value) => merged.pipe(Stream.take(value))
       });
@@ -501,12 +670,75 @@ export const queryCommand = Command.make(
               { discard: true }
             );
 
+      const toImageOutputs = (entry: StorePost): ReadonlyArray<ImageExtract & { store?: string }> => {
+        const images = extractImageRefs(entry.post.embed);
+        return images.map((image) => ({
+          ...(includeStoreLabel ? { store: entry.store.name } : {}),
+          postUri: entry.post.uri,
+          author: entry.post.author,
+          imageUrl: image.fullsizeUrl,
+          thumbUrl: image.thumbUrl,
+          alt: image.alt,
+          aspectRatio: image.aspectRatio
+        }));
+      };
+
+      const toImageOutputsResolved = (entry: StorePost) =>
+        Effect.gen(function* () {
+          const images = extractImageRefs(entry.post.embed);
+          return yield* Effect.forEach(
+            images,
+            (image) =>
+              Effect.all([
+                resolveCachedUrl(image.fullsizeUrl, "original"),
+                resolveCachedUrl(image.thumbUrl, "thumb")
+              ]).pipe(
+                Effect.map(([imageUrl, thumbUrl]) => ({
+                  ...(includeStoreLabel ? { store: entry.store.name } : {}),
+                  postUri: entry.post.uri,
+                  author: entry.post.author,
+                  imageUrl,
+                  thumbUrl,
+                  alt: image.alt,
+                  aspectRatio: image.aspectRatio
+                }))
+              ),
+            { concurrency: "unbounded" }
+          );
+        });
+
+      const imageStreamBase = resolveImagesEffective
+        ? postStream.pipe(
+            Stream.mapEffect(toImageOutputsResolved),
+            Stream.mapConcat((rows) => rows)
+          )
+        : postStream.pipe(Stream.mapConcat(toImageOutputs));
+
+      const imageStream = extractImages ? imageStreamBase : Stream.empty;
+
       const toOutput = (entry: StorePost) => {
         const projected = project(entry.post);
         return includeStoreLabel ? { store: entry.store.name, post: projected } : projected;
       };
 
+      const toOutputEffect = (entry: StorePost) =>
+        projectEffect(entry.post).pipe(
+          Effect.map((projected) =>
+            includeStoreLabel ? { store: entry.store.name, post: projected } : projected
+          )
+        );
+
+      const outputStream = resolveFieldImages
+        ? postStream.pipe(Stream.mapEffect(toOutputEffect))
+        : postStream.pipe(Stream.map(toOutput));
+
       if (count) {
+        if (extractImages) {
+          const total = yield* Stream.runFold(imageStream, 0, (acc) => acc + 1);
+          yield* writeJson(total);
+          yield* warnIfScanLimitReached();
+          return;
+        }
         const canUseIndexCount =
           !hasFilter && Option.isNone(parsedRange);
         const total = canUseIndexCount
@@ -515,7 +747,7 @@ export const queryCommand = Command.make(
             }).pipe(
               Effect.map((counts) => counts.reduce((sum, value) => sum + value, 0))
             )
-          : yield* Stream.runFold(stream, 0, (acc) => acc + 1);
+          : yield* Stream.runFold(postStream, 0, (acc) => acc + 1);
         const limited = Option.match(limit, {
           onNone: () => total,
           onSome: (value) => Math.min(total, value)
@@ -525,8 +757,63 @@ export const queryCommand = Command.make(
         return;
       }
 
+      if (extractImages) {
+        const formatAlt = (alt?: string) =>
+          alt ? truncate(collapseWhitespace(alt), 60) : "";
+        const formatAspect = (aspectRatio?: ImageRef["aspectRatio"]) =>
+          aspectRatio ? `${aspectRatio.width}x${aspectRatio.height}` : "";
+        const renderImageExtractsTable = (
+          rows: ReadonlyArray<ImageExtract & { store?: string }>
+        ) => {
+          const headers = includeStoreLabel
+            ? ["Store", "Post URI", "Author", "Image URL", "Thumb URL", "Alt", "Aspect"]
+            : ["Post URI", "Author", "Image URL", "Thumb URL", "Alt", "Aspect"];
+          const body = rows.map((row) => {
+            const cells = [
+              row.postUri,
+              row.author,
+              row.imageUrl,
+              row.thumbUrl,
+              formatAlt(row.alt),
+              formatAspect(row.aspectRatio)
+            ];
+            return includeStoreLabel ? [row.store ?? "", ...cells] : cells;
+          });
+          return renderTableLegacy(headers, body);
+        };
+
+        if (outputFormat === "ndjson") {
+          yield* writeJsonStream(imageStream);
+          yield* warnIfScanLimitReached();
+          return;
+        }
+        if (outputFormat === "json") {
+          const writeChunk = (value: string) =>
+            Stream.fromIterable([value]).pipe(Stream.run(output.stdout));
+          let isFirst = true;
+          yield* writeChunk("[");
+          yield* Stream.runForEach(imageStream, (value) => {
+            const json = JSON.stringify(value);
+            const prefix = isFirst ? "" : ",\n";
+            isFirst = false;
+            return writeChunk(`${prefix}${json}`);
+          });
+          const suffix = isFirst ? "]\n" : "\n]\n";
+          yield* writeChunk(suffix);
+          yield* warnIfScanLimitReached();
+          return;
+        }
+        if (outputFormat === "table") {
+          const collected = yield* Stream.runCollect(imageStream);
+          const rows = Chunk.toReadonlyArray(collected);
+          yield* writeText(renderImageExtractsTable(rows));
+          yield* warnIfScanLimitReached();
+          return;
+        }
+      }
+
       if (outputFormat === "ndjson") {
-        yield* writeJsonStream(stream.pipe(Stream.map(toOutput)));
+        yield* writeJsonStream(outputStream);
         yield* warnIfScanLimitReached();
         return;
       }
@@ -535,7 +822,7 @@ export const queryCommand = Command.make(
           Stream.fromIterable([value]).pipe(Stream.run(output.stdout));
         let isFirst = true;
         yield* writeChunk("[");
-        yield* Stream.runForEach(stream.pipe(Stream.map(toOutput)), (value) => {
+        yield* Stream.runForEach(outputStream, (value) => {
           const json = JSON.stringify(value);
           const prefix = isFirst ? "" : ",\n";
           isFirst = false;
@@ -556,7 +843,7 @@ export const queryCommand = Command.make(
               : renderPostCompact(entry.post);
             return ansi ? renderAnsi(doc, w) : renderPlain(doc, w);
           };
-          yield* Stream.runForEach(stream, (entry) =>
+          yield* Stream.runForEach(postStream, (entry) =>
             Ref.update(countRef, (count) => count + 1).pipe(
               Effect.zipRight(writeText(render(entry)))
             )
@@ -570,7 +857,7 @@ export const queryCommand = Command.make(
         }
         case "card": {
           const countRef = yield* Ref.make(0);
-          const rendered = stream.pipe(
+          const rendered = postStream.pipe(
             Stream.map((entry) => {
               const lines = renderPostCard(entry.post);
               const doc = includeStoreLabel
@@ -594,7 +881,7 @@ export const queryCommand = Command.make(
         }
       }
 
-      const collected = yield* Stream.runCollect(stream);
+      const collected = yield* Stream.runCollect(postStream);
       const entries = Chunk.toReadonlyArray(collected);
       const posts = entries.map((entry) => entry.post);
       const projectedPosts = entries.map(toOutput);
@@ -659,6 +946,7 @@ export const queryCommand = Command.make(
         "skygent query my-store --format compact --limit 50",
         "skygent query my-store --sort desc --limit 25",
         "skygent query my-store --filter 'contains:ai' --count",
+        "skygent query my-store --filter 'has:images' --extract-images --resolve-images --format ndjson",
         "skygent query store-a,store-b --format ndjson"
       ],
       [

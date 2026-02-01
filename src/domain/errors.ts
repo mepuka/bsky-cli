@@ -23,6 +23,37 @@ export class BskyError extends Schema.TaggedError<BskyError>()(
   }
 ) {}
 
+export class ImageFetchError extends Schema.TaggedError<ImageFetchError>()(
+  "ImageFetchError",
+  {
+    message: Schema.String,
+    url: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+    operation: Schema.optional(Schema.String),
+    status: Schema.optional(Schema.Number)
+  }
+) {}
+
+export class ImageArchiveError extends Schema.TaggedError<ImageArchiveError>()(
+  "ImageArchiveError",
+  {
+    message: Schema.String,
+    path: Schema.optional(Schema.String),
+    operation: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.Unknown)
+  }
+) {}
+
+export class ImageCacheError extends Schema.TaggedError<ImageCacheError>()(
+  "ImageCacheError",
+  {
+    message: Schema.String,
+    key: Schema.String,
+    operation: Schema.optional(Schema.String),
+    status: Schema.optional(Schema.Number)
+  }
+) {}
+
 export class ConfigError extends Schema.TaggedError<ConfigError>()(
   "ConfigError",
   {

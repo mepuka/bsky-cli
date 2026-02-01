@@ -21,6 +21,11 @@ const conditionLine = (condition: FilterCondition): string => {
     case "IsOriginal":    return `${prefix}be an original post`;
     case "Engagement":    return `${prefix}meet engagement: ${condition.value}`;
     case "HasImages":     return `${prefix}include images`;
+    case "MinImages":     return `${prefix}include at least ${condition.value} images`;
+    case "HasAltText":    return `${prefix}include alt text on all images`;
+    case "NoAltText":     return `${prefix}include images missing alt text`;
+    case "AltText":       return `${prefix}include alt text containing: ${condition.value}`;
+    case "AltTextRegex":  return `${prefix}include alt text matching regex: ${condition.value}`;
     case "HasVideo":      return `${prefix}include video`;
     case "HasLinks":      return `${prefix}include links`;
     case "HasMedia":      return `${prefix}include media`;

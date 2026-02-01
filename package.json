@@ -43,6 +43,7 @@
   "dependencies": {
     "@atproto/api": "^0.18.17",
     "@effect/cli": "^0.73.1",
+    "@effect/experimental": "^0.58.0",
     "@effect/platform": "^0.94.2",
     "@effect/platform-bun": "^0.87.1",
     "@effect/printer": "^0.47.0",

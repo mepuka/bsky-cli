@@ -1,7 +1,9 @@
+import type { PostEmbed } from "./bsky.js";
+import { summarizeEmbed } from "./embeds.js";
 import { Post } from "./post.js";
 import { displayWidth, padEndDisplay } from "./text-width.js";
 
-const headers = ["Created At", "Author", "Text", "URI"];
+const headers = ["Created At", "Author", "Text", "Embed", "URI"];
 const headersWithStore = ["Store", ...headers];
 const textLimit = 80;
 
@@ -28,10 +30,54 @@ const sanitizeText = (text: string) => truncate(collapseWhitespace(text), textLi
 const sanitizeMarkdown = (text: string) =>
   sanitizeText(text).replace(/[\\|*_`\[\]]/g, "\\$&");
 
+const formatEmbedSummary = (embed?: PostEmbed) => {
+  const summary = summarizeEmbed(embed);
+  if (!summary) return "";
+  const hostFromUrl = (uri: string) => {
+    try {
+      return new URL(uri).hostname;
+    } catch {
+      return undefined;
+    }
+  };
+  switch (summary.type) {
+    case "images": {
+      const count = summary.imageSummary?.imageCount ?? 0;
+      return count > 0 ? `${count}img` : "img";
+    }
+    case "video":
+      return "video";
+    case "external": {
+      const host = summary.external?.uri ? hostFromUrl(summary.external.uri) : undefined;
+      return host ? `link:${host}` : "link";
+    }
+    case "record": {
+      const author = summary.record?.authorHandle;
+      return author ? `quote:@${author}` : "quote";
+    }
+    case "record_with_media": {
+      const author = summary.record?.authorHandle;
+      const base = author ? `quote:@${author}` : "quote";
+      if (summary.imageSummary) {
+        const count = summary.imageSummary.imageCount;
+        return count > 0 ? `${base}+${count}img` : `${base}+img`;
+      }
+      if (summary.external?.uri) {
+        const host = hostFromUrl(summary.external.uri);
+        return host ? `${base}+link:${host}` : `${base}+link`;
+      }
+      return `${base}+media`;
+    }
+    default:
+      return "embed";
+  }
+};
+
 const postToRow = (post: Post) => [
   post.createdAt.toISOString(),
   post.author,
   sanitizeText(post.text),
+  sanitizeText(formatEmbedSummary(post.embed)),
   post.uri
 ];
 
@@ -39,6 +85,7 @@ const postToMarkdownRow = (post: Post) => [
   post.createdAt.toISOString(),
   post.author,
   sanitizeMarkdown(post.text),
+  sanitizeMarkdown(formatEmbedSummary(post.embed)),
   post.uri.replace(/\|/g, "\\|")
 ];
 

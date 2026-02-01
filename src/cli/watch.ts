@@ -8,12 +8,13 @@ import { JetstreamSyncEngine } from "../services/jetstream-sync.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJsonStream } from "./output.js";
 import { storeOptions } from "./store.js";
-import { logInfo, makeSyncReporter } from "./logging.js";
+import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
-import { makeWatchCommandBody } from "./sync-factory.js";
+import { makeWatchCommandBody, resolveCacheLimit, resolveCacheMode } from "./sync-factory.js";
 import { parseOptionalDuration } from "./interval.js";
+import { cacheStoreImages } from "./image-cache.js";
 import {
   feedUriArg,
   listUriArg,
@@ -28,6 +29,9 @@ import {
   includePinsOption,
   quietOption,
   refreshOption,
+  cacheImagesOption,
+  cacheImagesModeOption,
+  cacheImagesLimitOption,
   strictOption,
   maxErrorsOption
 } from "./shared-options.js";
@@ -72,7 +76,10 @@ const timelineCommand = Command.make(
     maxCycles: maxCyclesOption,
     until: untilOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption
   },
   makeWatchCommandBody("timeline", () => DataSource.timeline())
 ).pipe(
@@ -99,7 +106,10 @@ const feedCommand = Command.make(
     maxCycles: maxCyclesOption,
     until: untilOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption
   },
   ({ uri, ...rest }) => makeWatchCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
 ).pipe(
@@ -125,7 +135,10 @@ const listCommand = Command.make(
     maxCycles: maxCyclesOption,
     until: untilOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption
   },
   ({ uri, ...rest }) => makeWatchCommandBody("list", () => DataSource.list(uri), { uri })(rest)
 ).pipe(
@@ -150,7 +163,10 @@ const notificationsCommand = Command.make(
     maxCycles: maxCyclesOption,
     until: untilOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption
   },
   makeWatchCommandBody("notifications", () => DataSource.notifications())
 ).pipe(
@@ -176,9 +192,12 @@ const authorCommand = Command.make(
     maxCycles: maxCyclesOption,
     until: untilOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, interval, maxCycles, until, store, quiet, refresh }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, interval, maxCycles, until, store, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit }) =>
     Effect.gen(function* () {
       const apiFilter = Option.getOrUndefined(filter);
       const source = DataSource.author(actor, {
@@ -198,7 +217,10 @@ const authorCommand = Command.make(
         maxCycles,
         until,
         quiet,
-        refresh
+        refresh,
+        cacheImages,
+        cacheImagesMode,
+        cacheImagesLimit
       });
     })
 ).pipe(
@@ -227,9 +249,12 @@ const threadCommand = Command.make(
     maxCycles: maxCyclesOption,
     until: untilOption,
     quiet: quietOption,
-    refresh: refreshOption
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, interval, maxCycles, until, store, quiet, refresh }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, interval, maxCycles, until, store, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit }) =>
     Effect.gen(function* () {
       const { depth: depthValue, parentHeight: parentHeightValue } =
         parseThreadDepth(depth, parentHeight);
@@ -242,7 +267,7 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, interval, maxCycles, until, quiet, refresh });
+      return yield* run({ store, filter, filterJson, interval, maxCycles, until, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit });
     })
 ).pipe(
   Command.withDescription(
@@ -272,6 +297,9 @@ const jetstreamCommand = Command.make(
     maxMessageSize: jetstreamOptions.maxMessageSize,
     maxCycles: maxCyclesOption,
     until: untilOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption,
     strict: strictOption,
     maxErrors: maxErrorsOption
   },
@@ -288,6 +316,9 @@ const jetstreamCommand = Command.make(
     maxMessageSize,
     maxCycles,
     until,
+    cacheImages,
+    cacheImagesMode,
+    cacheImagesLimit,
     strict,
     maxErrors
   }) =>
@@ -310,10 +341,36 @@ const jetstreamCommand = Command.make(
         filterHash
       );
       const parsedUntil = parseOptionalDuration(until);
+      const cacheMode = cacheImages ? resolveCacheMode(cacheImagesMode) : "new";
+      const resolveNewCacheLimit = (postsAdded: number) =>
+        resolveCacheLimit("new", postsAdded, cacheImagesLimit);
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
       yield* logInfo("Starting watch", { source: "jetstream", store: storeRef.name });
+      if (cacheImages && cacheMode === "full") {
+        yield* Effect.gen(function* () {
+          yield* logWarn("Running full image cache scan", {
+            store: storeRef.name,
+            source: "jetstream"
+          });
+          const cacheResult = yield* cacheStoreImages(storeRef, {
+            includeThumbnails: true,
+            ...(Option.isSome(cacheImagesLimit)
+              ? { limit: cacheImagesLimit.value }
+              : {})
+          });
+          yield* logInfo("Image cache complete", cacheResult);
+        }).pipe(
+          Effect.catchAll((error) =>
+            logWarn("Image cache failed", {
+              store: storeRef.name,
+              source: "jetstream",
+              error
+            }).pipe(Effect.orElseSucceed(() => undefined))
+          )
+        );
+      }
       yield* Effect.gen(function* () {
         const engine = yield* JetstreamSyncEngine;
         const maxErrorsValue = Option.getOrUndefined(maxErrors);
@@ -326,13 +383,45 @@ const jetstreamCommand = Command.make(
           ...(strict ? { strict } : {}),
           ...(maxErrorsValue !== undefined ? { maxErrors: maxErrorsValue } : {})
         });
-        const outputStream = stream.pipe(
+        const baseStream = stream.pipe(
           Stream.map((event) => event.result),
           Stream.provideService(
             SyncReporter,
             makeSyncReporter(quiet, monitor, output)
           )
         );
+        const outputStream = cacheImages
+          ? baseStream.pipe(
+              Stream.mapEffect((result) =>
+                result.postsAdded > 0
+                  ? Effect.gen(function* () {
+                      const cacheLimit = resolveNewCacheLimit(result.postsAdded);
+                      yield* logInfo("Caching image embeds", {
+                        store: storeRef.name,
+                        source: "jetstream",
+                        postsAdded: result.postsAdded
+                      });
+                      const cacheResult = yield* cacheStoreImages(storeRef, {
+                        includeThumbnails: true,
+                        ...(cacheLimit !== undefined && cacheLimit > 0
+                          ? { limit: cacheLimit }
+                          : {})
+                      });
+                      yield* logInfo("Image cache complete", cacheResult);
+                    }).pipe(
+                      Effect.catchAll((error) =>
+                        logWarn("Image cache failed", {
+                          store: storeRef.name,
+                          source: "jetstream",
+                          error
+                        }).pipe(Effect.orElseSucceed(() => undefined))
+                      ),
+                      Effect.as(result)
+                    )
+                  : Effect.succeed(result)
+              )
+            )
+          : baseStream;
         const limited = Option.isSome(maxCycles)
           ? outputStream.pipe(Stream.take(maxCycles.value))
           : outputStream;

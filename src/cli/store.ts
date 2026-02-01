@@ -22,6 +22,7 @@ import { withExamples } from "./help.js";
 import { resolveOutputFormat, treeTableJsonFormats } from "./output-format.js";
 import { StoreRenamer } from "../services/store-renamer.js";
 import { PositiveInt } from "./option-schemas.js";
+import { cacheStatusForStore, cacheStoreImages, cleanImageCache } from "./image-cache.js";
 import {
   buildStoreTreeData,
   renderStoreTree,
@@ -66,6 +67,18 @@ const treeWidthOption = Options.integer("width").pipe(
   Options.withSchema(PositiveInt),
   Options.withDescription("Line width for tree rendering (enables wrapping)"),
   Options.optional
+);
+const cacheLimitOption = Options.integer("limit").pipe(
+  Options.withSchema(PositiveInt),
+  Options.withDescription("Maximum number of posts to scan for images"),
+  Options.optional
+);
+const cacheThumbnailsOption = Options.boolean("thumbnails").pipe(
+  Options.withDescription("Include thumbnails when caching or counting images")
+);
+const cacheForceOption = Options.boolean("force").pipe(
+  Options.withAlias("f"),
+  Options.withDescription("Confirm image cache deletion")
 );
 
 const configJsonOption = Options.text("config-json").pipe(
@@ -372,6 +385,66 @@ export const storeSummary = Command.make("summary", {}, () =>
   )
 );
 
+export const storeCache = Command.make(
+  "cache",
+  { name: storeNameArg, thumbnails: cacheThumbnailsOption, limit: cacheLimitOption },
+  ({ name, thumbnails, limit }) =>
+    Effect.gen(function* () {
+      const storeRef = yield* loadStoreRef(name);
+      const limitValue = Option.getOrUndefined(limit);
+      const result = yield* cacheStoreImages(storeRef, {
+        includeThumbnails: thumbnails,
+        ...(limitValue !== undefined ? { limit: limitValue } : {})
+      });
+      yield* writeJson(result);
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Cache image embeds for a store", [
+      "skygent store cache my-store",
+      "skygent store cache my-store --thumbnails --limit 200"
+    ])
+  )
+);
+
+export const storeCacheStatus = Command.make(
+  "cache-status",
+  { name: storeNameArg, thumbnails: cacheThumbnailsOption, limit: cacheLimitOption },
+  ({ name, thumbnails, limit }) =>
+    Effect.gen(function* () {
+      const storeRef = yield* loadStoreRef(name);
+      const limitValue = Option.getOrUndefined(limit);
+      const result = yield* cacheStatusForStore(storeRef, {
+        includeThumbnails: thumbnails,
+        ...(limitValue !== undefined ? { limit: limitValue } : {})
+      });
+      yield* writeJson(result);
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Report image cache coverage for a store", [
+      "skygent store cache-status my-store",
+      "skygent store cache-status my-store --thumbnails"
+    ])
+  )
+);
+
+export const storeCacheClean = Command.make(
+  "cache-clean",
+  { force: cacheForceOption },
+  ({ force }) =>
+    Effect.gen(function* () {
+      const result = yield* cleanImageCache(force);
+      yield* writeJson(result);
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Clear the image cache", [
+      "skygent store cache-clean --force"
+    ])
+  )
+);
+
 export const storeTree = Command.make(
   "tree",
   { format: treeFormatOption, ansi: treeAnsiOption, width: treeWidthOption },
@@ -421,6 +494,9 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeMaterialize,
     storeStats,
     storeSummary,
+    storeCache,
+    storeCacheStatus,
+    storeCacheClean,
     storeTree
   ]),
   Command.withDescription(

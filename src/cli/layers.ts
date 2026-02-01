@@ -1,4 +1,5 @@
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
+import * as Persistence from "@effect/experimental/Persistence";
 import { Path } from "@effect/platform";
 import * as FetchHttpClient from "@effect/platform/FetchHttpClient";
 import { Effect, Layer } from "effect";
@@ -22,6 +23,11 @@ import { StoreRenamer } from "../services/store-renamer.js";
 import { LinkValidator } from "../services/link-validator.js";
 import { TrendingTopics } from "../services/trending-topics.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
+import { ImageFetcher } from "../services/images/image-fetcher.js";
+import { ImageConfig } from "../services/images/image-config.js";
+import { ImageArchive } from "../services/images/image-archive.js";
+import { ImageCache } from "../services/images/image-cache.js";
+import { ImagePipeline } from "../services/images/image-pipeline.js";
 import { CliOutput } from "./output.js";
 import { CliInput } from "./input.js";
 import { DerivationEngine } from "../services/derivation-engine.js";
@@ -76,6 +82,36 @@ const checkpointLayer = SyncCheckpointStore.layer.pipe(
 const linkValidatorLayer = LinkValidator.layer.pipe(
   Layer.provideMerge(storageLayer),
   Layer.provideMerge(FetchHttpClient.layer)
+);
+const imageConfigLayer = ImageConfig.layer.pipe(
+  Layer.provideMerge(appConfigLayer)
+);
+const imageFetcherLayer = ImageFetcher.layer.pipe(
+  Layer.provideMerge(FetchHttpClient.layer)
+);
+const imageCacheStoreLayer = Layer.unwrapEffect(
+  Effect.gen(function* () {
+    const config = yield* ImageConfig;
+    return config.enabled
+      ? KeyValueStore.layerFileSystem(config.metaRoot)
+      : KeyValueStore.layerMemory;
+  })
+).pipe(Layer.provide(imageConfigLayer));
+const imagePersistenceLayer = Persistence.layerResultKeyValueStore.pipe(
+  Layer.provide(imageCacheStoreLayer)
+);
+const imageArchiveLayer = ImageArchive.layer.pipe(
+  Layer.provideMerge(imageConfigLayer)
+);
+const imageCacheLayer = ImageCache.layer.pipe(
+  Layer.provideMerge(imageConfigLayer),
+  Layer.provideMerge(imageArchiveLayer),
+  Layer.provideMerge(imageFetcherLayer),
+  Layer.provideMerge(imagePersistenceLayer)
+);
+const imagePipelineLayer = ImagePipeline.layer.pipe(
+  Layer.provideMerge(imageConfigLayer),
+  Layer.provideMerge(imageCacheLayer)
 );
 const trendingTopicsLayer = TrendingTopics.layer.pipe(
   Layer.provideMerge(storageLayer),
@@ -185,6 +221,11 @@ export const CliLive = Layer.mergeAll(
   compilerLayer,
   postParserLayer,
   filterLibraryLayer,
+  imageConfigLayer,
+  imageArchiveLayer,
+  imageCacheLayer,
+  imagePipelineLayer,
+  imageFetcherLayer,
   profileResolverLayer,
   identityResolverLayer
 );
