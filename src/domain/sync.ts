@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Match, Schema } from "effect";
 import * as Monoid from "@effect/typeclass/Monoid";
 import * as Semigroup from "@effect/typeclass/Semigroup";
 import { MonoidSum } from "@effect/typeclass/data/Number";
@@ -175,37 +175,35 @@ export const dataSourceKey = (source: DataSource): string => {
   const normalizeList = (items: ReadonlyArray<string> | undefined) =>
     items && items.length > 0 ? [...items].sort().join(",") : "";
 
-  switch (source._tag) {
-    case "Timeline":
-      return "timeline";
-    case "Feed":
-      return `feed:${source.uri}`;
-    case "List":
-      return `list:${source.uri}`;
-    case "Notifications":
-      return "notifications";
-    case "Author": {
-      const filter = source.filter ?? "";
-      const includePins =
-        source.includePins === undefined ? "" : source.includePins ? "1" : "0";
-      return `author:${encodeURIComponent(source.actor)}:${encodeURIComponent(
-        filter
-      )}:${includePins}`;
-    }
-    case "Thread": {
-      const depth = source.depth ?? "";
-      const parentHeight = source.parentHeight ?? "";
-      return `thread:${encodeURIComponent(source.uri)}:${depth}:${parentHeight}`;
-    }
-    case "Jetstream": {
-      const endpoint = source.endpoint ?? "";
-      const collections = normalizeList(source.collections);
-      const dids = normalizeList(source.dids);
-      const compress = source.compress ? "1" : "0";
-      const maxMessageSize = source.maxMessageSizeBytes ?? "";
-      return `jetstream:${encodeURIComponent(endpoint)}:${encodeURIComponent(
-        collections
-      )}:${encodeURIComponent(dids)}:${compress}:${maxMessageSize}`;
-    }
-  }
+  return Match.type<DataSource>().pipe(
+    Match.tagsExhaustive({
+      Timeline: () => "timeline",
+      Feed: (feed) => `feed:${feed.uri}`,
+      List: (list) => `list:${list.uri}`,
+      Notifications: () => "notifications",
+      Author: (author) => {
+        const filter = author.filter ?? "";
+        const includePins =
+          author.includePins === undefined ? "" : author.includePins ? "1" : "0";
+        return `author:${encodeURIComponent(author.actor)}:${encodeURIComponent(
+          filter
+        )}:${includePins}`;
+      },
+      Thread: (thread) => {
+        const depth = thread.depth ?? "";
+        const parentHeight = thread.parentHeight ?? "";
+        return `thread:${encodeURIComponent(thread.uri)}:${depth}:${parentHeight}`;
+      },
+      Jetstream: (jetstream) => {
+        const endpoint = jetstream.endpoint ?? "";
+        const collections = normalizeList(jetstream.collections);
+        const dids = normalizeList(jetstream.dids);
+        const compress = jetstream.compress ? "1" : "0";
+        const maxMessageSize = jetstream.maxMessageSizeBytes ?? "";
+        return `jetstream:${encodeURIComponent(endpoint)}:${encodeURIComponent(
+          collections
+        )}:${encodeURIComponent(dids)}:${compress}:${maxMessageSize}`;
+      }
+    })
+  )(source);
 };

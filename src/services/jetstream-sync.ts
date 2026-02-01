@@ -5,7 +5,9 @@ import {
   Duration,
   Effect,
   Layer,
+  Match,
   Option,
+  Predicate,
   Ref,
   Schema,
   Stream
@@ -92,9 +94,9 @@ const toSyncError =
 const isCommitMessage = (
   message: JetstreamMessage.JetstreamMessage
 ): message is CommitMessage =>
-  message._tag === "CommitCreate" ||
-  message._tag === "CommitUpdate" ||
-  message._tag === "CommitDelete";
+  Predicate.isTagged(message, "CommitCreate") ||
+  Predicate.isTagged(message, "CommitUpdate") ||
+  Predicate.isTagged(message, "CommitDelete");
 
 const isPostCommit = (message: CommitMessage) =>
   message.commit.collection === "app.bsky.feed.post";
@@ -284,11 +286,13 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
             ): Effect.Effect<PreparedOutcome, SyncError> =>
               Effect.gen(function* () {
                 const uri = postUriFor(message);
-                switch (message._tag) {
-                  case "CommitCreate":
-                  case "CommitUpdate": {
+                const prepareUpsert = (
+                  commit: JetstreamMessage.CommitCreate | JetstreamMessage.CommitUpdate,
+                  checkExists: boolean
+                ) =>
+                  Effect.gen(function* () {
                     const handle = yield* profiles
-                      .handleForDid(message.did)
+                      .handleForDid(commit.did)
                       .pipe(
                         Effect.mapError(
                           toSyncError("source", "Failed to resolve author profile")
@@ -296,11 +300,11 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                       );
                     const raw = {
                       uri,
-                      cid: message.commit.cid,
+                      cid: commit.commit.cid,
                       author: handle,
-                      authorDid: message.did,
-                      record: message.commit.record,
-                      indexedAt: indexedAtFor(message)
+                      authorDid: commit.did,
+                      record: commit.commit.record,
+                      indexedAt: indexedAtFor(commit)
                     };
                     const post = yield* parser
                       .parsePost(raw)
@@ -318,18 +322,20 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                       ? ({
                           _tag: "Upsert",
                           post,
-                          checkExists: message._tag === "CommitCreate"
+                          checkExists
                         } as const)
                       : ({ _tag: "Skip" } as const);
-                  }
-                  case "CommitDelete": {
+                  });
+
+                const prepareDelete = (commit: JetstreamMessage.CommitDelete) =>
+                  Effect.gen(function* () {
                     const parsedUri = yield* Schema.decodeUnknown(PostUri)(uri).pipe(
                       Effect.mapError(toSyncError("parse", "Invalid post uri"))
                     );
                     const parsedCid =
-                      "cid" in message.commit &&
-                      typeof message.commit.cid === "string"
-                        ? yield* Schema.decodeUnknown(PostCid)(message.commit.cid).pipe(
+                      "cid" in commit.commit &&
+                      typeof commit.commit.cid === "string"
+                        ? yield* Schema.decodeUnknown(PostCid)(commit.commit.cid).pipe(
                             Effect.mapError(
                               toSyncError("parse", "Invalid post cid")
                             )
@@ -340,8 +346,16 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                       uri: parsedUri,
                       cid: parsedCid
                     } as const;
-                  }
-                }
+                  });
+
+                return yield* Match.type<CommitMessage>().pipe(
+                  Match.withReturnType<Effect.Effect<PreparedOutcome, SyncError>>(),
+                  Match.tagsExhaustive({
+                    CommitCreate: (commit) => prepareUpsert(commit, true),
+                    CommitUpdate: (commit) => prepareUpsert(commit, false),
+                    CommitDelete: (commit) => prepareDelete(commit)
+                  })
+                )(message);
               }).pipe(
                 Effect.catchAll((error) =>
                   Effect.succeed({ _tag: "Error", error } as const)
@@ -349,75 +363,76 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
               );
 
             const applyPrepared = (prepared: PreparedOutcome) => {
-              switch (prepared._tag) {
-                case "Skip":
-                  return Effect.succeed(skippedOutcome);
-                case "Error":
-                  return strict
-                    ? Effect.fail(prepared.error)
-                    : Effect.succeed({ _tag: "Error", error: prepared.error } as const);
-                case "Delete":
-                  return index
-                    .hasUri(config.store, prepared.uri)
-                    .pipe(
-                      Effect.mapError(
-                        toSyncError("store", "Failed to check existing post")
-                      ),
-                      Effect.flatMap((exists) =>
-                        exists
-                          ? storeDelete(
-                              config.store,
-                              config.command,
-                              filterHash,
-                              prepared.uri,
-                              prepared.cid
-                            ).pipe(
-                              Effect.map(
-                                (eventSeq): SyncOutcome => ({
-                                  _tag: "Stored",
-                                  eventSeq,
-                                  kind: "delete"
-                                })
+              return Match.type<PreparedOutcome>().pipe(
+                Match.withReturnType<Effect.Effect<SyncOutcome, SyncError>>(),
+                Match.tagsExhaustive({
+                  Skip: () => Effect.succeed(skippedOutcome),
+                  Error: (error) =>
+                    strict
+                      ? Effect.fail(error.error)
+                      : Effect.succeed({ _tag: "Error", error: error.error } as const),
+                  Delete: (del) =>
+                    index
+                      .hasUri(config.store, del.uri)
+                      .pipe(
+                        Effect.mapError(
+                          toSyncError("store", "Failed to check existing post")
+                        ),
+                        Effect.flatMap((exists) =>
+                          exists
+                            ? storeDelete(
+                                config.store,
+                                config.command,
+                                filterHash,
+                                del.uri,
+                                del.cid
+                              ).pipe(
+                                Effect.map(
+                                  (eventSeq): SyncOutcome => ({
+                                    _tag: "Stored",
+                                    eventSeq,
+                                    kind: "delete"
+                                  })
+                                )
                               )
-                            )
-                          : Effect.succeed(skippedOutcome)
-                      )
-                    );
-                case "Upsert":
-                  return (prepared.checkExists
-                    ? storePostIfMissing(
-                        config.store,
-                        config.command,
-                        filterHash,
-                        prepared.post
-                      ).pipe(
-                        Effect.map((eventSeq) =>
-                          Option.match(eventSeq, {
-                            onNone: () => skippedOutcome,
-                            onSome: (value): SyncOutcome => ({
+                            : Effect.succeed(skippedOutcome)
+                        )
+                      ),
+                  Upsert: (upsert) =>
+                    (upsert.checkExists
+                      ? storePostIfMissing(
+                          config.store,
+                          config.command,
+                          filterHash,
+                          upsert.post
+                        ).pipe(
+                          Effect.map((eventSeq) =>
+                            Option.match(eventSeq, {
+                              onNone: () => skippedOutcome,
+                              onSome: (value): SyncOutcome => ({
+                                _tag: "Stored",
+                                eventSeq: value,
+                                kind: "upsert"
+                              })
+                            })
+                          )
+                        )
+                      : storePost(
+                          config.store,
+                          config.command,
+                          filterHash,
+                          upsert.post
+                        ).pipe(
+                          Effect.map(
+                            (eventSeq): SyncOutcome => ({
                               _tag: "Stored",
-                              eventSeq: value,
+                              eventSeq,
                               kind: "upsert"
                             })
-                          })
-                        )
-                      )
-                    : storePost(
-                        config.store,
-                        config.command,
-                        filterHash,
-                        prepared.post
-                      ).pipe(
-                        Effect.map(
-                          (eventSeq): SyncOutcome => ({
-                            _tag: "Stored",
-                            eventSeq,
-                            kind: "upsert"
-                          })
-                        )
-                      )
-                  );
-              }
+                          )
+                        ))
+                })
+              )(prepared);
             };
 
             const processBatch = (batch: Chunk.Chunk<CommitMessage>) =>
@@ -440,23 +455,26 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                 const errors: Array<SyncError> = [];
                 let lastEventSeq = Option.none<EventSeq>();
                 for (const outcome of outcomes) {
-                  switch (outcome._tag) {
-                    case "Stored":
-                      if (outcome.kind === "delete") {
-                        deleted += 1;
-                      } else {
-                        added += 1;
+                  Match.type<SyncOutcome>().pipe(
+                    Match.withReturnType<void>(),
+                    Match.tagsExhaustive({
+                      Stored: (stored) => {
+                        if (stored.kind === "delete") {
+                          deleted += 1;
+                        } else {
+                          added += 1;
+                        }
+                        lastEventSeq = Option.some(stored.eventSeq);
+                      },
+                      Skipped: () => {
+                        skipped += 1;
+                      },
+                      Error: (error) => {
+                        skipped += 1;
+                        errors.push(error.error);
                       }
-                      lastEventSeq = Option.some(outcome.eventSeq);
-                      break;
-                    case "Skipped":
-                      skipped += 1;
-                      break;
-                    case "Error":
-                      skipped += 1;
-                      errors.push(outcome.error);
-                      break;
-                  }
+                    })
+                  )(outcome);
                 }
 
                 let maxCursor = 0;

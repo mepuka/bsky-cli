@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Clock, Effect, Option, Order, Ref, Schema, Stream } from "effect";
+import { Chunk, Clock, Effect, Match, Option, Order, Ref, Schema, Stream } from "effect";
 import * as Doc from "@effect/printer/Doc";
 import { all } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
@@ -132,8 +132,8 @@ type ImageExtract = {
   readonly author: Post["author"];
   readonly imageUrl: ImageRef["fullsizeUrl"];
   readonly thumbUrl: ImageRef["thumbUrl"];
-  readonly alt?: ImageRef["alt"];
-  readonly aspectRatio?: ImageRef["aspectRatio"];
+  readonly alt: ImageRef["alt"];
+  readonly aspectRatio: ImageRef["aspectRatio"];
 };
 
 type FieldSelector = {
@@ -150,28 +150,22 @@ const selectorsIncludeImages = (selectors: ReadonlyArray<FieldSelector>) =>
       (selector.wildcard && selector.path.length === 0)
   );
 
-const hasUnicodeInsensitiveContains = (expr: FilterExpr): boolean => {
-  switch (expr._tag) {
-    case "Contains":
-      return !expr.caseSensitive && expr.text.length > 0 && !isAscii(expr.text);
-    case "AltText":
-      return expr.text.length > 0 && !isAscii(expr.text);
-    case "And":
-      return (
-        hasUnicodeInsensitiveContains(expr.left) ||
-        hasUnicodeInsensitiveContains(expr.right)
-      );
-    case "Or":
-      return (
-        hasUnicodeInsensitiveContains(expr.left) ||
-        hasUnicodeInsensitiveContains(expr.right)
-      );
-    case "Not":
-      return hasUnicodeInsensitiveContains(expr.expr);
-    default:
-      return false;
-  }
-};
+const hasUnicodeInsensitiveContains = (expr: FilterExpr): boolean =>
+  Match.type<FilterExpr>().pipe(
+    Match.tags({
+      Contains: (contains) =>
+        !contains.caseSensitive && contains.text.length > 0 && !isAscii(contains.text),
+      AltText: (altText) => altText.text.length > 0 && !isAscii(altText.text),
+      And: (andExpr) =>
+        hasUnicodeInsensitiveContains(andExpr.left) ||
+        hasUnicodeInsensitiveContains(andExpr.right),
+      Or: (orExpr) =>
+        hasUnicodeInsensitiveContains(orExpr.left) ||
+        hasUnicodeInsensitiveContains(orExpr.right),
+      Not: (notExpr) => hasUnicodeInsensitiveContains(notExpr.expr)
+    }),
+    Match.orElse(() => false)
+  )(expr);
 
 const parseRangeOptions = (
   range: Option.Option<string>,
@@ -390,12 +384,8 @@ export const queryCommand = Command.make(
       });
       const resolveFieldImages = resolveImagesEffective && fieldImagesSelected;
 
-      let imagePipeline: ImagePipeline | undefined;
-      let imageArchive: ImageArchive | undefined;
-      if (resolveImagesEffective) {
-        imagePipeline = yield* ImagePipeline;
-        imageArchive = yield* ImageArchive;
-      }
+      const imagePipeline = resolveImagesEffective ? yield* ImagePipeline : undefined;
+      const imageArchive = resolveImagesEffective ? yield* ImageArchive : undefined;
 
       const resolveCachedUrl = (url: string, variant: ImageVariant) =>
         resolveImagesEffective

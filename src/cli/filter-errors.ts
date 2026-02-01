@@ -1,4 +1,4 @@
-import { ParseResult } from "effect";
+import { ParseResult, Predicate } from "effect";
 import { safeParseJson, issueDetails, findJsonParseIssue, jsonParseTip } from "./parse-errors.js";
 import { formatAgentError, type AgentErrorPayload } from "./errors.js";
 
@@ -94,7 +94,9 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
     });
   }
 
-  const tagMissing = issues.some((issue) => issue._tag === "Missing" && hasPath(issue, "_tag"));
+  const tagMissing = issues.some(
+    (issue) => Predicate.isTagged(issue, "Missing") && hasPath(issue, "_tag")
+  );
   if (tagMissing) {
     return validationError({
       message: "Filter expression requires a _tag field.",
@@ -107,7 +109,9 @@ export const formatFilterParseError = (error: ParseResult.ParseError, raw: strin
     });
   }
 
-  const tagInvalid = issues.some((issue) => issue._tag === "Type" && hasPath(issue, "_tag"));
+  const tagInvalid = issues.some(
+    (issue) => Predicate.isTagged(issue, "Type") && hasPath(issue, "_tag")
+  );
   if (tagInvalid) {
     return validationError({
       message: `Invalid filter type${tag ? ` "${tag}"` : ""}.`,

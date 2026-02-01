@@ -24,6 +24,7 @@ import {
   Config,
   Context,
   Duration,
+  Exit,
   Effect,
   Layer,
   Option,
@@ -497,7 +498,7 @@ export class IdentityResolver extends Context.Tag("@skygent/IdentityResolver")<
           capacity: requestCapacity,
           lookup,
           timeToLive: (exit) =>
-            exit._tag === "Failure" ? failureTtl : cacheTtl
+            Exit.isFailure(exit) ? failureTtl : cacheTtl
         }).pipe(Effect.map(Option.some));
       };
 

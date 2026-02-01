@@ -1,5 +1,5 @@
 import { Terminal } from "@effect/platform";
-import { Effect, Option } from "effect";
+import { Effect, Match, Option } from "effect";
 import { SyncProgress } from "../domain/sync.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import type { ResourceMonitorService, ResourceWarning } from "../services/resource-monitor.js";
@@ -88,21 +88,21 @@ export const logProgress = (progress: SyncProgress) =>
   logEvent("PROGRESS", { operation: "sync", progress });
 
 const warningDetails = (warning: ResourceWarning): Record<string, unknown> => {
-  switch (warning._tag) {
-    case "StoreSize":
-      return {
-        kind: warning._tag,
-        bytes: warning.bytes,
-        threshold: warning.threshold,
-        root: warning.root
-      };
-    case "MemoryRss":
-      return {
-        kind: warning._tag,
-        bytes: warning.bytes,
-        threshold: warning.threshold
-      };
-  }
+  return Match.type<ResourceWarning>().pipe(
+    Match.tagsExhaustive({
+      StoreSize: (store) => ({
+        kind: "StoreSize",
+        bytes: store.bytes,
+        threshold: store.threshold,
+        root: store.root
+      }),
+      MemoryRss: (memory) => ({
+        kind: "MemoryRss",
+        bytes: memory.bytes,
+        threshold: memory.threshold
+      })
+    })
+  )(warning);
 };
 
 export const makeSyncReporter = (

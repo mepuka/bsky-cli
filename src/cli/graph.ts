@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Effect, Option, Stream } from "effect";
+import { Either, Effect, Option, Stream } from "effect";
 import { BskyClient } from "../services/bsky-client.js";
 import { AppConfigService } from "../services/app-config.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
@@ -343,7 +343,7 @@ const relationshipsCommand = Command.make(
       );
       const handleMap = new Map<string, string>();
       for (const [did, result] of handles) {
-        if (result._tag === "Right") {
+        if (Either.isRight(result)) {
           handleMap.set(did, String(result.right));
         }
       }

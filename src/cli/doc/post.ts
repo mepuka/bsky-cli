@@ -3,72 +3,78 @@ import type { Annotation } from "./annotation.js";
 import { ann, metric } from "./primitives.js";
 import { collapseWhitespace, normalizeWhitespace, truncate } from "../../domain/format.js";
 import type { Post } from "../../domain/post.js";
-import type { PostEmbed } from "../../domain/bsky.js";
-import { isEmbedExternal, isEmbedImages, isEmbedVideo } from "../../domain/bsky.js";
-import { extractImageRefs } from "../../domain/embeds.js";
+import type { EmbedRecordTarget, PostEmbed } from "../../domain/bsky.js";
+import {
+  isEmbedExternal,
+  isEmbedImages,
+  isEmbedRecord,
+  isEmbedRecordView,
+  isEmbedRecordWithMedia,
+  isEmbedVideo
+} from "../../domain/bsky.js";
+import { embedMedia, extractImageRefs } from "../../domain/embeds.js";
 
 type SDoc = Doc.Doc<Annotation>;
 
+const recordAuthor = (record: EmbedRecordTarget) =>
+  isEmbedRecordView(record) ? record.author.handle : undefined;
+
 const renderEmbedSummary = (embed: PostEmbed): SDoc => {
-  switch (embed._tag) {
-    case "Images":    return Doc.text(`[Images: ${embed.images.length}]`);
-    case "External":  return Doc.text(`[Link: ${truncate(embed.title || embed.uri, 40)}]`);
-    case "Video":     return Doc.text("[Video]");
-    case "Record":
-      return Doc.text(
-        embed.record._tag === "RecordView"
-          ? `[Quote: @${embed.record.author.handle}]`
-          : "[Quote]"
-      );
-    case "RecordWithMedia":
-      if (isEmbedImages(embed.media)) {
-        return Doc.text(
-          embed.record._tag === "RecordView"
-            ? `[Quote: @${embed.record.author.handle} + ${embed.media.images.length} images]`
-            : `[Quote + ${embed.media.images.length} images]`
-        );
-      }
-      if (isEmbedExternal(embed.media)) {
-        return Doc.text(
-          embed.record._tag === "RecordView"
-            ? `[Quote: @${embed.record.author.handle} + Link]`
-            : "[Quote + Link]"
-        );
-      }
-      if (isEmbedVideo(embed.media)) {
-        return Doc.text(
-          embed.record._tag === "RecordView"
-            ? `[Quote: @${embed.record.author.handle} + Video]`
-            : "[Quote + Video]"
-        );
-      }
-      return Doc.text(
-        embed.record._tag === "RecordView"
-          ? `[Quote: @${embed.record.author.handle} + media]`
-          : "[Quote + media]"
-      );
-    default:          return Doc.text("[Embed]");
+  if (isEmbedImages(embed)) {
+    return Doc.text(`[Images: ${embed.images.length}]`);
   }
+  if (isEmbedExternal(embed)) {
+    return Doc.text(`[Link: ${truncate(embed.title || embed.uri, 40)}]`);
+  }
+  if (isEmbedVideo(embed)) {
+    return Doc.text("[Video]");
+  }
+  if (isEmbedRecord(embed)) {
+    const author = recordAuthor(embed.record);
+    return Doc.text(author ? `[Quote: @${author}]` : "[Quote]");
+  }
+  if (isEmbedRecordWithMedia(embed)) {
+    const author = recordAuthor(embed.record);
+    const media = embedMedia(embed);
+    if (media && isEmbedImages(media)) {
+      return Doc.text(
+        author
+          ? `[Quote: @${author} + ${media.images.length} images]`
+          : `[Quote + ${media.images.length} images]`
+      );
+    }
+    if (media && isEmbedExternal(media)) {
+      return Doc.text(author ? `[Quote: @${author} + Link]` : "[Quote + Link]");
+    }
+    if (media && isEmbedVideo(media)) {
+      return Doc.text(author ? `[Quote: @${author} + Video]` : "[Quote + Video]");
+    }
+    return Doc.text(author ? `[Quote: @${author} + media]` : "[Quote + media]");
+  }
+  return Doc.text("[Embed]");
 };
 
 const compactEmbedLabel = (embed: PostEmbed): string => {
-  switch (embed._tag) {
-    case "Images":
-      return `${embed.images.length}img`;
-    case "External":
-      return "link";
-    case "Video":
-      return "video";
-    case "Record":
-      return "quote";
-    case "RecordWithMedia":
-      if (isEmbedImages(embed.media)) return `quote+${embed.media.images.length}img`;
-      if (isEmbedExternal(embed.media)) return "quote+link";
-      if (isEmbedVideo(embed.media)) return "quote+video";
-      return "quote+media";
-    default:
-      return "embed";
+  if (isEmbedImages(embed)) {
+    return `${embed.images.length}img`;
   }
+  if (isEmbedExternal(embed)) {
+    return "link";
+  }
+  if (isEmbedVideo(embed)) {
+    return "video";
+  }
+  if (isEmbedRecord(embed)) {
+    return "quote";
+  }
+  if (isEmbedRecordWithMedia(embed)) {
+    const media = embedMedia(embed);
+    if (media && isEmbedImages(media)) return `quote+${media.images.length}img`;
+    if (media && isEmbedExternal(media)) return "quote+link";
+    if (media && isEmbedVideo(media)) return "quote+video";
+    return "quote+media";
+  }
+  return "embed";
 };
 
 const detailMaxWidth = (lineWidth?: number) =>
@@ -99,15 +105,18 @@ const renderEmbedDetails = (
     lines.push(ann("dim", Doc.text(`alt: +${altTexts.length - shownAlt.length} more`)));
   }
 
-  if (embed._tag === "Video" && embed.alt) {
+  if (isEmbedVideo(embed) && embed.alt) {
     addDetail("alt", embed.alt);
   }
 
-  if (embed._tag === "External" && embed.description) {
+  if (isEmbedExternal(embed) && embed.description) {
     addDetail("desc", embed.description);
   }
-  if (embed._tag === "RecordWithMedia" && isEmbedExternal(embed.media) && embed.media.description) {
-    addDetail("desc", embed.media.description);
+  if (isEmbedRecordWithMedia(embed)) {
+    const media = embedMedia(embed);
+    if (media && isEmbedExternal(media) && media.description) {
+      addDetail("desc", media.description);
+    }
   }
 
   return lines;

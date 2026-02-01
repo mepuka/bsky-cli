@@ -26,12 +26,14 @@ export class PostUpsert extends Schema.TaggedClass<PostUpsert>()("PostUpsert", {
   post: Post,
   meta: EventMeta
 }) {}
+export const isPostUpsert = Schema.is(PostUpsert);
 
 export class PostDelete extends Schema.TaggedClass<PostDelete>()("PostDelete", {
   uri: PostUri,
   cid: Schema.optional(PostCid),
   meta: EventMeta
 }) {}
+export const isPostDelete = Schema.is(PostDelete);
 
 export const PostEvent = Schema.Union(PostUpsert, PostDelete);
 export type PostEvent = typeof PostEvent.Type;

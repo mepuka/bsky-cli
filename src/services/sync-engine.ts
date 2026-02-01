@@ -59,7 +59,7 @@
  * @module services/sync-engine
  */
 
-import { Chunk, Clock, Context, Duration, Effect, Fiber, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
+import { Chunk, Clock, Context, Duration, Effect, Fiber, Layer, Match, Option, Predicate, Ref, Schedule, Schema, Stream } from "effect";
 import { messageFromCause } from "./shared.js";
 import type { BskyError } from "../domain/errors.js";
 import { FilterRuntime } from "./filter-runtime.js";
@@ -102,6 +102,14 @@ type SyncOutcome =
 
 const skippedOutcome: SyncOutcome = { _tag: "Skipped" };
 
+type SourceLabel =
+  | "timeline"
+  | "feed"
+  | "list"
+  | "notifications"
+  | "author"
+  | "thread"
+  | "jetstream";
 
 const toSyncError =
   (stage: SyncStage, fallback: string) => (cause: unknown) =>
@@ -111,42 +119,33 @@ const toSyncError =
       cause
     });
 
-const sourceLabel = (source: DataSource) => {
-  switch (source._tag) {
-    case "Timeline":
-      return "timeline";
-    case "Feed":
-      return "feed";
-    case "List":
-      return "list";
-    case "Notifications":
-      return "notifications";
-    case "Author":
-      return "author";
-    case "Thread":
-      return "thread";
-    case "Jetstream":
-      return "jetstream";
-  }
+const sourceLabel = (source: DataSource): SourceLabel => {
+  return Match.type<DataSource>().pipe(
+    Match.withReturnType<SourceLabel>(),
+    Match.tagsExhaustive({
+      Timeline: () => "timeline",
+      Feed: () => "feed",
+      List: () => "list",
+      Notifications: () => "notifications",
+      Author: () => "author",
+      Thread: () => "thread",
+      Jetstream: () => "jetstream"
+    })
+  )(source);
 };
 
 const commandForSource = (source: DataSource) => {
-  switch (source._tag) {
-    case "Timeline":
-      return "sync timeline";
-    case "Feed":
-      return `sync feed ${source.uri}`;
-    case "List":
-      return `sync list ${source.uri}`;
-    case "Notifications":
-      return "sync notifications";
-    case "Author":
-      return `sync author ${source.actor}`;
-    case "Thread":
-      return `sync thread ${source.uri}`;
-    case "Jetstream":
-      return "sync jetstream";
-  }
+  return Match.type<DataSource>().pipe(
+    Match.tagsExhaustive({
+      Timeline: () => "sync timeline",
+      Feed: (feed) => `sync feed ${feed.uri}`,
+      List: (list) => `sync list ${list.uri}`,
+      Notifications: () => "sync notifications",
+      Author: (author) => `sync author ${author.actor}`,
+      Thread: (thread) => `sync thread ${thread.uri}`,
+      Jetstream: () => "sync jetstream"
+    })
+  )(source);
 };
 
 export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
@@ -256,29 +255,29 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               Effect.gen(function* () {
                 const storeItems = preparedBatch.filter(
                   (item): item is Extract<PreparedOutcome, { _tag: "Store" }> =>
-                    item._tag === "Store"
+                    Predicate.isTagged(item, "Store")
                 );
                 const events = yield* Effect.forEach(storeItems, (item) =>
                   buildUpsert(item.post)
                 );
                 const storedEntries = yield* commitStoreEvents(events);
                 let storeIndex = 0;
-                return preparedBatch.map((prepared) => {
-                  switch (prepared._tag) {
-                    case "Skip":
-                      return skippedOutcome;
-                    case "Error":
-                      return { _tag: "Error", error: prepared.error } as const;
-                    case "Store": {
-                      const entry = storedEntries[storeIndex++] ?? Option.none();
-                      return Option.match(entry, {
-                        onNone: () => skippedOutcome,
-                        onSome: (record) =>
-                          ({ _tag: "Stored", eventSeq: record.seq } as const)
-                      });
-                    }
-                  }
-                });
+                return preparedBatch.map((prepared) =>
+                  Match.type<PreparedOutcome>().pipe(
+                    Match.tagsExhaustive({
+                      Skip: () => skippedOutcome,
+                      Error: (error) => ({ _tag: "Error", error: error.error } as const),
+                      Store: () => {
+                        const entry = storedEntries[storeIndex++] ?? Option.none();
+                        return Option.match(entry, {
+                          onNone: () => skippedOutcome,
+                          onSome: (record) =>
+                            ({ _tag: "Stored", eventSeq: record.seq } as const)
+                        });
+                      }
+                    })
+                  )(prepared)
+                );
               });
 
             const initial = SyncResultMonoid.empty;
@@ -293,50 +292,51 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
             );
             const pageLimit = settings.pageLimit;
 
-            let stream = (() => {
-              switch (source._tag) {
-                case "Timeline":
-                  return client.getTimeline(
+            let stream = Match.type<DataSource>().pipe(
+              Match.withReturnType<Stream.Stream<RawPost, BskyError | SyncError>>(),
+              Match.tagsExhaustive({
+                Timeline: () =>
+                  client.getTimeline(
                     Option.match(cursorOption, {
                       onNone: () => ({ limit: pageLimit }),
                       onSome: (value) => ({ cursor: value, limit: pageLimit })
                     })
-                  );
-                case "Feed":
-                  return client.getFeed(
-                    source.uri,
+                  ),
+                Feed: (feed) =>
+                  client.getFeed(
+                    feed.uri,
                     Option.match(cursorOption, {
                       onNone: () => ({ limit: pageLimit }),
                       onSome: (value) => ({ cursor: value, limit: pageLimit })
                     })
-                  );
-                case "List":
-                  return client.getListFeed(
-                    source.uri,
+                  ),
+                List: (list) =>
+                  client.getListFeed(
+                    list.uri,
                     Option.match(cursorOption, {
                       onNone: () => ({ limit: pageLimit }),
                       onSome: (value) => ({ cursor: value, limit: pageLimit })
                     })
-                  );
-                case "Notifications":
-                  return client.getNotifications(
+                  ),
+                Notifications: () =>
+                  client.getNotifications(
                     Option.match(cursorOption, {
                       onNone: () => ({ limit: pageLimit }),
                       onSome: (value) => ({ cursor: value, limit: pageLimit })
                     })
-                  );
-                case "Author":
+                  ),
+                Author: (author) => {
                   const authorOptions = {
                     limit: pageLimit,
-                    ...(source.filter !== undefined
-                      ? { filter: source.filter }
+                    ...(author.filter !== undefined
+                      ? { filter: author.filter }
                       : {}),
-                    ...(source.includePins !== undefined
-                      ? { includePins: source.includePins }
+                    ...(author.includePins !== undefined
+                      ? { includePins: author.includePins }
                       : {})
                   };
                   return client.getAuthorFeed(
-                    source.actor,
+                    author.actor,
                     Option.match(cursorOption, {
                       onNone: () => authorOptions,
                       onSome: (value) => ({
@@ -345,28 +345,29 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       })
                     })
                   );
-                case "Thread":
-                  return Stream.unwrap(
+                },
+                Thread: (thread) =>
+                  Stream.unwrap(
                     client
-                      .getPostThread(source.uri, {
-                        ...(source.depth !== undefined
-                          ? { depth: source.depth }
+                      .getPostThread(thread.uri, {
+                        ...(thread.depth !== undefined
+                          ? { depth: thread.depth }
                           : {}),
-                        ...(source.parentHeight !== undefined
-                          ? { parentHeight: source.parentHeight }
+                        ...(thread.parentHeight !== undefined
+                          ? { parentHeight: thread.parentHeight }
                           : {})
                       })
                       .pipe(Effect.map((posts) => Stream.fromIterable(posts)))
-                  );
-                case "Jetstream":
-                  return Stream.fail(
+                  ),
+                Jetstream: () =>
+                  Stream.fail(
                     SyncError.make({
                       stage: "source",
                       message: "Jetstream sources require the jetstream sync engine."
                     })
-                  );
-              }
-            })() as Stream.Stream<RawPost, BskyError | SyncError>;
+                  )
+              })
+            )(source);
             if (options?.limit !== undefined) {
               stream = stream.pipe(Stream.take(options.limit));
             }
@@ -486,20 +487,23 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                     let lastStoredSeq = Option.none<EventSeq>();
                     const errorList: Array<SyncError> = [];
                     for (const outcome of outcomes) {
-                      switch (outcome._tag) {
-                        case "Stored":
-                          storedDelta += 1;
-                          lastStoredSeq = Option.some(outcome.eventSeq);
-                          break;
-                        case "Skipped":
-                          skippedDelta += 1;
-                          break;
-                        case "Error":
-                          skippedDelta += 1;
-                          errorDelta += 1;
-                          errorList.push(outcome.error);
-                          break;
-                      }
+                      Match.type<SyncOutcome>().pipe(
+                        Match.withReturnType<void>(),
+                        Match.tagsExhaustive({
+                          Stored: (stored) => {
+                            storedDelta += 1;
+                            lastStoredSeq = Option.some(stored.eventSeq);
+                          },
+                          Skipped: () => {
+                            skippedDelta += 1;
+                          },
+                          Error: (error) => {
+                            skippedDelta += 1;
+                            errorDelta += 1;
+                            errorList.push(error.error);
+                          }
+                        })
+                      )(outcome);
                     }
                     const delta = SyncResult.make({
                       postsAdded: storedDelta,

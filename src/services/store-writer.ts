@@ -2,7 +2,7 @@ import { Clock, Context, Effect, Layer, Option, Random, Schema, SynchronizedRef 
 import type * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import { StoreIoError } from "../domain/errors.js";
-import { type EventLogEntry, PostEvent, PostEventRecord } from "../domain/events.js";
+import { type EventLogEntry, PostEvent, PostEventRecord, isPostUpsert } from "../domain/events.js";
 import { EventId, EventSeq, PostUri } from "../domain/primitives.js";
 import type { StorePath } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
@@ -148,10 +148,9 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
             const payloadJson = yield* Schema.encode(
               Schema.parseJson(PostEventRecord)
             )(record);
-            const postUri =
-              record.event._tag === "PostUpsert"
-                ? record.event.post.uri
-                : record.event.uri;
+            const postUri = isPostUpsert(record.event)
+              ? record.event.post.uri
+              : record.event.uri;
             const createdAt =
               record.event.meta.createdAt instanceof Date
                 ? record.event.meta.createdAt.toISOString()

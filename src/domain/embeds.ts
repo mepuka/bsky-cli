@@ -1,5 +1,12 @@
 import type { EmbedImage, EmbedRecordTarget, PostEmbed } from "./bsky.js";
-import { isEmbedExternal, isEmbedImages } from "./bsky.js";
+import {
+  isEmbedExternal,
+  isEmbedImages,
+  isEmbedRecord,
+  isEmbedRecordView,
+  isEmbedRecordWithMedia,
+  isEmbedVideo
+} from "./bsky.js";
 import { EmbedExternalSummary, EmbedRecordSummary, EmbedSummary, ImageRef, ImageSummary } from "./images.js";
 
 const normalizeAlt = (alt: string) => {
@@ -40,76 +47,106 @@ export const extractImageAltText = (embed?: PostEmbed): ReadonlyArray<string> =>
 
 const summarizeRecord = (record: EmbedRecordTarget) => {
   const uri = "uri" in record ? record.uri : undefined;
-  const authorHandle = record._tag === "RecordView" ? record.author.handle : undefined;
+  const authorHandle = isEmbedRecordView(record) ? record.author.handle : undefined;
   return new EmbedRecordSummary({ uri, authorHandle });
 };
 
+export const embedMedia = (embed?: PostEmbed): PostEmbed | undefined => {
+  if (!embed || !isEmbedRecordWithMedia(embed)) return undefined;
+  const media = embed.media;
+  if (isEmbedImages(media) || isEmbedExternal(media) || isEmbedVideo(media)) {
+    return media;
+  }
+  return undefined;
+};
+
+export const hasExternalEmbed = (embed?: PostEmbed): boolean => {
+  if (!embed) return false;
+  if (isEmbedExternal(embed)) return true;
+  const media = embedMedia(embed);
+  return media ? isEmbedExternal(media) : false;
+};
+
+export const hasVideoEmbed = (embed?: PostEmbed): boolean => {
+  if (!embed) return false;
+  if (isEmbedVideo(embed)) return true;
+  const media = embedMedia(embed);
+  return media ? isEmbedVideo(media) : false;
+};
+
+export const isQuoteEmbed = (embed?: PostEmbed): boolean =>
+  Boolean(embed && (isEmbedRecord(embed) || isEmbedRecordWithMedia(embed)));
+
 export const extractImageRefs = (embed?: PostEmbed): ReadonlyArray<ImageRef> => {
   if (!embed) return [];
-  switch (embed._tag) {
-    case "Images":
-      return embed.images.map(toImageRef);
-    case "RecordWithMedia":
-      return isEmbedImages(embed.media) ? embed.media.images.map(toImageRef) : [];
-    default:
-      return [];
+  if (isEmbedImages(embed)) {
+    return embed.images.map(toImageRef);
   }
+  if (isEmbedRecordWithMedia(embed)) {
+    const media = embedMedia(embed);
+    return media && isEmbedImages(media) ? media.images.map(toImageRef) : [];
+  }
+  return [];
 };
 
 export const summarizeEmbed = (embed?: PostEmbed): EmbedSummary | undefined => {
   if (!embed) return undefined;
 
-  switch (embed._tag) {
-    case "Images": {
-      const images = embed.images.map(toImageRef);
+  if (isEmbedImages(embed)) {
+    const images = embed.images.map(toImageRef);
+    return new EmbedSummary({
+      type: "images",
+      imageSummary: summarizeImages(images)
+    });
+  }
+  if (isEmbedExternal(embed)) {
+    return new EmbedSummary({
+      type: "external",
+      external: new EmbedExternalSummary({
+        uri: embed.uri,
+        title: embed.title,
+        description: embed.description,
+        thumb: embed.thumb
+      })
+    });
+  }
+  if (isEmbedVideo(embed)) {
+    return new EmbedSummary({ type: "video" });
+  }
+  if (isEmbedRecord(embed)) {
+    return new EmbedSummary({
+      type: "record",
+      record: summarizeRecord(embed.record)
+    });
+  }
+  if (isEmbedRecordWithMedia(embed)) {
+    const base = {
+      type: "record_with_media" as const,
+      record: summarizeRecord(embed.record)
+    };
+    const media = embedMedia(embed);
+    if (media && isEmbedImages(media)) {
+      const images = media.images.map(toImageRef);
       return new EmbedSummary({
-        type: "images",
+        ...base,
         imageSummary: summarizeImages(images)
       });
     }
-    case "External":
+    if (media && isEmbedExternal(media)) {
       return new EmbedSummary({
-        type: "external",
+        ...base,
         external: new EmbedExternalSummary({
-          uri: embed.uri,
-          title: embed.title,
-          description: embed.description,
-          thumb: embed.thumb
+          uri: media.uri,
+          title: media.title,
+          description: media.description,
+          thumb: media.thumb
         })
       });
-    case "Video":
-      return new EmbedSummary({ type: "video" });
-    case "Record":
-      return new EmbedSummary({
-        type: "record",
-        record: summarizeRecord(embed.record)
-      });
-    case "RecordWithMedia": {
-      const base = {
-        type: "record_with_media" as const,
-        record: summarizeRecord(embed.record)
-      };
-      if (isEmbedImages(embed.media)) {
-        const images = embed.media.images.map(toImageRef);
-        return new EmbedSummary({
-          ...base,
-          imageSummary: summarizeImages(images)
-        });
-      }
-      if (isEmbedExternal(embed.media)) {
-        return new EmbedSummary({
-          ...base,
-          external: new EmbedExternalSummary({
-            uri: embed.media.uri,
-            title: embed.media.title,
-            description: embed.media.description,
-            thumb: embed.media.thumb
-          })
-        });
-      }
-      return new EmbedSummary(base);
     }
-    default:
-      return new EmbedSummary({ type: "unknown" });
+    if (media && isEmbedVideo(media)) {
+      return new EmbedSummary({ ...base });
+    }
+    return new EmbedSummary(base);
   }
+  return new EmbedSummary({ type: "unknown" });
 };
