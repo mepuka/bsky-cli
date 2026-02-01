@@ -30,8 +30,8 @@ Notes:
 2. **Skygent Post NDJSON** — from `query --format ndjson`
 3. **Store-wrapped Post NDJSON** — from `query --format ndjson --include-store`
 
-Compact query output (default) works but only includes `uri`, `author`, `text`, `createdAt`.
-For richer filtering (hashtags, metrics, etc.), use `--full`:
+Compact query output (default) is **not compatible** with `pipe` — it only includes
+`uri`, `author`, `text`, `createdAt` and will fail schema validation. Always use `--full`:
 
 ```bash
 skygent --full query my-store --format ndjson | skygent pipe --filter 'hashtag:#ai'

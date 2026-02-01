@@ -9,14 +9,15 @@ bun run index.ts <command>
 ## Global options
 
 These options are defined on the root `skygent` command and override config/env defaults.
-**Placement:** global options must appear after the subcommand name, not before it.
+**Placement:** global options must appear **before** the subcommand name.
+Commands with positional arguments (like `query <store...>`) will consume unknown flags as args.
 
 ```bash
-# Correct — global flags after subcommand:
-skygent query my-store --full --limit 5
-
-# Wrong — will fail:
+# Correct — global flags before subcommand:
 skygent --full query my-store --limit 5
+
+# Wrong — query treats --full as a store name:
+skygent query my-store --full --limit 5
 ```
 
 - `--service <url>`: Override Bluesky service URL.
@@ -30,6 +31,7 @@ skygent --full query my-store --limit 5
 Tips:
 
 - Compact output is the default; use `--full` for verbose JSON payloads.
+- For commands with positional args (e.g. `query`, `store show`), global flags after the subcommand may be consumed as positional args. Place them before the subcommand to be safe.
 - For sync/watch commands, add `--quiet` to suppress progress logs.
 
 ## Commands
@@ -83,6 +85,7 @@ One-off ingestion into a store.
 - `sync feed <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--quiet]`
 - `sync notifications --store <name> [--filter <dsl>] [--filter-json <json>] [--quiet]`
 - `sync author <actor> --store <name> [--filter <posts_with_replies|posts_no_replies|posts_with_media|posts_and_author_threads>] [--include-pins] [--post-filter <dsl>] [--post-filter-json <json>] [--quiet]`
+- `sync list <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--limit <n>] [--quiet]`
 - `sync thread <uri> --store <name> [--depth <n>] [--parent-height <n>] [--filter <dsl>] [--filter-json <json>] [--quiet]`
 - `sync jetstream --store <name> [--filter <dsl>] [--filter-json <json>] [--limit <n> | --duration <duration>] [--endpoint <url>] [--collections <csv>] [--dids <csv>] [--cursor <micros>] [--compress] [--max-message-size <bytes>] [--strict] [--max-errors <n>] [--quiet]`
 
@@ -107,14 +110,17 @@ Notes:
 
 Repeated polling + streaming NDJSON results to stdout.
 
-- `watch timeline --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
-- `watch feed <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
-- `watch notifications --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
-- `watch author <actor> --store <name> [--filter <posts_with_replies|posts_no_replies|posts_with_media|posts_and_author_threads>] [--include-pins] [--post-filter <dsl>] [--post-filter-json <json>] [--interval <duration>] [--quiet]`
-- `watch thread <uri> --store <name> [--depth <n>] [--parent-height <n>] [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--quiet]`
-- `watch jetstream --store <name> [--filter <dsl>] [--filter-json <json>] [--endpoint <url>] [--collections <csv>] [--dids <csv>] [--cursor <micros>] [--compress] [--max-message-size <bytes>] [--strict] [--max-errors <n>] [--quiet]`
+- `watch timeline --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--max-cycles <n>] [--until <duration>] [--quiet]`
+- `watch feed <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--max-cycles <n>] [--until <duration>] [--quiet]`
+- `watch list <uri> --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--max-cycles <n>] [--until <duration>] [--quiet]`
+- `watch notifications --store <name> [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--max-cycles <n>] [--until <duration>] [--quiet]`
+- `watch author <actor> --store <name> [--filter <posts_with_replies|posts_no_replies|posts_with_media|posts_and_author_threads>] [--include-pins] [--post-filter <dsl>] [--post-filter-json <json>] [--interval <duration>] [--max-cycles <n>] [--until <duration>] [--quiet]`
+- `watch thread <uri> --store <name> [--depth <n>] [--parent-height <n>] [--filter <dsl>] [--filter-json <json>] [--interval <duration>] [--max-cycles <n>] [--until <duration>] [--quiet]`
+- `watch jetstream --store <name> [--filter <dsl>] [--filter-json <json>] [--endpoint <url>] [--collections <csv>] [--dids <csv>] [--cursor <micros>] [--compress] [--max-message-size <bytes>] [--max-cycles <n>] [--until <duration>] [--strict] [--max-errors <n>] [--quiet]`
 
 `--interval` accepts strings like "30 seconds" or "500 millis". Default is 30 seconds.
+`--max-cycles` stops after N poll cycles. `--until` stops after a duration (e.g. "10 minutes").
+Note: `watch jetstream` does not use `--interval`; it streams continuously and uses `--max-cycles`/`--until` to bound the run.
 
 ### query
 
@@ -144,11 +150,20 @@ Notes:
 - `--mode event-time` (default) disallows effectful filters (Trending, HasValidLinks).
 - `--reset` is destructive and requires `--yes`.
 
+### pipe
+
+Filter NDJSON post input from stdin.
+
+- `pipe --filter <dsl> [--filter-json <json>] [--on-error <fail|skip|report>] [--batch-size <n>]`
+
+Requires `--filter` or `--filter-json`. Use `--full` when piping from `query` (see [Piping query output](outputs.md#piping-query-output)).
+
 ### view
 
-Check derived view status.
+Check derived view status and display threads.
 
 - `view status <view> <source>`
+- `view thread <uri> [--store <name>] [--depth <n>] [--parent-height <n>] [--ansi] [--compact] [--width <n>] [--format <text|json>]`
 
 ### config
 
