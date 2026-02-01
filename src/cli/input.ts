@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 
 export interface CliInputService {
   readonly lines: Stream.Stream<string, PlatformError>;
+  readonly isTTY: boolean;
 }
 
 const makeLines = () =>
@@ -39,7 +40,8 @@ export class CliInput extends Context.Tag("@skygent/CliInput")<
   static readonly layer = Layer.succeed(
     CliInput,
     CliInput.of({
-      lines: makeLines()
+      lines: makeLines(),
+      isTTY: Boolean(process.stdin.isTTY)
     })
   );
 }

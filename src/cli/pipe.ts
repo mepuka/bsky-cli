@@ -65,15 +65,14 @@ export const pipeCommand = Command.make(
   { filter: filterOption, filterJson: filterJsonOption, onError: onErrorOption, batchSize: batchSizeOption },
   ({ filter, filterJson, onError, batchSize }) =>
     Effect.gen(function* () {
-      if (process.stdin.isTTY) {
+      const input = yield* CliInput;
+      if (input.isTTY) {
         return yield* CliInputError.make({
           message: "stdin is a TTY. Pipe NDJSON input into skygent pipe.",
           cause: { isTTY: true }
         });
       }
       yield* requireFilterExpr(filter, filterJson);
-
-      const input = yield* CliInput;
       const parser = yield* PostParser;
       const runtime = yield* FilterRuntime;
       const expr = yield* parseFilterExpr(filter, filterJson);
