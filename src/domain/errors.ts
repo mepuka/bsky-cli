@@ -33,6 +33,7 @@ export class ImageFetchError extends Schema.TaggedError<ImageFetchError>()(
     status: Schema.optional(Schema.Number)
   }
 ) {}
+export const isImageFetchError = Schema.is(ImageFetchError);
 
 export class ImageArchiveError extends Schema.TaggedError<ImageArchiveError>()(
   "ImageArchiveError",
@@ -43,6 +44,7 @@ export class ImageArchiveError extends Schema.TaggedError<ImageArchiveError>()(
     cause: Schema.optional(Schema.Unknown)
   }
 ) {}
+export const isImageArchiveError = Schema.is(ImageArchiveError);
 
 export class ImageCacheError extends Schema.TaggedError<ImageCacheError>()(
   "ImageCacheError",
@@ -53,6 +55,7 @@ export class ImageCacheError extends Schema.TaggedError<ImageCacheError>()(
     status: Schema.optional(Schema.Number)
   }
 ) {}
+export const isImageCacheError = Schema.is(ImageCacheError);
 
 export class ConfigError extends Schema.TaggedError<ConfigError>()(
   "ConfigError",
@@ -82,6 +85,7 @@ export class StoreIoError extends Schema.TaggedError<StoreIoError>()(
   "StoreIoError",
   { path: StorePath, cause: Schema.Unknown }
 ) {}
+export const isStoreIoError = Schema.is(StoreIoError);
 
 export class StoreIndexError extends Schema.TaggedError<StoreIndexError>()(
   "StoreIndexError",

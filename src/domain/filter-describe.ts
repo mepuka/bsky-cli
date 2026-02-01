@@ -1,4 +1,4 @@
-import { Duration } from "effect";
+import { Duration, Match, Predicate } from "effect";
 import { type FilterExpr, isEffectfulFilter } from "./filter.js";
 import type { FilterErrorPolicy } from "./policies.js";
 
@@ -40,26 +40,27 @@ const formatWithOptions = (key: string, value: string, options: string[]) => {
 };
 
 const formatPolicy = (policy: FilterErrorPolicy) => {
-  switch (policy._tag) {
-    case "Include":
-      return "include";
-    case "Exclude":
-      return "exclude";
-    case "Retry": {
-      const delayMs = Duration.toMillis(policy.baseDelay);
-      const delayValue = formatValue(`${delayMs} millis`);
-      return `retry,maxRetries=${policy.maxRetries},baseDelay=${delayValue}`;
-    }
-  }
+  return Match.type<FilterErrorPolicy>().pipe(
+    Match.tagsExhaustive({
+      Include: () => "include",
+      Exclude: () => "exclude",
+      Retry: (retryPolicy) => {
+        const delayMs = Duration.toMillis(retryPolicy.baseDelay);
+        const delayValue = formatValue(`${delayMs} millis`);
+        return `retry,maxRetries=${retryPolicy.maxRetries},baseDelay=${delayValue}`;
+      }
+    })
+  )(policy);
 };
 
 const isDefaultPolicy = (tag: "HasValidLinks" | "Trending", policy: FilterErrorPolicy) => {
-  switch (tag) {
-    case "HasValidLinks":
-      return policy._tag === "Exclude";
-    case "Trending":
-      return policy._tag === "Include";
-  }
+  return Match.type<FilterErrorPolicy>().pipe(
+    Match.tagsExhaustive({
+      Include: () => tag === "Trending",
+      Exclude: () => tag === "HasValidLinks",
+      Retry: () => false
+    })
+  )(policy);
 };
 
 const formatEngagement = (expr: {
@@ -79,287 +80,224 @@ const formatRegex = (pattern: string, flags?: string) => {
   return `/${escaped}/${flags ?? ""}`;
 };
 
-const formatLeafValue = (expr: FilterExpr): string => {
-  switch (expr._tag) {
-    case "Author":
-      return expr.handle;
-    case "Hashtag":
-      return expr.tag;
-    case "AuthorIn":
-      return expr.handles.join(", ");
-    case "HashtagIn":
-      return expr.tags.join(", ");
-    case "Contains": {
-      const text = formatValue(expr.text);
-      return expr.caseSensitive !== undefined
-        ? `${text} (caseSensitive=${expr.caseSensitive})`
-        : text;
-    }
-    case "IsReply":
-      return "reply";
-    case "IsQuote":
-      return "quote";
-    case "IsRepost":
-      return "repost";
-    case "IsOriginal":
-      return "original";
-    case "Engagement":
-      return formatEngagement(expr);
-    case "HasImages":
-      return "images";
-    case "MinImages":
-      return `${expr.min}`;
-    case "HasAltText":
-      return "alt text";
-    case "NoAltText":
-      return "missing alt text";
-    case "AltText":
-      return formatValue(expr.text);
-    case "AltTextRegex":
-      return formatRegex(expr.pattern, expr.flags);
-    case "HasVideo":
-      return "video";
-    case "HasLinks":
-      return "links";
-    case "HasMedia":
-      return "media";
-    case "HasEmbed":
-      return "embed";
-    case "Language":
-      return expr.langs.join(", ");
-    case "Regex": {
-      const pattern = expr.patterns.length > 1 ? expr.patterns.join("|") : expr.patterns[0] ?? "";
-      return formatRegex(pattern, expr.flags);
-    }
-    case "DateRange":
-      return `${expr.start.toISOString()}..${expr.end.toISOString()}`;
-    case "HasValidLinks":
-      return "valid links";
-    case "Trending":
-      return expr.tag;
-    case "All":
-      return "all";
-    case "None":
-      return "none";
-    case "And":
-    case "Or":
-    case "Not":
-      return formatFilterExpr(expr);
-  }
-};
+const formatLeafValue = (expr: FilterExpr): string =>
+  Match.type<FilterExpr>().pipe(
+    Match.tagsExhaustive({
+      Author: (author) => author.handle,
+      Hashtag: (hashtag) => hashtag.tag,
+      AuthorIn: (authorIn) => authorIn.handles.join(", "),
+      HashtagIn: (hashtagIn) => hashtagIn.tags.join(", "),
+      Contains: (contains) => {
+        const text = formatValue(contains.text);
+        return contains.caseSensitive !== undefined
+          ? `${text} (caseSensitive=${contains.caseSensitive})`
+          : text;
+      },
+      IsReply: () => "reply",
+      IsQuote: () => "quote",
+      IsRepost: () => "repost",
+      IsOriginal: () => "original",
+      Engagement: (engagement) => formatEngagement(engagement),
+      HasImages: () => "images",
+      MinImages: (minImages) => `${minImages.min}`,
+      HasAltText: () => "alt text",
+      NoAltText: () => "missing alt text",
+      AltText: (altText) => formatValue(altText.text),
+      AltTextRegex: (altText) => formatRegex(altText.pattern, altText.flags),
+      HasVideo: () => "video",
+      HasLinks: () => "links",
+      HasMedia: () => "media",
+      HasEmbed: () => "embed",
+      Language: (language) => language.langs.join(", "),
+      Regex: (regexExpr) => {
+        const pattern =
+          regexExpr.patterns.length > 1
+            ? regexExpr.patterns.join("|")
+            : regexExpr.patterns[0] ?? "";
+        return formatRegex(pattern, regexExpr.flags);
+      },
+      DateRange: (dateRange) =>
+        `${dateRange.start.toISOString()}..${dateRange.end.toISOString()}`,
+      HasValidLinks: () => "valid links",
+      Trending: (trending) => trending.tag,
+      All: () => "all",
+      None: () => "none",
+      And: (andExpr) => formatFilterExpr(andExpr),
+      Or: (orExpr) => formatFilterExpr(orExpr),
+      Not: (notExpr) => formatFilterExpr(notExpr)
+    })
+  )(expr);
 
-const formatLeafPhrase = (expr: FilterExpr): string => {
-  switch (expr._tag) {
-    case "Author":
-      return `from ${expr.handle}`;
-    case "Hashtag":
-      return `with hashtag ${expr.tag}`;
-    case "AuthorIn":
-      return `from authors ${expr.handles.join(", ")}`;
-    case "HashtagIn":
-      return `with hashtags ${expr.tags.join(", ")}`;
-    case "Contains":
-      return `containing ${formatValue(expr.text)}`;
-    case "IsReply":
-      return "that are replies";
-    case "IsQuote":
-      return "that are quotes";
-    case "IsRepost":
-      return "that are reposts";
-    case "IsOriginal":
-      return "that are original posts";
-    case "Engagement":
-      return `with ${formatEngagement(expr)} engagement`;
-    case "HasImages":
-      return "with images";
-    case "MinImages":
-      return `with at least ${expr.min} images`;
-    case "HasAltText":
-      return "with alt text on all images";
-    case "NoAltText":
-      return "with missing alt text";
-    case "AltText":
-      return `with alt text containing ${formatValue(expr.text)}`;
-    case "AltTextRegex":
-      return `with alt text matching regex ${formatRegex(expr.pattern, expr.flags)}`;
-    case "HasVideo":
-      return "with video";
-    case "HasLinks":
-      return "with links";
-    case "HasMedia":
-      return "with media";
-    case "HasEmbed":
-      return "with embeds";
-    case "Language":
-      return `in ${expr.langs.join(", ")} language`;
-    case "Regex": {
-      const pattern = expr.patterns.length > 1 ? expr.patterns.join("|") : expr.patterns[0] ?? "";
-      return `matching regex ${formatRegex(pattern, expr.flags)}`;
-    }
-    case "DateRange":
-      return `between ${expr.start.toISOString()} and ${expr.end.toISOString()}`;
-    case "HasValidLinks":
-      return "with valid links";
-    case "Trending":
-      return `matching trending ${expr.tag}`;
-    case "All":
-      return "that match all posts";
-    case "None":
-      return "that match no posts";
-    case "And":
-    case "Or":
-    case "Not":
-      return `matching ${formatFilterExpr(expr)}`;
-  }
-};
+const formatLeafPhrase = (expr: FilterExpr): string =>
+  Match.type<FilterExpr>().pipe(
+    Match.tagsExhaustive({
+      Author: (author) => `from ${author.handle}`,
+      Hashtag: (hashtag) => `with hashtag ${hashtag.tag}`,
+      AuthorIn: (authorIn) => `from authors ${authorIn.handles.join(", ")}`,
+      HashtagIn: (hashtagIn) => `with hashtags ${hashtagIn.tags.join(", ")}`,
+      Contains: (contains) => `containing ${formatValue(contains.text)}`,
+      IsReply: () => "that are replies",
+      IsQuote: () => "that are quotes",
+      IsRepost: () => "that are reposts",
+      IsOriginal: () => "that are original posts",
+      Engagement: (engagement) => `with ${formatEngagement(engagement)} engagement`,
+      HasImages: () => "with images",
+      MinImages: (minImages) => `with at least ${minImages.min} images`,
+      HasAltText: () => "with alt text on all images",
+      NoAltText: () => "with missing alt text",
+      AltText: (altText) => `with alt text containing ${formatValue(altText.text)}`,
+      AltTextRegex: (altText) =>
+        `with alt text matching regex ${formatRegex(altText.pattern, altText.flags)}`,
+      HasVideo: () => "with video",
+      HasLinks: () => "with links",
+      HasMedia: () => "with media",
+      HasEmbed: () => "with embeds",
+      Language: (language) => `in ${language.langs.join(", ")} language`,
+      Regex: (regexExpr) => {
+        const pattern =
+          regexExpr.patterns.length > 1
+            ? regexExpr.patterns.join("|")
+            : regexExpr.patterns[0] ?? "";
+        return `matching regex ${formatRegex(pattern, regexExpr.flags)}`;
+      },
+      DateRange: (dateRange) =>
+        `between ${dateRange.start.toISOString()} and ${dateRange.end.toISOString()}`,
+      HasValidLinks: () => "with valid links",
+      Trending: (trending) => `matching trending ${trending.tag}`,
+      All: () => "that match all posts",
+      None: () => "that match no posts",
+      And: (andExpr) => `matching ${formatFilterExpr(andExpr)}`,
+      Or: (orExpr) => `matching ${formatFilterExpr(orExpr)}`,
+      Not: (notExpr) => `matching ${formatFilterExpr(notExpr)}`
+    })
+  )(expr);
 
-const precedence = (expr: FilterExpr) => {
-  switch (expr._tag) {
-    case "Or":
-      return 1;
-    case "And":
-      return 2;
-    case "Not":
-      return 3;
-    default:
-      return 4;
-  }
-};
+const precedence = (expr: FilterExpr) =>
+  Match.type<FilterExpr>().pipe(
+    Match.tags({
+      Or: () => 1,
+      And: () => 2,
+      Not: () => 3
+    }),
+    Match.orElse(() => 4)
+  )(expr);
 
 const parenthesize = (value: string, parentPrec: number, currentPrec: number) =>
   currentPrec < parentPrec ? `(${value})` : value;
 
 export const formatFilterExpr = (expr: FilterExpr, parentPrec = 0): string => {
-  switch (expr._tag) {
-    case "All":
-      return "all";
-    case "None":
-      return "none";
-    case "And": {
-      const prec = precedence(expr);
-      const value = `${formatFilterExpr(expr.left, prec)} AND ${formatFilterExpr(expr.right, prec)}`;
-      return parenthesize(value, parentPrec, prec);
-    }
-    case "Or": {
-      const prec = precedence(expr);
-      const value = `${formatFilterExpr(expr.left, prec)} OR ${formatFilterExpr(expr.right, prec)}`;
-      return parenthesize(value, parentPrec, prec);
-    }
-    case "Not": {
-      const prec = precedence(expr);
-      const value = `NOT ${formatFilterExpr(expr.expr, prec)}`;
-      return parenthesize(value, parentPrec, prec);
-    }
-    case "Author":
-      return `author:${expr.handle}`;
-    case "Hashtag":
-      return `hashtag:${expr.tag}`;
-    case "AuthorIn":
-      return `authorin:${expr.handles.join(",")}`;
-    case "HashtagIn":
-      return `hashtagin:${expr.tags.join(",")}`;
-    case "Contains": {
-      const options: string[] = [];
-      if (expr.caseSensitive !== undefined) {
-        options.push(`caseSensitive=${expr.caseSensitive}`);
+  return Match.type<FilterExpr>().pipe(
+    Match.tagsExhaustive({
+      All: () => "all",
+      None: () => "none",
+      And: (andExpr) => {
+        const prec = precedence(andExpr);
+        const value = `${formatFilterExpr(andExpr.left, prec)} AND ${formatFilterExpr(andExpr.right, prec)}`;
+        return parenthesize(value, parentPrec, prec);
+      },
+      Or: (orExpr) => {
+        const prec = precedence(orExpr);
+        const value = `${formatFilterExpr(orExpr.left, prec)} OR ${formatFilterExpr(orExpr.right, prec)}`;
+        return parenthesize(value, parentPrec, prec);
+      },
+      Not: (notExpr) => {
+        const prec = precedence(notExpr);
+        const value = `NOT ${formatFilterExpr(notExpr.expr, prec)}`;
+        return parenthesize(value, parentPrec, prec);
+      },
+      Author: (author) => `author:${author.handle}`,
+      Hashtag: (hashtag) => `hashtag:${hashtag.tag}`,
+      AuthorIn: (authorIn) => `authorin:${authorIn.handles.join(",")}`,
+      HashtagIn: (hashtagIn) => `hashtagin:${hashtagIn.tags.join(",")}`,
+      Contains: (contains) => {
+        const options: string[] = [];
+        if (contains.caseSensitive !== undefined) {
+          options.push(`caseSensitive=${contains.caseSensitive}`);
+        }
+        return formatWithOptions("contains", formatValue(contains.text), options);
+      },
+      IsReply: () => "is:reply",
+      IsQuote: () => "is:quote",
+      IsRepost: () => "is:repost",
+      IsOriginal: () => "is:original",
+      Engagement: (engagement) => {
+        const options = formatEngagement(engagement);
+        return formatWithOptions("engagement", "", options.length > 0 ? [options] : []);
+      },
+      HasImages: () => "hasimages",
+      MinImages: (minImages) => `min-images:${minImages.min}`,
+      HasAltText: () => "has:alt-text",
+      NoAltText: () => "no-alt-text",
+      AltText: (altText) => formatWithOptions("alt-text", formatValue(altText.text), []),
+      AltTextRegex: (altText) =>
+        formatWithOptions("alt-text", formatRegex(altText.pattern, altText.flags), []),
+      HasVideo: () => "hasvideo",
+      HasLinks: () => "haslinks",
+      HasMedia: () => "hasmedia",
+      HasEmbed: () => "hasembed",
+      Language: (language) => `language:${language.langs.join(",")}`,
+      Regex: (regexExpr) => {
+        const pattern =
+          regexExpr.patterns.length > 1
+            ? regexExpr.patterns.join("|")
+            : regexExpr.patterns[0] ?? "";
+        return `regex:${formatRegex(pattern, regexExpr.flags)}`;
+      },
+      DateRange: (dateRange) =>
+        `date:${dateRange.start.toISOString()}..${dateRange.end.toISOString()}`,
+      HasValidLinks: (hasValidLinks) => {
+        const options = isDefaultPolicy("HasValidLinks", hasValidLinks.onError)
+          ? []
+          : [`onError=${formatPolicy(hasValidLinks.onError)}`];
+        return formatWithOptions("links", "", options);
+      },
+      Trending: (trending) => {
+        const options = isDefaultPolicy("Trending", trending.onError)
+          ? []
+          : [`onError=${formatPolicy(trending.onError)}`];
+        return formatWithOptions("trending", trending.tag, options);
       }
-      return formatWithOptions("contains", formatValue(expr.text), options);
-    }
-    case "IsReply":
-      return "is:reply";
-    case "IsQuote":
-      return "is:quote";
-    case "IsRepost":
-      return "is:repost";
-    case "IsOriginal":
-      return "is:original";
-    case "Engagement": {
-      const options = formatEngagement(expr);
-      return formatWithOptions("engagement", "", options.length > 0 ? [options] : []);
-    }
-    case "HasImages":
-      return "hasimages";
-    case "MinImages":
-      return `min-images:${expr.min}`;
-    case "HasAltText":
-      return "has:alt-text";
-    case "NoAltText":
-      return "no-alt-text";
-    case "AltText":
-      return formatWithOptions("alt-text", formatValue(expr.text), []);
-    case "AltTextRegex":
-      return formatWithOptions("alt-text", formatRegex(expr.pattern, expr.flags), []);
-    case "HasVideo":
-      return "hasvideo";
-    case "HasLinks":
-      return "haslinks";
-    case "HasMedia":
-      return "hasmedia";
-    case "HasEmbed":
-      return "hasembed";
-    case "Language":
-      return `language:${expr.langs.join(",")}`;
-    case "Regex": {
-      const pattern = expr.patterns.length > 1 ? expr.patterns.join("|") : expr.patterns[0] ?? "";
-      return `regex:${formatRegex(pattern, expr.flags)}`;
-    }
-    case "DateRange":
-      return `date:${expr.start.toISOString()}..${expr.end.toISOString()}`;
-    case "HasValidLinks": {
-      const options = isDefaultPolicy("HasValidLinks", expr.onError)
-        ? []
-        : [`onError=${formatPolicy(expr.onError)}`];
-      return formatWithOptions("links", "", options);
-    }
-    case "Trending": {
-      const options = isDefaultPolicy("Trending", expr.onError)
-        ? []
-        : [`onError=${formatPolicy(expr.onError)}`];
-      return formatWithOptions("trending", expr.tag, options);
-    }
-  }
+    })
+  )(expr);
 };
 
-const flattenAnd = (expr: FilterExpr): ReadonlyArray<FilterExpr> => {
-  if (expr._tag === "And") {
-    return [...flattenAnd(expr.left), ...flattenAnd(expr.right)];
-  }
-  return [expr];
-};
+const flattenAnd = (expr: FilterExpr): ReadonlyArray<FilterExpr> =>
+  Match.type<FilterExpr>().pipe(
+    Match.tags({
+      And: (andExpr) => [...flattenAnd(andExpr.left), ...flattenAnd(andExpr.right)]
+    }),
+    Match.orElse((expr) => [expr])
+  )(expr);
 
-const flattenOr = (expr: FilterExpr): ReadonlyArray<FilterExpr> => {
-  if (expr._tag === "Or") {
-    return [...flattenOr(expr.left), ...flattenOr(expr.right)];
-  }
-  return [expr];
-};
+const flattenOr = (expr: FilterExpr): ReadonlyArray<FilterExpr> =>
+  Match.type<FilterExpr>().pipe(
+    Match.tags({
+      Or: (orExpr) => [...flattenOr(orExpr.left), ...flattenOr(orExpr.right)]
+    }),
+    Match.orElse((expr) => [expr])
+  )(expr);
 
-const countConditions = (expr: FilterExpr): number => {
-  switch (expr._tag) {
-    case "And":
-    case "Or":
-      return countConditions(expr.left) + countConditions(expr.right);
-    case "Not":
-      return countConditions(expr.expr);
-    case "All":
-    case "None":
-      return 0;
-    default:
-      return 1;
-  }
-};
+const countConditions = (expr: FilterExpr): number =>
+  Match.type<FilterExpr>().pipe(
+    Match.tags({
+      And: (andExpr) => countConditions(andExpr.left) + countConditions(andExpr.right),
+      Or: (orExpr) => countConditions(orExpr.left) + countConditions(orExpr.right),
+      Not: (notExpr) => countConditions(notExpr.expr),
+      All: () => 0,
+      None: () => 0
+    }),
+    Match.orElse(() => 1)
+  )(expr);
 
-const countNegations = (expr: FilterExpr): number => {
-  switch (expr._tag) {
-    case "And":
-    case "Or":
-      return countNegations(expr.left) + countNegations(expr.right);
-    case "Not":
-      return 1 + countNegations(expr.expr);
-    default:
-      return 0;
-  }
-};
+const countNegations = (expr: FilterExpr): number =>
+  Match.type<FilterExpr>().pipe(
+    Match.tags({
+      And: (andExpr) => countNegations(andExpr.left) + countNegations(andExpr.right),
+      Or: (orExpr) => countNegations(orExpr.left) + countNegations(orExpr.right),
+      Not: (notExpr) => 1 + countNegations(notExpr.expr)
+    }),
+    Match.orElse(() => 0)
+  )(expr);
 
 const complexityFor = (conditions: number, negations: number): "low" | "medium" | "high" => {
   if (conditions <= 2 && negations === 0) return "low";
@@ -378,106 +316,117 @@ const estimatedCostFor = (
   return "high";
 };
 
-const describeClause = (expr: FilterExpr): FilterCondition => {
-  if (expr._tag === "Not") {
-    const base = describeClause(expr.expr);
-    return { ...base, negated: true };
-  }
-  if (expr._tag === "Or") {
-    const terms = flattenOr(expr);
-    const firstType = terms[0]?._tag;
-    const allSame = terms.every((term) => term._tag === firstType);
-    if (allSame && firstType) {
-      return {
-        type: firstType,
-        value: terms.map(formatLeafValue).join(" OR "),
-        operator: "OR"
-      };
-    }
-    return {
-      type: "Group",
-      value: formatFilterExpr(expr),
-      operator: "OR"
-    };
-  }
-  if (expr._tag === "And") {
-    return {
-      type: "Group",
-      value: formatFilterExpr(expr),
-      operator: "AND"
-    };
-  }
-  return {
-    type: expr._tag,
-    value: formatLeafValue(expr)
-  };
-};
+const describeClause = (expr: FilterExpr): FilterCondition =>
+  Match.type<FilterExpr>().pipe(
+    Match.withReturnType<FilterCondition>(),
+    Match.tags({
+      Not: (notExpr) => {
+        const base = describeClause(notExpr.expr);
+        return { ...base, negated: true };
+      },
+      Or: (orExpr) => {
+        const terms = flattenOr(orExpr);
+        const firstType = terms[0]?._tag;
+        const allSame =
+          firstType !== undefined &&
+          terms.every((term) => Predicate.isTagged(term, firstType));
+        if (allSame && firstType) {
+          return {
+            type: firstType,
+            value: terms.map(formatLeafValue).join(" OR "),
+            operator: "OR"
+          };
+        }
+        return {
+          type: "Group",
+          value: formatFilterExpr(orExpr),
+          operator: "OR"
+        };
+      },
+      And: (andExpr) => ({
+        type: "Group",
+        value: formatFilterExpr(andExpr),
+        operator: "AND"
+      })
+    }),
+    Match.orElse((expr) => ({
+      type: expr._tag,
+      value: formatLeafValue(expr)
+    }))
+  )(expr);
 
-const clausePhrase = (expr: FilterExpr): string => {
-  if (expr._tag === "Not") {
-    const base = clausePhrase(expr.expr);
-    const normalized = base.trim();
-    if (normalized.startsWith("that are ")) {
-      return `that are not ${normalized.slice("that are ".length)}`;
-    }
-    if (normalized.startsWith("that is ")) {
-      return `that is not ${normalized.slice("that is ".length)}`;
-    }
-    if (normalized.startsWith("with ")) {
-      return `without ${normalized.slice("with ".length)}`;
-    }
-    if (normalized.startsWith("containing ")) {
-      return `not containing ${normalized.slice("containing ".length)}`;
-    }
-    if (normalized.startsWith("matching ")) {
-      return `not matching ${normalized.slice("matching ".length)}`;
-    }
-    if (normalized.startsWith("from ")) {
-      return `not from ${normalized.slice("from ".length)}`;
-    }
-    if (normalized.startsWith("in ")) {
-      return `not in ${normalized.slice("in ".length)}`;
-    }
-    return `not ${normalized}`;
-  }
-  if (expr._tag === "Or") {
-    const terms = flattenOr(expr);
-    const firstType = terms[0]?._tag;
-    const allSame = terms.every((term) => term._tag === firstType);
-    if (allSame && firstType) {
-      const values = terms.map(formatLeafValue).join(" or ");
-      const sample = terms[0]!;
-      switch (sample._tag) {
-        case "Hashtag":
-          return `with hashtags ${values}`;
-        case "Author":
-          return `from ${values}`;
-        default:
-          return `matching ${values}`;
-      }
-    }
-    return `matching ${formatFilterExpr(expr)}`;
-  }
-  if (expr._tag === "And") {
-    return `matching ${formatFilterExpr(expr)}`;
-  }
-  return formatLeafPhrase(expr);
-};
+const clausePhrase = (expr: FilterExpr): string =>
+  Match.type<FilterExpr>().pipe(
+    Match.tags({
+      Not: (notExpr) => {
+        const base = clausePhrase(notExpr.expr);
+        const normalized = base.trim();
+        if (normalized.startsWith("that are ")) {
+          return `that are not ${normalized.slice("that are ".length)}`;
+        }
+        if (normalized.startsWith("that is ")) {
+          return `that is not ${normalized.slice("that is ".length)}`;
+        }
+        if (normalized.startsWith("with ")) {
+          return `without ${normalized.slice("with ".length)}`;
+        }
+        if (normalized.startsWith("containing ")) {
+          return `not containing ${normalized.slice("containing ".length)}`;
+        }
+        if (normalized.startsWith("matching ")) {
+          return `not matching ${normalized.slice("matching ".length)}`;
+        }
+        if (normalized.startsWith("from ")) {
+          return `not from ${normalized.slice("from ".length)}`;
+        }
+        if (normalized.startsWith("in ")) {
+          return `not in ${normalized.slice("in ".length)}`;
+        }
+        return `not ${normalized}`;
+      },
+      Or: (orExpr) => {
+        const terms = flattenOr(orExpr);
+        const firstType = terms[0]?._tag;
+        const allSame =
+          firstType !== undefined &&
+          terms.every((term) => Predicate.isTagged(term, firstType));
+        if (allSame && firstType) {
+          const values = terms.map(formatLeafValue).join(" or ");
+          const sample = terms[0]!;
+          return Match.type<FilterExpr>().pipe(
+            Match.tags({
+              Hashtag: () => `with hashtags ${values}`,
+              Author: () => `from ${values}`
+            }),
+            Match.orElse(() => `matching ${values}`)
+          )(sample);
+        }
+        return `matching ${formatFilterExpr(orExpr)}`;
+      },
+      And: (andExpr) => `matching ${formatFilterExpr(andExpr)}`
+    }),
+    Match.orElse((expr) => formatLeafPhrase(expr))
+  )(expr);
 
-const summaryFor = (expr: FilterExpr): string => {
-  if (expr._tag === "All") return "All posts";
-  if (expr._tag === "None") return "No posts";
-  const clauses = flattenAnd(expr);
-  const phrases = clauses.map(clausePhrase);
-  const summary = phrases.reduce((acc, phrase, index) => {
-    if (index === 0) return phrase;
-    if (phrase.startsWith("that ")) {
-      return `${acc} ${phrase}`;
-    }
-    return `${acc} and ${phrase}`;
-  }, "");
-  return `Posts ${summary}`;
-};
+const summaryFor = (expr: FilterExpr): string =>
+  Match.type<FilterExpr>().pipe(
+    Match.tags({
+      All: () => "All posts",
+      None: () => "No posts"
+    }),
+    Match.orElse((expr) => {
+      const clauses = flattenAnd(expr);
+      const phrases = clauses.map(clausePhrase);
+      const summary = phrases.reduce((acc, phrase, index) => {
+        if (index === 0) return phrase;
+        if (phrase.startsWith("that ")) {
+          return `${acc} ${phrase}`;
+        }
+        return `${acc} and ${phrase}`;
+      }, "");
+      return `Posts ${summary}`;
+    })
+  )(expr);
 
 export const describeFilter = (expr: FilterExpr): FilterDescription => {
   const effectful = isEffectfulFilter(expr);
@@ -485,10 +434,13 @@ export const describeFilter = (expr: FilterExpr): FilterDescription => {
   const negationCount = countNegations(expr);
   const complexity = complexityFor(conditionCount, negationCount);
   const estimatedCost = estimatedCostFor(effectful, conditionCount);
-  const conditions =
-    expr._tag === "All" || expr._tag === "None"
-      ? []
-      : flattenAnd(expr).map(describeClause);
+  const conditions = Match.type<FilterExpr>().pipe(
+    Match.tags({
+      All: () => [] as ReadonlyArray<FilterCondition>,
+      None: () => [] as ReadonlyArray<FilterCondition>
+    }),
+    Match.orElse((expr) => flattenAnd(expr).map(describeClause))
+  )(expr);
   return {
     filter: formatFilterExpr(expr),
     summary: summaryFor(expr),

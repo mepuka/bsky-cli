@@ -10,7 +10,7 @@ import {
   RequestResolver
 } from "effect";
 import * as ExperimentalRequestResolver from "@effect/experimental/RequestResolver";
-import { ImageFetchError } from "../../domain/errors.js";
+import { ImageFetchError, isImageFetchError } from "../../domain/errors.js";
 import { messageFromCause, validateNonNegative, validatePositive } from "../shared.js";
 
 type CacheConfig = {
@@ -43,14 +43,13 @@ const normalizeContentType = (value: string | undefined) =>
   value ? value.split(";")[0]?.trim() : undefined;
 
 const toImageFetchError = (url: string, operation: string) => (cause: unknown) => {
-  if (typeof cause === "object" && cause !== null && "_tag" in cause) {
-    const tag = (cause as { readonly _tag?: unknown })._tag;
-    if (tag === "ImageFetchError") {
-      return cause as ImageFetchError;
-    }
+  if (isImageFetchError(cause)) {
+    return cause;
   }
   if (HttpClientError.isHttpClientError(cause)) {
-    const status = cause._tag === "ResponseError" ? cause.response.status : undefined;
+    const status = cause instanceof HttpClientError.ResponseError
+      ? cause.response.status
+      : undefined;
     return ImageFetchError.make({
       message: cause.message,
       url,

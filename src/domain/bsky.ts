@@ -198,6 +198,8 @@ export class EmbedRecordView extends Schema.TaggedClass<EmbedRecordView>()(
   }
 ) {}
 
+export const isEmbedRecordView = Schema.is(EmbedRecordView);
+
 export class EmbedRecordNotFound extends Schema.TaggedClass<EmbedRecordNotFound>()(
   "RecordNotFound",
   {
@@ -274,20 +276,12 @@ export const PostEmbed = Schema.Union(
 );
 export type PostEmbed = typeof PostEmbed.Type;
 
-const hasTag = (value: unknown, tag: string): boolean =>
-  typeof value === "object" &&
-  value !== null &&
-  "_tag" in value &&
-  (value as { readonly _tag?: unknown })._tag === tag;
-
-export const isEmbedImages = (value: unknown): value is EmbedImages =>
-  hasTag(value, "Images");
-
-export const isEmbedExternal = (value: unknown): value is EmbedExternal =>
-  hasTag(value, "External");
-
-export const isEmbedVideo = (value: unknown): value is EmbedVideo =>
-  hasTag(value, "Video");
+export const isEmbedImages = Schema.is(EmbedImages);
+export const isEmbedExternal = Schema.is(EmbedExternal);
+export const isEmbedVideo = Schema.is(EmbedVideo);
+export const isEmbedRecord = Schema.is(EmbedRecord);
+export const isEmbedRecordWithMedia = Schema.is(EmbedRecordWithMedia);
+export const isEmbedUnknown = Schema.is(EmbedUnknown);
 
 export const PostViewerState = Schema.Struct({
   repost: Schema.optional(AtUri),
@@ -382,6 +376,8 @@ export const FeedReason = Schema.Union(
   FeedReasonUnknown
 );
 export type FeedReason = typeof FeedReason.Type;
+
+export const isFeedReasonRepost = Schema.is(FeedReasonRepost);
 
 export class FeedContext extends Schema.Class<FeedContext>("FeedContext")({
   reply: Schema.optional(FeedReplyRef),

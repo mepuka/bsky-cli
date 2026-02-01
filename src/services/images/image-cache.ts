@@ -3,7 +3,7 @@ import * as Persistence from "@effect/experimental/Persistence";
 import { Context, Duration, Effect, Exit, Layer, Option, PrimaryKey, Request, RequestResolver, Schema } from "effect";
 import { createHash } from "node:crypto";
 import { ImageAsset, ImageVariant } from "../../domain/images.js";
-import { ImageArchiveError, ImageCacheError, ImageFetchError } from "../../domain/errors.js";
+import { ImageCacheError, isImageArchiveError, isImageCacheError, isImageFetchError } from "../../domain/errors.js";
 import { messageFromCause } from "../shared.js";
 import { ImageArchive } from "./image-archive.js";
 import { ImageFetcher } from "./image-fetcher.js";
@@ -30,28 +30,25 @@ class ImageCacheRequest extends Schema.TaggedRequest<ImageCacheRequest>()(
 }
 
 const toCacheError = (key: string, operation: string) => (cause: unknown) => {
-  if (typeof cause === "object" && cause !== null && "_tag" in cause) {
-    const tag = (cause as { readonly _tag?: unknown })._tag;
-    if (tag === "ImageCacheError") {
-      return cause as ImageCacheError;
-    }
-    if (tag === "ImageFetchError") {
-      const error = cause as ImageFetchError;
-      return ImageCacheError.make({
-        message: error.message,
-        key,
-        operation: error.operation ?? operation,
-        status: error.status
-      });
-    }
-    if (tag === "ImageArchiveError") {
-      const error = cause as ImageArchiveError;
-      return ImageCacheError.make({
-        message: error.message,
-        key,
-        operation: error.operation ?? operation
-      });
-    }
+  if (isImageCacheError(cause)) {
+    return cause;
+  }
+  if (isImageFetchError(cause)) {
+    const error = cause;
+    return ImageCacheError.make({
+      message: error.message,
+      key,
+      operation: error.operation ?? operation,
+      status: error.status
+    });
+  }
+  if (isImageArchiveError(cause)) {
+    const error = cause;
+    return ImageCacheError.make({
+      message: error.message,
+      key,
+      operation: error.operation ?? operation
+    });
   }
 
   return ImageCacheError.make({

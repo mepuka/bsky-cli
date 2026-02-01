@@ -112,6 +112,9 @@ import {
   EmbedRecordWithMedia,
   EmbedUnknown,
   EmbedVideo,
+  isEmbedExternal,
+  isEmbedImages,
+  isEmbedVideo,
   FeedContext,
   FeedGeneratorView,
   FeedPostBlocked,
@@ -786,9 +789,9 @@ const mapEmbedView = (
         );
         const media: PostEmbed | unknown =
           mediaCandidate &&
-          (mediaCandidate._tag === "Images" ||
-            mediaCandidate._tag === "External" ||
-            mediaCandidate._tag === "Video")
+          (isEmbedImages(mediaCandidate) ||
+            isEmbedExternal(mediaCandidate) ||
+            isEmbedVideo(mediaCandidate))
             ? mediaCandidate
             : (embed as { media?: unknown }).media;
         const mapped: EmbedRecordTarget = yield* mapEmbedRecordTarget(record ?? embed);

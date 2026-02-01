@@ -1,4 +1,4 @@
-import { ParseResult } from "effect";
+import { ParseResult, Predicate } from "effect";
 import { safeParseJson, issueDetails, findJsonParseIssue, jsonParseTip } from "./parse-errors.js";
 import { formatAgentError } from "./errors.js";
 
@@ -50,7 +50,9 @@ export const formatStoreConfigParseError = (
     });
   }
 
-  if (issues.some((issue) => issue._tag === "Missing" && hasPath(issue, "filters"))) {
+  if (
+    issues.some((issue) => Predicate.isTagged(issue, "Missing") && hasPath(issue, "filters"))
+  ) {
     return formatAgentError({
       error: "StoreConfigValidationError",
       message: `Store config requires a filters array. ${storeConfigDocHint}`,

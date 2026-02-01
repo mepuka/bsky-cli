@@ -40,7 +40,7 @@
  * ```
  */
 
-import { Context, Duration, Effect, Layer } from "effect";
+import { Context, Duration, Effect, Layer, Match } from "effect";
 import { FilterCompileError } from "../domain/errors.js";
 import type { FilterExpr } from "../domain/filter.js";
 import type { FilterErrorPolicy } from "../domain/policies.js";
@@ -58,25 +58,26 @@ const messageFromError = (error: unknown) => {
 
 const validatePolicy: (policy: FilterErrorPolicy) => Effect.Effect<void, FilterCompileError> =
   Effect.fn("FilterCompiler.validatePolicy")((policy: FilterErrorPolicy) => {
-    switch (policy._tag) {
-      case "Include":
-      case "Exclude":
-        return Effect.void;
-      case "Retry":
-        return Effect.gen(function* () {
-          if (!Number.isInteger(policy.maxRetries) || policy.maxRetries < 0) {
-            return yield* invalid(
-              `Retry maxRetries must be a non-negative integer (got ${policy.maxRetries})`
-            );
-          }
-          if (!Duration.isFinite(policy.baseDelay)) {
-            return yield* invalid(
-              "Retry baseDelay must be a finite duration"
-            );
-          }
-          return;
-        });
-    }
+    return Match.type<FilterErrorPolicy>().pipe(
+      Match.tagsExhaustive({
+        Include: () => Effect.void,
+        Exclude: () => Effect.void,
+        Retry: (retryPolicy) =>
+          Effect.gen(function* () {
+            if (!Number.isInteger(retryPolicy.maxRetries) || retryPolicy.maxRetries < 0) {
+              return yield* invalid(
+                `Retry maxRetries must be a non-negative integer (got ${retryPolicy.maxRetries})`
+              );
+            }
+            if (!Duration.isFinite(retryPolicy.baseDelay)) {
+              return yield* invalid(
+                "Retry baseDelay must be a finite duration"
+              );
+            }
+            return;
+          })
+      })
+    )(policy);
   });
 
 const validateRegex = (patterns: ReadonlyArray<string>, flags?: string) =>
@@ -99,93 +100,79 @@ const validateRegex = (patterns: ReadonlyArray<string>, flags?: string) =>
   });
 
 const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError> =
-  Effect.fn("FilterCompiler.validateExpr")(function* (expr: FilterExpr) {
-    switch (expr._tag) {
-      case "All":
-      case "None":
-      case "Author":
-      case "Hashtag":
-        return;
-      case "AuthorIn":
-        if (expr.handles.length === 0) {
-          return yield* invalid("AuthorIn handles must contain at least one entry");
-        }
-        return;
-      case "HashtagIn":
-        if (expr.tags.length === 0) {
-          return yield* invalid("HashtagIn tags must contain at least one entry");
-        }
-        return;
-      case "Contains":
-        if (expr.text.trim().length === 0) {
-          return yield* invalid("Contains text must be non-empty");
-        }
-        return;
-      case "IsReply":
-      case "IsQuote":
-      case "IsRepost":
-      case "IsOriginal":
-      case "HasImages":
-      case "HasAltText":
-      case "NoAltText":
-      case "HasVideo":
-      case "HasLinks":
-      case "HasMedia":
-      case "HasEmbed":
-        return;
-      case "MinImages":
-        if (!Number.isInteger(expr.min) || expr.min < 1) {
-          return yield* invalid("MinImages requires min >= 1");
-        }
-        return;
-      case "AltText":
-        if (expr.text.trim().length === 0) {
-          return yield* invalid("AltText text must be non-empty");
-        }
-        return;
-      case "AltTextRegex":
-        return yield* validateRegex([expr.pattern], expr.flags);
-      case "Language":
-        if (expr.langs.length === 0) {
-          return yield* invalid("Language langs must contain at least one entry");
-        }
-        return;
-      case "Engagement":
-        if (
-          expr.minLikes === undefined &&
-          expr.minReposts === undefined &&
-          expr.minReplies === undefined
-        ) {
-          return yield* invalid(
-            "Engagement requires at least one threshold (minLikes, minReposts, minReplies)"
-          );
-        }
-        return;
-      case "Regex":
-        return yield* validateRegex(expr.patterns, expr.flags);
-      case "DateRange":
-        if (expr.start.getTime() >= expr.end.getTime()) {
-          return yield* invalid("DateRange start must be before end");
-        }
-        return;
-      case "And":
-        yield* validateExpr(expr.left);
-        return yield* validateExpr(expr.right);
-      case "Or":
-        yield* validateExpr(expr.left);
-        return yield* validateExpr(expr.right);
-      case "Not":
-        return yield* validateExpr(expr.expr);
-      case "HasValidLinks":
-        return yield* validatePolicy(expr.onError);
-      case "Trending":
-        return yield* validatePolicy(expr.onError);
-      default:
-        return yield* invalid(
-          `Unknown filter tag: ${(expr as { _tag: string })._tag}`
-        );
-    }
-  });
+  Effect.fn("FilterCompiler.validateExpr")((expr: FilterExpr) =>
+    Match.type<FilterExpr>().pipe(
+      Match.tagsExhaustive({
+        All: () => Effect.void,
+        None: () => Effect.void,
+        Author: () => Effect.void,
+        Hashtag: () => Effect.void,
+        AuthorIn: (authorIn) =>
+          authorIn.handles.length === 0
+            ? invalid("AuthorIn handles must contain at least one entry")
+            : Effect.void,
+        HashtagIn: (hashtagIn) =>
+          hashtagIn.tags.length === 0
+            ? invalid("HashtagIn tags must contain at least one entry")
+            : Effect.void,
+        Contains: (contains) =>
+          contains.text.trim().length === 0
+            ? invalid("Contains text must be non-empty")
+            : Effect.void,
+        IsReply: () => Effect.void,
+        IsQuote: () => Effect.void,
+        IsRepost: () => Effect.void,
+        IsOriginal: () => Effect.void,
+        HasImages: () => Effect.void,
+        HasAltText: () => Effect.void,
+        NoAltText: () => Effect.void,
+        HasVideo: () => Effect.void,
+        HasLinks: () => Effect.void,
+        HasMedia: () => Effect.void,
+        HasEmbed: () => Effect.void,
+        MinImages: (minImages) =>
+          !Number.isInteger(minImages.min) || minImages.min < 1
+            ? invalid("MinImages requires min >= 1")
+            : Effect.void,
+        AltText: (altText) =>
+          altText.text.trim().length === 0
+            ? invalid("AltText text must be non-empty")
+            : Effect.void,
+        AltTextRegex: (altTextRegex) =>
+          validateRegex([altTextRegex.pattern], altTextRegex.flags),
+        Language: (language) =>
+          language.langs.length === 0
+            ? invalid("Language langs must contain at least one entry")
+            : Effect.void,
+        Engagement: (engagement) =>
+          engagement.minLikes === undefined &&
+          engagement.minReposts === undefined &&
+          engagement.minReplies === undefined
+            ? invalid(
+                "Engagement requires at least one threshold (minLikes, minReposts, minReplies)"
+              )
+            : Effect.void,
+        Regex: (regex) => validateRegex(regex.patterns, regex.flags),
+        DateRange: (range) =>
+          range.start.getTime() >= range.end.getTime()
+            ? invalid("DateRange start must be before end")
+            : Effect.void,
+        And: (andExpr) =>
+          Effect.gen(function* () {
+            yield* validateExpr(andExpr.left);
+            yield* validateExpr(andExpr.right);
+          }),
+        Or: (orExpr) =>
+          Effect.gen(function* () {
+            yield* validateExpr(orExpr.left);
+            yield* validateExpr(orExpr.right);
+          }),
+        Not: (notExpr) => validateExpr(notExpr.expr),
+        HasValidLinks: (links) => validatePolicy(links.onError),
+        Trending: (trending) => validatePolicy(trending.onError)
+      })
+    )(expr)
+  );
 
 /**
  * Context tag and Layer implementation for the filter compiler service.

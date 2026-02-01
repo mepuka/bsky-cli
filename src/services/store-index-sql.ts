@@ -1,7 +1,8 @@
 import { Effect, Schema } from "effect";
 import type * as SqlClient from "@effect/sql/SqlClient";
 import { StoreIndexError } from "../domain/errors.js";
-import { extractImageRefs } from "../domain/embeds.js";
+import { extractImageRefs, hasExternalEmbed, hasVideoEmbed, isQuoteEmbed } from "../domain/embeds.js";
+import { isFeedReasonRepost } from "../domain/bsky.js";
 import { Post } from "../domain/post.js";
 import type { PostUri } from "../domain/primitives.js";
 
@@ -16,48 +17,10 @@ const encodePostJson = (post: Post) =>
     Effect.mapError(toStoreIndexError("StoreIndex.post encode failed"))
   );
 
-const embedTag = (embed: Post["embed"]): string | undefined => {
-  if (!embed || typeof embed !== "object" || !("_tag" in embed)) {
-    return undefined;
-  }
-  const tag = (embed as { readonly _tag?: unknown })._tag;
-  return typeof tag === "string" ? tag : undefined;
-};
+const hasExternalLink = (post: Post) =>
+  post.links.length > 0 || hasExternalEmbed(post.embed);
 
-const embedMediaTag = (embed: Post["embed"]): string | undefined => {
-  if (!embed || typeof embed !== "object" || !("_tag" in embed)) {
-    return undefined;
-  }
-  const tag = (embed as { readonly _tag?: unknown })._tag;
-  if (tag !== "RecordWithMedia") {
-    return undefined;
-  }
-  const media = (embed as { readonly media?: unknown }).media;
-  if (!media || typeof media !== "object" || !("_tag" in media)) {
-    return undefined;
-  }
-  const mediaTag = (media as { readonly _tag?: unknown })._tag;
-  return typeof mediaTag === "string" ? mediaTag : undefined;
-};
-
-const hasExternalLink = (post: Post) => {
-  if (post.links.length > 0) {
-    return true;
-  }
-  const tag = embedTag(post.embed);
-  if (tag === "External") {
-    return true;
-  }
-  return embedMediaTag(post.embed) === "External";
-};
-
-const hasVideo = (post: Post) => {
-  const tag = embedTag(post.embed);
-  if (tag === "Video") {
-    return true;
-  }
-  return embedMediaTag(post.embed) === "Video";
-};
+const hasVideo = (post: Post) => hasVideoEmbed(post.embed);
 
 const hasEmbed = (post: Post) =>
   post.embed != null || post.recordEmbed != null;
@@ -71,19 +34,10 @@ const normalizeLangs = (langs: ReadonlyArray<string> | undefined) =>
     )
   );
 
-const isRepost = (post: Post) => {
-  const reason = post.feed?.reason;
-  if (!reason || typeof reason !== "object") {
-    return false;
-  }
-  const tag = (reason as { readonly _tag?: unknown })._tag;
-  return tag === "ReasonRepost";
-};
+const isRepost = (post: Post) =>
+  post.feed?.reason ? isFeedReasonRepost(post.feed.reason) : false;
 
-const isQuote = (post: Post) => {
-  const tag = embedTag(post.embed);
-  return tag === "Record" || tag === "RecordWithMedia";
-};
+const isQuote = (post: Post) => isQuoteEmbed(post.embed);
 
 const toFlag = (value: boolean) => (value ? 1 : 0);
 

@@ -51,7 +51,7 @@ import { DataSource, type SyncCheckpoint } from "../domain/sync.js";
 import { StoreName, type StorePath } from "../domain/primitives.js";
 import { StoreRef } from "../domain/store.js";
 import type { StoreLineage } from "../domain/derivation.js";
-import { StoreIoError, type StoreIndexError } from "../domain/errors.js";
+import { StoreIoError, isStoreIoError, type StoreIndexError } from "../domain/errors.js";
 import { updatedAtOrder } from "../domain/order.js";
 
 /**
@@ -136,11 +136,8 @@ const parseCount = (value: unknown) =>
  * @returns A function that converts causes to StoreIoError
  */
 const toStoreIoError = (path: StorePath) => (cause: unknown) => {
-  if (typeof cause === "object" && cause !== null) {
-    const tagged = cause as { _tag?: string };
-    if (tagged._tag === "StoreIoError") {
-      return tagged as StoreIoError;
-    }
+  if (isStoreIoError(cause)) {
+    return cause;
   }
   return StoreIoError.make({ path, cause });
 };

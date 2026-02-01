@@ -39,7 +39,7 @@
 
 import { FileSystem, Path } from "@effect/platform";
 import { formatSchemaError } from "./shared.js";
-import type { PlatformError } from "@effect/platform/Error";
+import { SystemError, type PlatformError } from "@effect/platform/Error";
 import { Context, Effect, Layer, Schema } from "effect";
 import { FilterExprSchema } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
@@ -58,6 +58,9 @@ const filtersDirName = "filters";
  */
 const ensureTrailingNewline = (value: string) =>
   value.endsWith("\n") ? value : `${value}\n`;
+
+const isNotFoundSystemError = (error: PlatformError) =>
+  Schema.is(SystemError)(error) && error.reason === "NotFound";
 
 /**
  * Creates a FilterLibraryError with contextual information.
@@ -244,7 +247,7 @@ export class FilterLibrary extends Context.Tag("@skygent/FilterLibrary")<
         const filePath = filterPath(path, config.storeRoot, name);
         return fs.readFileString(filePath).pipe(
           Effect.mapError((error: PlatformError) =>
-            error._tag === "SystemError" && error.reason === "NotFound"
+            isNotFoundSystemError(error)
               ? FilterNotFound.make({ name })
               : toLibraryError(
                   `Failed to read filter "${name}"`,
@@ -304,7 +307,7 @@ export class FilterLibrary extends Context.Tag("@skygent/FilterLibrary")<
         const filePath = filterPath(path, config.storeRoot, name);
         return fs.remove(filePath).pipe(
           Effect.mapError((error: PlatformError) =>
-            error._tag === "SystemError" && error.reason === "NotFound"
+            isNotFoundSystemError(error)
               ? FilterNotFound.make({ name })
               : toLibraryError(
                   `Failed to delete filter "${name}"`,

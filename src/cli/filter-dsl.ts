@@ -1,4 +1,4 @@
-import { Clock, Context, Duration, Effect, Schema } from "effect";
+import { Clock, Context, Duration, Effect, Match, Predicate, Schema } from "effect";
 import { formatSchemaError } from "./shared.js";
 import type { FilterEngagement, FilterExpr } from "../domain/filter.js";
 import { all, and, none, not, or } from "../domain/filter.js";
@@ -985,7 +985,7 @@ class Parser {
       if (!current) {
         return yield* self.fail("Unexpected end of input.", self.input.length);
       }
-      if (current._tag === "LParen") {
+      if (Predicate.isTagged(current, "LParen")) {
         self.advance();
         if (self.parseDepth >= Parser.maxParseDepth) {
           return yield* self.fail(
@@ -1000,13 +1000,13 @@ class Parser {
             self.parseDepth -= 1;
           })));
         const closing = self.peek();
-        if (!closing || closing._tag !== "RParen") {
+        if (!closing || !Predicate.isTagged(closing, "RParen")) {
           return yield* self.fail("Expected ')'.", self.input.length);
         }
         self.advance();
         return expr;
       }
-      if (current._tag === "Word") {
+      if (Predicate.isTagged(current, "Word")) {
         self.advance();
         return yield* self.parseWord(current);
       }
@@ -1092,7 +1092,7 @@ class Parser {
       let valuePosition = token.position + colonIndex + 1;
       if (rawValue.length === 0) {
         const next = self.peek();
-        if (next && next._tag === "Word") {
+        if (next && Predicate.isTagged(next, "Word")) {
           rawValue = next.value;
           valuePosition = next.position;
           self.advance();
@@ -1100,7 +1100,7 @@ class Parser {
       }
       if (key === "text" && normalizeFilterKey(rawValue) === "contains") {
         const next = self.peek();
-        if (next && next._tag === "Word") {
+        if (next && Predicate.isTagged(next, "Word")) {
           rawValue = next.value;
           valuePosition = next.position;
           self.advance();
@@ -1575,7 +1575,7 @@ class Parser {
 
   private match(tag: Token["_tag"]): boolean {
     const token = this.peek();
-    if (token && token._tag === tag) {
+    if (token && Predicate.isTagged(token, tag)) {
       this.advance();
       return true;
     }
@@ -1583,20 +1583,16 @@ class Parser {
   }
 
   private describe(token: Token): string {
-    switch (token._tag) {
-      case "Word":
-        return token.value;
-      case "LParen":
-        return "(";
-      case "RParen":
-        return ")";
-      case "And":
-        return "AND";
-      case "Or":
-        return "OR";
-      case "Not":
-        return "NOT";
-    }
+    return Match.type<Token>().pipe(
+      Match.tagsExhaustive({
+        Word: (word) => word.value,
+        LParen: () => "(",
+        RParen: () => ")",
+        And: () => "AND",
+        Or: () => "OR",
+        Not: () => "NOT"
+      })
+    )(token);
   }
 }
 

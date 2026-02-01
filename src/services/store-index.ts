@@ -54,12 +54,12 @@
  * @module StoreIndex
  */
 
-import { Chunk, Clock, Context, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { Chunk, Clock, Context, Effect, Layer, Match, Option, Predicate, Ref, Schema, Stream } from "effect";
 import * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import type { Fragment } from "@effect/sql/Statement";
 import { StoreIndexError } from "../domain/errors.js";
-import { PostEventRecord } from "../domain/events.js";
+import { PostEventRecord, isPostDelete, isPostUpsert } from "../domain/events.js";
 import type { PostEvent, StoreQuery } from "../domain/events.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { IndexCheckpoint, PostIndexEntry } from "../domain/indexes.js";
@@ -218,13 +218,13 @@ const pushdownFalse: PushdownExpr = { _tag: "False" };
 const simplifyAnd = (clauses: ReadonlyArray<PushdownExpr>): PushdownExpr => {
   const flattened: Array<PushdownExpr> = [];
   for (const clause of clauses) {
-    if (clause._tag === "False") {
+    if (Predicate.isTagged(clause, "False")) {
       return pushdownFalse;
     }
-    if (clause._tag === "True") {
+    if (Predicate.isTagged(clause, "True")) {
       continue;
     }
-    if (clause._tag === "And") {
+    if (Predicate.isTagged(clause, "And")) {
       flattened.push(...clause.clauses);
       continue;
     }
@@ -242,13 +242,13 @@ const simplifyAnd = (clauses: ReadonlyArray<PushdownExpr>): PushdownExpr => {
 const simplifyOr = (clauses: ReadonlyArray<PushdownExpr>): PushdownExpr => {
   const flattened: Array<PushdownExpr> = [];
   for (const clause of clauses) {
-    if (clause._tag === "True") {
+    if (Predicate.isTagged(clause, "True")) {
       return pushdownTrue;
     }
-    if (clause._tag === "False") {
+    if (Predicate.isTagged(clause, "False")) {
       continue;
     }
-    if (clause._tag === "Or") {
+    if (Predicate.isTagged(clause, "Or")) {
       flattened.push(...clause.clauses);
       continue;
     }
@@ -267,79 +267,68 @@ const buildPushdown = (expr: FilterExpr | undefined): PushdownExpr => {
   if (!expr) {
     return pushdownTrue;
   }
-  switch (expr._tag) {
-    case "All":
-      return pushdownTrue;
-    case "None":
-      return pushdownFalse;
-    case "And":
-      return simplifyAnd([buildPushdown(expr.left), buildPushdown(expr.right)]);
-    case "Or":
-      return simplifyOr([buildPushdown(expr.left), buildPushdown(expr.right)]);
-    case "Author":
-      return { _tag: "Author", handle: expr.handle };
-    case "AuthorIn":
-      return expr.handles.length === 0
-        ? pushdownFalse
-        : { _tag: "AuthorIn", handles: Array.from(new Set(expr.handles)) };
-    case "Hashtag":
-      return { _tag: "Hashtag", tag: expr.tag };
-    case "HashtagIn":
-      return expr.tags.length === 0
-        ? pushdownFalse
-        : { _tag: "HashtagIn", tags: Array.from(new Set(expr.tags)) };
-    case "DateRange":
-      return { _tag: "DateRange", start: expr.start, end: expr.end };
-    case "IsReply":
-      return { _tag: "IsReply" };
-    case "IsQuote":
-      return { _tag: "IsQuote" };
-    case "IsRepost":
-      return { _tag: "IsRepost" };
-    case "IsOriginal":
-      return { _tag: "IsOriginal" };
-    case "HasLinks":
-      return { _tag: "HasLinks" };
-    case "HasMedia":
-      return { _tag: "HasMedia" };
-    case "HasEmbed":
-      return { _tag: "HasEmbed" };
-    case "HasImages":
-      return { _tag: "HasImages" };
-    case "MinImages":
-      return { _tag: "MinImages", min: expr.min };
-    case "HasAltText":
-      return { _tag: "HasAltText" };
-    case "NoAltText":
-      return { _tag: "NoAltText" };
-    case "AltText":
-      return { _tag: "AltText", text: expr.text };
-    case "AltTextRegex":
-      return pushdownTrue;
-    case "HasVideo":
-      return { _tag: "HasVideo" };
-    case "Language":
-      if (expr.langs.length === 0) {
-        return pushdownFalse;
-      }
-      const langs = normalizeLangs(expr.langs);
-      return langs.length === 0 ? pushdownFalse : { _tag: "Language", langs };
-    case "Engagement":
-      return {
-        _tag: "Engagement",
-        ...(expr.minLikes !== undefined ? { minLikes: expr.minLikes } : {}),
-        ...(expr.minReposts !== undefined ? { minReposts: expr.minReposts } : {}),
-        ...(expr.minReplies !== undefined ? { minReplies: expr.minReplies } : {})
-      };
-    case "Contains":
-      return {
+  return Match.type<FilterExpr>().pipe(
+    Match.withReturnType<PushdownExpr>(),
+    Match.tagsExhaustive({
+      All: () => pushdownTrue,
+      None: () => pushdownFalse,
+      And: (andExpr) =>
+        simplifyAnd([buildPushdown(andExpr.left), buildPushdown(andExpr.right)]),
+      Or: (orExpr) =>
+        simplifyOr([buildPushdown(orExpr.left), buildPushdown(orExpr.right)]),
+      Not: () => pushdownTrue,
+      Author: (author) => ({ _tag: "Author", handle: author.handle }),
+      Hashtag: (hashtag) => ({ _tag: "Hashtag", tag: hashtag.tag }),
+      AuthorIn: (authorIn) =>
+        authorIn.handles.length === 0
+          ? pushdownFalse
+          : { _tag: "AuthorIn", handles: Array.from(new Set(authorIn.handles)) },
+      HashtagIn: (hashtagIn) =>
+        hashtagIn.tags.length === 0
+          ? pushdownFalse
+          : { _tag: "HashtagIn", tags: Array.from(new Set(hashtagIn.tags)) },
+      Contains: (contains) => ({
         _tag: "Contains",
-        text: expr.text,
-        caseSensitive: expr.caseSensitive ?? false
-      };
-    default:
-      return pushdownTrue;
-  }
+        text: contains.text,
+        caseSensitive: contains.caseSensitive ?? false
+      }),
+      IsReply: () => ({ _tag: "IsReply" }),
+      IsQuote: () => ({ _tag: "IsQuote" }),
+      IsRepost: () => ({ _tag: "IsRepost" }),
+      IsOriginal: () => ({ _tag: "IsOriginal" }),
+      Engagement: (engagement) => ({
+        _tag: "Engagement",
+        ...(engagement.minLikes !== undefined ? { minLikes: engagement.minLikes } : {}),
+        ...(engagement.minReposts !== undefined ? { minReposts: engagement.minReposts } : {}),
+        ...(engagement.minReplies !== undefined ? { minReplies: engagement.minReplies } : {})
+      }),
+      HasImages: () => ({ _tag: "HasImages" }),
+      MinImages: (minImages) => ({ _tag: "MinImages", min: minImages.min }),
+      HasAltText: () => ({ _tag: "HasAltText" }),
+      NoAltText: () => ({ _tag: "NoAltText" }),
+      AltText: (altText) => ({ _tag: "AltText", text: altText.text }),
+      AltTextRegex: () => pushdownTrue,
+      HasVideo: () => ({ _tag: "HasVideo" }),
+      HasLinks: () => ({ _tag: "HasLinks" }),
+      HasMedia: () => ({ _tag: "HasMedia" }),
+      HasEmbed: () => ({ _tag: "HasEmbed" }),
+      Language: (language) => {
+        if (language.langs.length === 0) {
+          return pushdownFalse;
+        }
+        const langs = normalizeLangs(language.langs);
+        return langs.length === 0 ? pushdownFalse : { _tag: "Language", langs };
+      },
+      Regex: () => pushdownTrue,
+      DateRange: (dateRange) => ({
+        _tag: "DateRange",
+        start: dateRange.start,
+        end: dateRange.end
+      }),
+      HasValidLinks: () => pushdownTrue,
+      Trending: () => pushdownTrue
+    })
+  )(expr);
 };
 
 const isAscii = (value: string) => /^[\x00-\x7F]*$/.test(value);
@@ -351,132 +340,128 @@ const normalizeLangs = (langs: ReadonlyArray<string>) =>
     )
   );
 
+const asFragment = (fragment: Fragment): Fragment => fragment;
+
 const pushdownToSql = (
   sql: SqlClient.SqlClient,
   expr: PushdownExpr
 ): Fragment | undefined => {
-  switch (expr._tag) {
-    case "True":
-      return undefined;
-    case "False":
-      return sql`1=0`;
-    case "Author":
-      return sql`p.author = ${expr.handle}`;
-    case "AuthorIn":
-      return expr.handles.length === 0
-        ? sql`1=0`
-        : sql`p.author IN ${sql.in(expr.handles)}`;
-    case "Hashtag":
-      return sql`EXISTS (SELECT 1 FROM post_hashtag h WHERE h.uri = p.uri AND h.tag = ${expr.tag})`;
-    case "HashtagIn":
-      return expr.tags.length === 0
-        ? sql`1=0`
-        : sql`EXISTS (SELECT 1 FROM post_hashtag h WHERE h.uri = p.uri AND h.tag IN ${sql.in(expr.tags)})`;
-    case "DateRange": {
-      const start = toIso(expr.start);
-      const end = toIso(expr.end);
-      return sql`p.created_at >= ${start} AND p.created_at <= ${end}`;
-    }
-    case "IsReply":
-      return sql`p.is_reply = 1`;
-    case "IsQuote":
-      return sql`p.is_quote = 1`;
-    case "IsRepost":
-      return sql`p.is_repost = 1`;
-    case "IsOriginal":
-      return sql`p.is_original = 1`;
-    case "HasLinks":
-      return sql`p.has_links = 1`;
-    case "HasMedia":
-      return sql`p.has_media = 1`;
-    case "HasEmbed":
-      return sql`p.has_embed = 1`;
-    case "HasImages":
-      return sql`p.has_images = 1`;
-    case "MinImages":
-      return sql`p.image_count >= ${expr.min}`;
-    case "HasAltText":
-      return sql`p.has_alt_text = 1`;
-    case "NoAltText":
-      return sql`p.image_count > 0 AND p.has_alt_text = 0`;
-    case "AltText": {
-      const text = expr.text;
-      if (text.length === 0) {
-        return undefined;
-      }
-      if (!isAscii(text)) {
-        return undefined;
-      }
-      return sql`instr(lower(p.alt_text), lower(${text})) > 0`;
-    }
-    case "HasVideo":
-      return sql`p.has_video = 1`;
-    case "Language":
-      return expr.langs.length === 0
-        ? sql`1=0`
-        : sql`(
-            EXISTS (
-              SELECT 1 FROM post_lang l
-              WHERE l.uri = p.uri AND l.lang IN ${sql.in(expr.langs)}
-            )
-            OR (
-              p.lang IS NOT NULL
-              AND lower(p.lang) IN ${sql.in(expr.langs)}
-            )
-          )`;
-    case "Engagement": {
-      const clauses: Array<Fragment> = [];
-      if (expr.minLikes !== undefined) {
-        clauses.push(sql`p.like_count >= ${expr.minLikes}`);
-      }
-      if (expr.minReposts !== undefined) {
-        clauses.push(sql`p.repost_count >= ${expr.minReposts}`);
-      }
-      if (expr.minReplies !== undefined) {
-        clauses.push(sql`p.reply_count >= ${expr.minReplies}`);
-      }
-      if (clauses.length === 0) {
-        return undefined;
-      }
-      return sql.and(clauses);
-    }
-    case "Contains": {
-      const text = expr.text;
-      if (text.length === 0) {
-        return undefined;
-      }
-      if (expr.caseSensitive) {
-        return sql`instr(p.text, ${text}) > 0`;
-      }
-      if (!isAscii(text)) {
-        return undefined;
-      }
-      return sql`instr(lower(p.text), lower(${text})) > 0`;
-    }
-    case "And": {
-      const clauses = expr.clauses
-        .map((clause) => pushdownToSql(sql, clause))
-        .filter((clause): clause is Fragment => clause !== undefined);
-      if (clauses.length === 0) {
-        return undefined;
-      }
-      return sql.and(clauses);
-    }
-    case "Or": {
-      const clauses: Array<Fragment> = [];
-      for (const clause of expr.clauses) {
-        const next = pushdownToSql(sql, clause);
-        if (!next) {
+  return Match.type<PushdownExpr>().pipe(
+    Match.withReturnType<Fragment | undefined>(),
+    Match.tagsExhaustive({
+      True: () => undefined,
+      False: () => asFragment(sql`1=0`),
+      Author: (author) => asFragment(sql`p.author = ${author.handle}`),
+      AuthorIn: (authorIn) =>
+        authorIn.handles.length === 0
+          ? asFragment(sql`1=0`)
+          : asFragment(sql`p.author IN ${sql.in(authorIn.handles)}`),
+      Hashtag: (hashtag) =>
+        asFragment(
+          sql`EXISTS (SELECT 1 FROM post_hashtag h WHERE h.uri = p.uri AND h.tag = ${hashtag.tag})`
+        ),
+      HashtagIn: (hashtagIn) =>
+        hashtagIn.tags.length === 0
+          ? asFragment(sql`1=0`)
+          : asFragment(
+              sql`EXISTS (SELECT 1 FROM post_hashtag h WHERE h.uri = p.uri AND h.tag IN ${sql.in(hashtagIn.tags)})`
+            ),
+      DateRange: (dateRange) => {
+        const start = toIso(dateRange.start);
+        const end = toIso(dateRange.end);
+        return asFragment(sql`p.created_at >= ${start} AND p.created_at <= ${end}`);
+      },
+      IsReply: () => asFragment(sql`p.is_reply = 1`),
+      IsQuote: () => asFragment(sql`p.is_quote = 1`),
+      IsRepost: () => asFragment(sql`p.is_repost = 1`),
+      IsOriginal: () => asFragment(sql`p.is_original = 1`),
+      HasLinks: () => asFragment(sql`p.has_links = 1`),
+      HasMedia: () => asFragment(sql`p.has_media = 1`),
+      HasEmbed: () => asFragment(sql`p.has_embed = 1`),
+      HasImages: () => asFragment(sql`p.has_images = 1`),
+      MinImages: (minImages) => asFragment(sql`p.image_count >= ${minImages.min}`),
+      HasAltText: () => asFragment(sql`p.has_alt_text = 1`),
+      NoAltText: () => asFragment(sql`p.image_count > 0 AND p.has_alt_text = 0`),
+      AltText: (altText) => {
+        const text = altText.text;
+        if (text.length === 0) {
           return undefined;
         }
-        clauses.push(next);
+        if (!isAscii(text)) {
+          return undefined;
+        }
+        return asFragment(sql`instr(lower(p.alt_text), lower(${text})) > 0`);
+      },
+      HasVideo: () => asFragment(sql`p.has_video = 1`),
+      Language: (language) =>
+        language.langs.length === 0
+          ? asFragment(sql`1=0`)
+          : asFragment(
+              sql`(
+                EXISTS (
+                  SELECT 1 FROM post_lang l
+                  WHERE l.uri = p.uri AND l.lang IN ${sql.in(language.langs)}
+                )
+                OR (
+                  p.lang IS NOT NULL
+                  AND lower(p.lang) IN ${sql.in(language.langs)}
+                )
+              )`
+            ),
+      Engagement: (engagement) => {
+        const clauses: Array<Fragment> = [];
+        if (engagement.minLikes !== undefined) {
+          clauses.push(asFragment(sql`p.like_count >= ${engagement.minLikes}`));
+        }
+        if (engagement.minReposts !== undefined) {
+          clauses.push(asFragment(sql`p.repost_count >= ${engagement.minReposts}`));
+        }
+        if (engagement.minReplies !== undefined) {
+          clauses.push(asFragment(sql`p.reply_count >= ${engagement.minReplies}`));
+        }
+        if (clauses.length === 0) {
+          return undefined;
+        }
+        return sql.and(clauses);
+      },
+      Contains: (contains) => {
+        const text = contains.text;
+        if (text.length === 0) {
+          return undefined;
+        }
+        if (contains.caseSensitive) {
+          return asFragment(sql`instr(p.text, ${text}) > 0`);
+        }
+        if (!isAscii(text)) {
+          return undefined;
+        }
+        return asFragment(sql`instr(lower(p.text), lower(${text})) > 0`);
+      },
+      And: (andExpr) => {
+        const clauses = andExpr.clauses
+          .map((clause) => pushdownToSql(sql, clause))
+          .filter((clause): clause is Fragment => clause !== undefined);
+        if (clauses.length === 0) {
+          return undefined;
+        }
+        return sql.and(clauses);
+      },
+      Or: (orExpr) => {
+        const clauses: Array<Fragment> = [];
+        for (const clause of orExpr.clauses) {
+          const next = pushdownToSql(sql, clause);
+          if (!next) {
+            return undefined;
+          }
+          clauses.push(next);
+        }
+        if (clauses.length === 0) {
+          return undefined;
+        }
+        return sql.or(clauses);
       }
-      if (clauses.length === 0) {
-        return undefined;
-      }
-      return sql.or(clauses);
-    }
-  }
+    })
+  )(expr);
 };
 
 const applyUpsert = (
@@ -795,11 +780,11 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
 
       const applyWithClient = (client: SqlClient.SqlClient, record: PostEventRecord) =>
         Effect.gen(function* () {
-          if (record.event._tag === "PostUpsert") {
+          if (isPostUpsert(record.event)) {
             yield* applyUpsert(client, record.event);
             return;
           }
-          if (record.event._tag === "PostDelete") {
+          if (isPostDelete(record.event)) {
             yield* applyDelete(client, record.event);
           }
         });

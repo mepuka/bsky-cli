@@ -1,4 +1,11 @@
+import { Predicate } from "effect";
+
 type ParseIssue = { readonly _tag: string; readonly message?: string };
+
+const isTransformationIssue = (
+  issue: ParseIssue
+): issue is ParseIssue & { readonly _tag: "Transformation" } =>
+  Predicate.isTagged(issue, "Transformation");
 
 /** Safely parse JSON, returning `undefined` on failure. */
 export const safeParseJson = (raw: string): unknown => {
@@ -14,7 +21,7 @@ export const jsonParseTip = "Tip: wrap JSON in single quotes to avoid shell esca
 export const findJsonParseIssue = (issues: ReadonlyArray<ParseIssue>) =>
   issues.find(
     (issue) =>
-      issue._tag === "Transformation" &&
+      isTransformationIssue(issue) &&
       typeof issue.message === "string" &&
       issue.message.startsWith("JSON Parse error")
   );

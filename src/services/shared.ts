@@ -1,5 +1,5 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Effect, ParseResult } from "effect";
+import { Effect, ParseResult, Predicate } from "effect";
 import { ConfigError } from "../domain/errors.js";
 
 /** Extract a human-readable message from an unknown cause, falling back to the given string. */
@@ -38,7 +38,7 @@ export const formatParseError = (
 
   const jsonParseIssue = issues.find(
     (issue) =>
-      issue._tag === "Transformation" &&
+      Predicate.isTagged(issue, "Transformation") &&
       typeof issue.message === "string" &&
       issue.message.startsWith("JSON Parse error")
   );

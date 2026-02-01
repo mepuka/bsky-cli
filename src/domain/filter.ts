@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Match, Schema } from "effect";
 import * as Monoid from "@effect/typeclass/Monoid";
 import * as Semigroup from "@effect/typeclass/Semigroup";
 import { Handle, Hashtag, Timestamp } from "./primitives.js";
@@ -875,17 +875,16 @@ export const filterExprSignature = (expr: FilterExpr): string =>
  * @param expr - The filter expression to check
  * @returns True if the filter requires effects to evaluate
  */
-export const isEffectfulFilter = (expr: FilterExpr): boolean => {
-  switch (expr._tag) {
-    case "HasValidLinks":
-    case "Trending":
-      return true;
-    case "And":
-    case "Or":
-      return isEffectfulFilter(expr.left) || isEffectfulFilter(expr.right);
-    case "Not":
-      return isEffectfulFilter(expr.expr);
-    default:
-      return false;
-  }
-};
+export const isEffectfulFilter = (expr: FilterExpr): boolean =>
+  Match.type<FilterExpr>().pipe(
+    Match.tags({
+      HasValidLinks: () => true,
+      Trending: () => true,
+      And: (andExpr) =>
+        isEffectfulFilter(andExpr.left) || isEffectfulFilter(andExpr.right),
+      Or: (orExpr) =>
+        isEffectfulFilter(orExpr.left) || isEffectfulFilter(orExpr.right),
+      Not: (notExpr) => isEffectfulFilter(notExpr.expr)
+    }),
+    Match.orElse(() => false)
+  )(expr);

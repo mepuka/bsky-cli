@@ -83,7 +83,7 @@ import {
   StoreLineage,
   StoreSource
 } from "../domain/derivation.js";
-import { EventMeta, PostDelete, PostUpsert } from "../domain/events.js";
+import { EventMeta, PostDelete, PostUpsert, isPostDelete } from "../domain/events.js";
 import type { EventLogEntry } from "../domain/events.js";
 import { EventSeq, Timestamp } from "../domain/primitives.js";
 import type { FilterCompileError, FilterEvalError, StoreIndexError, StoreIoError } from "../domain/errors.js";
@@ -359,7 +359,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
                 };
 
                 // PostDelete: propagate ALL unfiltered
-                if (event._tag === "PostDelete") {
+                if (isPostDelete(event)) {
                   const derivedMeta = EventMeta.make({
                     ...event.meta,
                     sourceStore: sourceRef.name
