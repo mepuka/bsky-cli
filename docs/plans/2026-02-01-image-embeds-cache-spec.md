@@ -2,7 +2,7 @@
 
 Goal: deliver an Effect-native system for image/embed indexing, extraction, rendering, and local caching that addresses issues #135-#138.
 
-Status: in progress (core extraction/rendering/indexing implemented; remaining: ref-index).
+Status: complete (core extraction/rendering/indexing + ref-index implemented).
 
 ## Scope (issues)
 
@@ -211,8 +211,8 @@ Suggested env knobs:
 - Clarify `--limit` semantics when `--extract-images` is active (CLI help updated; docs may still need a note).
 
 ### #137 Local image caching and archival
-- Add cache integrity + cleanup: manual sweep + TTL sweep commands remove orphaned/expired files; still missing ref-index.
-- Add an archive ref-index (hash/path → refcount, lastAccessed) to prevent leaks with content-hash storage.
+- Add cache integrity + cleanup: manual sweep + TTL sweep commands remove orphaned/expired files; ref-index now handles shared assets.
+- Add an archive ref-index (hash/path → refcount, lastAccessed) to prevent leaks with content-hash storage. (done)
 - Add tests for missing-file status + sweep behavior (done for manual sweep).
 
 ### #138 Render image embeds in card and terminal output

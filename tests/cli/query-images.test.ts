@@ -24,6 +24,7 @@ import { ImageArchive } from "../../src/services/images/image-archive.js";
 import { ImageCache } from "../../src/services/images/image-cache.js";
 import { ImageConfig } from "../../src/services/images/image-config.js";
 import { ImagePipeline } from "../../src/services/images/image-pipeline.js";
+import { ImageRefIndex } from "../../src/services/images/image-ref-index.js";
 import { cacheSweepForStore, cacheTtlSweep } from "../../src/cli/image-cache.js";
 
 const sampleConfig = Schema.decodeUnknownSync(StoreConfig)({
@@ -187,11 +188,15 @@ const buildLayer = (
   const persistenceLayer = Persistence.layerResultKeyValueStore.pipe(
     Layer.provide(KeyValueStore.layerMemory)
   );
+  const imageRefIndexLayer = ImageRefIndex.layer.pipe(
+    Layer.provideMerge(persistenceLayer)
+  );
   const imageCacheLayer = ImageCache.layer.pipe(
     Layer.provideMerge(imageConfigLayer),
     Layer.provideMerge(imageArchiveLayer),
     Layer.provideMerge(fetcherLayer),
-    Layer.provideMerge(persistenceLayer)
+    Layer.provideMerge(persistenceLayer),
+    Layer.provideMerge(imageRefIndexLayer)
   );
   const imagePipelineLayer = ImagePipeline.layer.pipe(
     Layer.provideMerge(imageConfigLayer),
@@ -208,6 +213,7 @@ const buildLayer = (
     imageConfigLayer,
     imageArchiveLayer,
     imageCacheLayer,
+    imageRefIndexLayer,
     imagePipelineLayer,
     fetcherLayer
   ).pipe(

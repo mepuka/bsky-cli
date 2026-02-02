@@ -8,6 +8,7 @@ import { CliInputError } from "./errors.js";
 import { StoreIndex } from "../services/store-index.js";
 import { ImageCache } from "../services/images/image-cache.js";
 import { ImageConfig } from "../services/images/image-config.js";
+import { ImageRefIndex } from "../services/images/image-ref-index.js";
 import { directorySize } from "../services/shared.js";
 
 export type CacheImagesOptions = {
@@ -201,6 +202,7 @@ export const cacheSweepForStore = (
   Effect.gen(function* () {
     const cache = yield* ImageCache;
     const config = yield* ImageConfig;
+    const refIndex = yield* ImageRefIndex;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const seenRef = yield* Ref.make(new Set<string>());
@@ -294,9 +296,14 @@ export const cacheSweepForStore = (
       yield* Effect.forEach(
         orphaned,
         (relativePath) =>
-          fs
-            .remove(path.join(cacheRoot, relativePath), { force: true })
-            .pipe(Effect.orElseSucceed(() => undefined)),
+          Effect.gen(function* () {
+            yield* fs
+              .remove(path.join(cacheRoot, relativePath), { force: true })
+              .pipe(Effect.orElseSucceed(() => undefined));
+            yield* refIndex
+              .remove(relativePath)
+              .pipe(Effect.orElseSucceed(() => undefined));
+          }),
         { discard: true, concurrency: 10 }
       );
     }
@@ -336,6 +343,7 @@ export const cacheTtlSweep = (options: { readonly remove?: boolean; readonly inc
     const config = yield* ImageConfig;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const refIndex = yield* ImageRefIndex;
     const now = yield* Clock.currentTimeMillis;
     const ttlMillis = Duration.toMillis(config.cacheTtl);
     const includeThumbnails = options.includeThumbnails ?? true;
@@ -378,6 +386,12 @@ export const cacheTtlSweep = (options: { readonly remove?: boolean; readonly inc
                   Effect.as(1),
                   Effect.orElseSucceed(() => 0)
                 );
+              if (removed > 0) {
+                const relative = path.relative(config.cacheRoot, absolute);
+                yield* refIndex
+                  .remove(relative)
+                  .pipe(Effect.orElseSucceed(() => undefined));
+              }
               return {
                 scanned: 1,
                 expired: 1,
