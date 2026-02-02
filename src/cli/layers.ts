@@ -28,6 +28,7 @@ import { ImageFetcher } from "../services/images/image-fetcher.js";
 import { ImageConfig } from "../services/images/image-config.js";
 import { ImageArchive } from "../services/images/image-archive.js";
 import { ImageCache } from "../services/images/image-cache.js";
+import { ImageRefIndex } from "../services/images/image-ref-index.js";
 import { ImagePipeline } from "../services/images/image-pipeline.js";
 import { CliOutput } from "./output.js";
 import { CliInput } from "./input.js";
@@ -102,6 +103,9 @@ const imageCacheStoreLayer = Layer.unwrapEffect(
 const imagePersistenceLayer = Persistence.layerResultKeyValueStore.pipe(
   Layer.provide(imageCacheStoreLayer)
 );
+const imageRefIndexLayer = ImageRefIndex.layer.pipe(
+  Layer.provideMerge(imagePersistenceLayer)
+);
 const imageArchiveLayer = ImageArchive.layer.pipe(
   Layer.provideMerge(imageConfigLayer)
 );
@@ -109,7 +113,8 @@ const imageCacheLayer = ImageCache.layer.pipe(
   Layer.provideMerge(imageConfigLayer),
   Layer.provideMerge(imageArchiveLayer),
   Layer.provideMerge(imageFetcherLayer),
-  Layer.provideMerge(imagePersistenceLayer)
+  Layer.provideMerge(imagePersistenceLayer),
+  Layer.provideMerge(imageRefIndexLayer)
 );
 const imagePipelineLayer = ImagePipeline.layer.pipe(
   Layer.provideMerge(imageConfigLayer),

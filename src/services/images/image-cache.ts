@@ -8,6 +8,7 @@ import { messageFromCause } from "../shared.js";
 import { ImageArchive } from "./image-archive.js";
 import { ImageFetcher } from "./image-fetcher.js";
 import { ImageConfig } from "./image-config.js";
+import { ImageRefIndex } from "./image-ref-index.js";
 
 const cacheKey = (url: string, variant: ImageVariant) => `${variant}:${url}`;
 const cacheKeyHash = (key: string) =>
@@ -72,6 +73,7 @@ export class ImageCache extends Context.Tag("@skygent/ImageCache")<
       const config = yield* ImageConfig;
       const fetcher = yield* ImageFetcher;
       const archive = yield* ImageArchive;
+      const refIndex = yield* ImageRefIndex;
       const persistence = yield* Persistence.ResultPersistence;
 
       const timeToLive = (
@@ -138,10 +140,13 @@ export class ImageCache extends Context.Tag("@skygent/ImageCache")<
 
       const get = Effect.fn("ImageCache.get")((url: string, variant: ImageVariant = "original") => {
         const request = new ImageCacheRequest({ url, variant });
+        const loadCached = store
+          .get(request)
+          .pipe(Effect.mapError(toCacheError(cacheKey(url, variant), "imageCacheGet")));
         const effect = Effect.request(request, resolver).pipe(
           Effect.mapError(toCacheError(cacheKey(url, variant), "imageCacheGet"))
         );
-        return Option.match(requestCache, {
+        const withCache = Option.match(requestCache, {
           onNone: () => effect,
           onSome: (cache) =>
             effect.pipe(
@@ -149,6 +154,16 @@ export class ImageCache extends Context.Tag("@skygent/ImageCache")<
               Effect.withRequestCache(cache)
             )
         });
+        return loadCached.pipe(
+          Effect.map((cached) => Option.isSome(cached) && Exit.isSuccess(cached.value)),
+          Effect.flatMap((wasCached) =>
+            withCache.pipe(
+              Effect.tap((asset) =>
+                wasCached ? refIndex.ensure(asset.path) : refIndex.increment(asset.path)
+              )
+            )
+          )
+        );
       });
 
       const invalidate = Effect.fn("ImageCache.invalidate")(
@@ -164,11 +179,22 @@ export class ImageCache extends Context.Tag("@skygent/ImageCache")<
                   onNone: () => Effect.void,
                   onSome: (exit) =>
                     Exit.isSuccess(exit)
-                      ? archive
-                          .remove(exit.value)
+                      ? refIndex
+                          .decrement(exit.value.path)
                           .pipe(
                             Effect.mapError(
                               toCacheError(key, "imageCacheInvalidate")
+                            ),
+                            Effect.flatMap((count) =>
+                              count === 0
+                                ? archive
+                                    .remove(exit.value)
+                                    .pipe(
+                                      Effect.mapError(
+                                        toCacheError(key, "imageCacheInvalidate")
+                                      )
+                                    )
+                                : Effect.void
                             )
                           )
                       : Effect.void

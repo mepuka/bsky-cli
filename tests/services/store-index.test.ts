@@ -9,6 +9,7 @@ import { StoreDb } from "../../src/services/store-db.js";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { EventMeta, PostEventRecord, PostDelete, PostUpsert, StoreQuery } from "../../src/domain/events.js";
 import { EventId, Timestamp } from "../../src/domain/primitives.js";
+import { EmbedImage, EmbedImages } from "../../src/domain/bsky.js";
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
 
@@ -39,6 +40,47 @@ const samplePostLater = Schema.decodeUnknownSync(Post)({
   hashtags: ["#later"],
   mentions: [],
   links: []
+});
+const imagePostWithAlt = Schema.decodeUnknownSync(Post)({
+  uri: "at://did:plc:example/app.bsky.feed.post/4",
+  author: "alice.bsky",
+  text: "Image post with alt text",
+  createdAt: "2026-01-04T00:00:00.000Z",
+  hashtags: [],
+  mentions: [],
+  links: [],
+  embed: EmbedImages.make({
+    images: [
+      EmbedImage.make({
+        thumb: "https://example.com/thumb/1",
+        fullsize: "https://example.com/full/1",
+        alt: "Cat"
+      }),
+      EmbedImage.make({
+        thumb: "https://example.com/thumb/2",
+        fullsize: "https://example.com/full/2",
+        alt: "Dog"
+      })
+    ]
+  })
+});
+const imagePostMissingAlt = Schema.decodeUnknownSync(Post)({
+  uri: "at://did:plc:example/app.bsky.feed.post/5",
+  author: "bob.bsky",
+  text: "Image post missing alt text",
+  createdAt: "2026-01-05T00:00:00.000Z",
+  hashtags: [],
+  mentions: [],
+  links: [],
+  embed: EmbedImages.make({
+    images: [
+      EmbedImage.make({
+        thumb: "https://example.com/thumb/3",
+        fullsize: "https://example.com/full/3",
+        alt: ""
+      })
+    ]
+  })
 });
 
 const sampleMeta = Schema.decodeUnknownSync(EventMeta)({
@@ -352,6 +394,65 @@ describe("StoreIndex", () => {
       const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
       expect(Chunk.toReadonlyArray(result.authorCollected)).toEqual([samplePost]);
       expect(Chunk.toReadonlyArray(result.hashtagCollected)).toEqual([samplePostLater]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("query applies SQL pushdown for image and alt text filters", async () => {
+    const upserts = [
+      PostUpsert.make({ post: imagePostWithAlt, meta: sampleMeta }),
+      PostUpsert.make({ post: imagePostMissingAlt, meta: sampleMeta }),
+      PostUpsert.make({ post: samplePost, meta: sampleMeta })
+    ];
+
+    const program = Effect.gen(function* () {
+      const writer = yield* StoreWriter;
+      const storeIndex = yield* StoreIndex;
+
+      for (const upsert of upserts) {
+        yield* writer.append(sampleStore, upsert);
+      }
+      yield* storeIndex.rebuild(sampleStore);
+
+      const minImagesQuery = StoreQuery.make({
+        filter: { _tag: "MinImages", min: 2 }
+      });
+      const hasAltQuery = StoreQuery.make({
+        filter: { _tag: "HasAltText" }
+      });
+      const noAltQuery = StoreQuery.make({
+        filter: { _tag: "NoAltText" }
+      });
+      const altTextQuery = StoreQuery.make({
+        filter: { _tag: "AltText", text: "Cat" }
+      });
+
+      const minImages = yield* storeIndex
+        .query(sampleStore, minImagesQuery)
+        .pipe(Stream.runCollect);
+      const hasAlt = yield* storeIndex
+        .query(sampleStore, hasAltQuery)
+        .pipe(Stream.runCollect);
+      const noAlt = yield* storeIndex
+        .query(sampleStore, noAltQuery)
+        .pipe(Stream.runCollect);
+      const altText = yield* storeIndex
+        .query(sampleStore, altTextQuery)
+        .pipe(Stream.runCollect);
+
+      return { minImages, hasAlt, noAlt, altText };
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+
+      expect(Chunk.toReadonlyArray(result.minImages)).toEqual([imagePostWithAlt]);
+      expect(Chunk.toReadonlyArray(result.hasAlt)).toEqual([imagePostWithAlt]);
+      expect(Chunk.toReadonlyArray(result.noAlt)).toEqual([imagePostMissingAlt]);
+      expect(Chunk.toReadonlyArray(result.altText)).toEqual([imagePostWithAlt]);
     } finally {
       await removeTempDir(tempDir);
     }

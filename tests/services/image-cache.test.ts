@@ -10,6 +10,7 @@ import { ImageArchive } from "../../src/services/images/image-archive.js";
 import { ImageCache } from "../../src/services/images/image-cache.js";
 import { ImageConfig } from "../../src/services/images/image-config.js";
 import { ImagePipeline } from "../../src/services/images/image-pipeline.js";
+import { ImageRefIndex } from "../../src/services/images/image-ref-index.js";
 
 const envProvider = (entries: Array<readonly [string, string]>) =>
   Layer.setConfigProvider(ConfigProvider.fromMap(new Map(entries)));
@@ -62,11 +63,15 @@ const buildLayer = (storeRoot: string, entries: Array<readonly [string, string]>
   const persistenceLayer = Persistence.layerResultKeyValueStore.pipe(
     Layer.provide(KeyValueStore.layerMemory)
   );
+  const imageRefIndexLayer = ImageRefIndex.layer.pipe(
+    Layer.provideMerge(persistenceLayer)
+  );
   const imageCacheLayer = ImageCache.layer.pipe(
     Layer.provideMerge(imageConfigLayer),
     Layer.provideMerge(imageArchiveLayer),
     Layer.provideMerge(fetcherLayer),
-    Layer.provideMerge(persistenceLayer)
+    Layer.provideMerge(persistenceLayer),
+    Layer.provideMerge(imageRefIndexLayer)
   );
   const imagePipelineLayer = ImagePipeline.layer.pipe(
     Layer.provideMerge(imageConfigLayer),
@@ -78,6 +83,7 @@ const buildLayer = (storeRoot: string, entries: Array<readonly [string, string]>
     imageConfigLayer,
     imageArchiveLayer,
     imageCacheLayer,
+    imageRefIndexLayer,
     imagePipelineLayer,
     fetcherLayer
   ).pipe(
@@ -217,6 +223,58 @@ describe("ImageCache", () => {
 
       expect(Option.isNone(result.cachedAfter)).toBe(true);
       expect(result.existsAfter).toBe(false);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("shared assets persist until all references are invalidated", async () => {
+    const fetcherLayer = makeFetcherLayer(() => undefined);
+    const tempDir = await makeTempDir();
+
+    try {
+      const layer = buildLayer(
+        tempDir,
+        [["SKYGENT_IMAGE_CACHE_ENABLED", "true"]],
+        fetcherLayer
+      );
+      const program = Effect.gen(function* () {
+        const cache = yield* ImageCache;
+        const archive = yield* ImageArchive;
+        const fs = yield* FileSystem.FileSystem;
+
+        const first = yield* cache.get("https://example.com/a.png", "original");
+        const second = yield* cache.get("https://example.com/b.png", "original");
+        const path = archive.resolvePath(first);
+        const existsAfterCreate = yield* fs.exists(path);
+
+        yield* cache.invalidate("https://example.com/a.png", "original");
+        const existsAfterFirst = yield* fs.exists(path);
+        const cachedSecond = yield* cache.getCached(
+          "https://example.com/b.png",
+          "original"
+        );
+
+        yield* cache.invalidate("https://example.com/b.png", "original");
+        const existsAfterSecond = yield* fs.exists(path);
+
+        return {
+          first,
+          second,
+          existsAfterCreate,
+          existsAfterFirst,
+          existsAfterSecond,
+          cachedSecond
+        };
+      });
+
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+
+      expect(result.first.path).toBe(result.second.path);
+      expect(result.existsAfterCreate).toBe(true);
+      expect(result.existsAfterFirst).toBe(true);
+      expect(Option.isSome(result.cachedSecond)).toBe(true);
+      expect(result.existsAfterSecond).toBe(false);
     } finally {
       await removeTempDir(tempDir);
     }
