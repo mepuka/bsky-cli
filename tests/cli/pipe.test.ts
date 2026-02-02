@@ -10,6 +10,7 @@ import { FilterNotFound } from "../../src/domain/errors.js";
 import { PostParser } from "../../src/services/post-parser.js";
 import type { FilterExpr } from "../../src/domain/filter.js";
 import type { Post } from "../../src/domain/post.js";
+import { CliInputError } from "../../src/cli/errors.js";
 
 const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
 
@@ -65,7 +66,8 @@ const makeOutputCapture = () => {
 const makeInputLayer = (lines: ReadonlyArray<string>) => {
   const service: CliInputService = {
     lines: Stream.fromIterable(lines),
-    isTTY: false
+    isTTY: false,
+    isReadable: true
   };
   return Layer.succeed(CliInput, CliInput.of(service));
 };
@@ -244,5 +246,35 @@ describe("pipe command", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).toMatchObject({ text: "match me" });
+  });
+
+  test("fails fast when stdin is not readable", async () => {
+    const run = Command.run(pipeCommand, { name: "skygent", version: "0.0.0" });
+    const { layer: outputLayer } = makeOutputCapture();
+    const inputLayer = Layer.succeed(
+      CliInput,
+      CliInput.of({ lines: Stream.empty, isTTY: false, isReadable: false })
+    );
+    const appLayer = Layer.mergeAll(
+      outputLayer,
+      inputLayer,
+      runtimeLayer,
+      libraryLayer,
+      PostParser.layer,
+      clockLayer
+    );
+
+    const error = await Effect.runPromise(
+      run([
+        "node",
+        "skygent",
+        "--filter-json",
+        JSON.stringify({ _tag: "All" })
+      ])
+        .pipe(Effect.provide(appLayer), Effect.flip)
+    );
+
+    expect(error).toBeInstanceOf(CliInputError);
+    expect((error as CliInputError).message).toContain("No piped input detected");
   });
 });

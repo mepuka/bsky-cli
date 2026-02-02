@@ -72,6 +72,12 @@ export const pipeCommand = Command.make(
           cause: { isTTY: true }
         });
       }
+      if (!input.isReadable) {
+        return yield* CliInputError.make({
+          message: "No piped input detected on stdin. Pipe NDJSON input into skygent pipe.",
+          cause: { isReadable: false }
+        });
+      }
       yield* requireFilterExpr(filter, filterJson);
       const parser = yield* PostParser;
       const runtime = yield* FilterRuntime;
