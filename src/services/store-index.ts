@@ -607,6 +607,21 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
     ) => Effect.Effect<ReadonlyArray<PostUri>, StoreIndexError>;
 
     /**
+     * Get all post URIs for a specific author handle
+     *
+     * Returns posts ordered by creation time (ascending). The author must be a
+     * normalized handle matching the stored post author field.
+     *
+     * @param store - Store reference to query
+     * @param author - Author handle to search for
+     * @returns Effect containing array of post URIs
+     */
+    readonly getByAuthor: (
+      store: StoreRef,
+      author: Handle
+    ) => Effect.Effect<ReadonlyArray<PostUri>, StoreIndexError>;
+
+    /**
      * Retrieve a single post by URI
      *
      * Fetches the post JSON from the database and decodes it into a Post object.
@@ -947,6 +962,22 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
           })
       );
 
+      const getByAuthor = Effect.fn("StoreIndex.getByAuthor")(
+        (store: StoreRef, author: Handle) =>
+          withClient(store, "StoreIndex.getByAuthor failed", (client) => {
+            const find = SqlSchema.findAll({
+              Request: Handle,
+              Result: postUriRow,
+              execute: (value) =>
+                client`SELECT uri FROM posts WHERE author = ${value} ORDER BY created_at ASC`
+            });
+
+            return find(author).pipe(
+              Effect.map((rows) => rows.map((row) => row.uri))
+            );
+          })
+      );
+
       const getPost = Effect.fn("StoreIndex.getPost")(
         (store: StoreRef, uri: PostUri) =>
           withClient(store, "StoreIndex.getPost failed", (client) => {
@@ -1265,6 +1296,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         apply,
         getByDate,
         getByHashtag,
+        getByAuthor,
         getPost,
         hasUri,
         clear,

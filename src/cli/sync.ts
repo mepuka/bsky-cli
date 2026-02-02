@@ -528,11 +528,12 @@ const syncStoreCommand = Command.make(
       const limitValue = Option.getOrUndefined(limit);
       const combineResults = (acc: SyncResult, result: SyncResult) =>
         SyncResultMonoid.combine(acc, result);
-      const runSync = (dataSource: DataSource, expr: FilterExpr) =>
-        sync
+      const runSync = (dataSource: DataSource, expr: FilterExpr, limitOverride?: number) => {
+        const effectiveLimit = limitOverride ?? limitValue;
+        return sync
           .stream(dataSource, storeRef, expr, {
             policy,
-            ...(limitValue !== undefined ? { limit: limitValue } : {}),
+            ...(effectiveLimit !== undefined ? { limit: effectiveLimit } : {}),
             concurrency: 1
           })
           .pipe(
@@ -540,10 +541,71 @@ const syncStoreCommand = Command.make(
             Effect.withRequestBatching(true),
             Effect.provideService(SyncReporter, reporter)
           );
+      };
       const runSource = (source: (typeof sources)[number]) => {
         const id = storeSourceId(source);
         return Effect.gen(function* () {
           const expr = yield* storeSourceFilterExpr(source, id);
+          if (source._tag === "JetstreamSource") {
+            if (limitValue === undefined) {
+              return yield* CliInputError.make({
+                message:
+                  "Jetstream sources require --limit when syncing a store. Use sync jetstream for continuous streaming.",
+                cause: { source: id }
+              });
+            }
+            const filterHash = filterExprSignature(expr);
+            const selection = yield* buildJetstreamSelection(
+              {
+                endpoint: Option.none(),
+                collections: Option.none(),
+                dids: Option.none(),
+                cursor: Option.none(),
+                compress: false,
+                maxMessageSize: Option.none()
+              },
+              storeRef,
+              filterHash
+            );
+            const engineLayer = JetstreamSyncEngine.layer.pipe(
+              Layer.provideMerge(Jetstream.live(selection.config))
+            );
+
+            yield* logInfo("Starting sync", {
+              source: id,
+              type: source._tag,
+              store: storeRef.name
+            });
+
+            const syncResult = yield* Effect.gen(function* () {
+              const engine = yield* JetstreamSyncEngine;
+              return yield* engine.sync({
+                source: selection.source,
+                store: storeRef,
+                filter: expr,
+                command: "sync jetstream",
+                limit: limitValue,
+                ...(selection.cursor !== undefined
+                  ? { cursor: selection.cursor }
+                  : {})
+              });
+            }).pipe(
+              Effect.provide(engineLayer),
+              Effect.provideService(SyncReporter, reporter)
+            );
+
+            if (syncResult.errors.length === 0) {
+              yield* storeSources.markSynced(storeRef, id, new Date());
+            } else {
+              yield* logWarn("Sync completed with errors; lastSyncedAt not updated", {
+                store: storeRef.name,
+                source: id,
+                type: source._tag,
+                errors: syncResult.errors.length
+              });
+            }
+            return { id, type: source._tag, result: syncResult };
+          }
           if (source._tag === "ListSource" && source.expandMembers) {
             const client = yield* BskyClient;
             const members = yield* loadListMembers(
@@ -559,38 +621,54 @@ const syncStoreCommand = Command.make(
               members: members.length
             });
 
-            const combinedMembers = yield* Stream.fromIterable(members).pipe(
-              Stream.mapEffect(
-                (member) =>
-                  runSync(DataSource.author(member), expr).pipe(
-                    Effect.catchAll((error) => {
-                      const message =
-                        error instanceof Error ? error.message : String(error);
-                      const syncError = SyncError.make({
-                        stage: "source",
-                        message: `List member ${member} failed: ${message}`,
-                        cause: error
-                      });
-                      const failure = SyncResult.make({
-                        postsAdded: 0,
-                        postsDeleted: 0,
-                        postsSkipped: 0,
-                        errors: [syncError]
-                      });
-                      return logWarn("List member sync failed", {
-                        store: storeRef.name,
-                        list: source.uri,
-                        member,
-                        error: message
-                      }).pipe(Effect.orElseSucceed(() => undefined), Effect.as(failure));
-                    })
-                  ),
-                {
-                  concurrency: Math.min(settings.concurrency, members.length || 1)
-                }
-              ),
-                Stream.runFold(SyncResultMonoid.empty, combineResults)
+            const runMemberSync = (member: (typeof members)[number], limitOverride?: number) =>
+              runSync(DataSource.author(member), expr, limitOverride).pipe(
+                Effect.catchAll((error) => {
+                  const message = error instanceof Error ? error.message : String(error);
+                  const syncError = SyncError.make({
+                    stage: "source",
+                    message: `List member ${member} failed: ${message}`,
+                    cause: error
+                  });
+                  const failure = SyncResult.make({
+                    postsAdded: 0,
+                    postsDeleted: 0,
+                    postsSkipped: 0,
+                    errors: [syncError]
+                  });
+                  return logWarn("List member sync failed", {
+                    store: storeRef.name,
+                    list: source.uri,
+                    member,
+                    error: message
+                  }).pipe(Effect.orElseSucceed(() => undefined), Effect.as(failure));
+                })
               );
+
+            const combinedMembers =
+              limitValue === undefined
+                ? yield* Stream.fromIterable(members).pipe(
+                    Stream.mapEffect(
+                      (member) => runMemberSync(member),
+                      {
+                        concurrency: Math.min(settings.concurrency, members.length || 1)
+                      }
+                    ),
+                    Stream.runFold(SyncResultMonoid.empty, combineResults)
+                  )
+                : yield* Effect.gen(function* () {
+                    let remaining = limitValue;
+                    let acc = SyncResultMonoid.empty;
+                    for (const member of members) {
+                      if (remaining <= 0) {
+                        break;
+                      }
+                      const result = yield* runMemberSync(member, remaining);
+                      acc = combineResults(acc, result);
+                      remaining = limitValue - acc.postsAdded;
+                    }
+                    return acc;
+                  });
 
             if (combinedMembers.errors.length === 0) {
               yield* storeSources.markSynced(storeRef, id, new Date());

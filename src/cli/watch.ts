@@ -1,5 +1,5 @@
 import { Command, Options } from "@effect/cli";
-import { Chunk, Effect, Layer, Option, Schedule, Stream } from "effect";
+import { Chunk, Effect, Layer, Option, Ref, Schedule, Stream } from "effect";
 import { Jetstream } from "effect-jetstream";
 import { filterExprSignature } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
@@ -16,6 +16,7 @@ import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
+import { CliInputError } from "./errors.js";
 import { makeWatchCommandBody, resolveCacheLimit, resolveCacheMode } from "./sync-factory.js";
 import { parseInterval, parseOptionalDuration } from "./interval.js";
 import { cacheStoreImages } from "./image-cache.js";
@@ -40,7 +41,7 @@ import {
   strictOption,
   maxErrorsOption
 } from "./shared-options.js";
-import { storeSourceId } from "../domain/store-sources.js";
+import { storeSourceId, type StoreSource } from "../domain/store-sources.js";
 import { StoreSources } from "../services/store-sources.js";
 import {
   resolveStoreSources,
@@ -529,13 +530,46 @@ const watchStoreCommand = Command.make(
       const settings = yield* SyncSettings;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const storeConfig = yield* storeOptions.loadStoreConfig(store);
+      const warnedJetstreamRef = yield* Ref.make(false);
+      const filterJetstreamSources = (sources: ReadonlyArray<StoreSource>) =>
+        Effect.gen(function* () {
+          const jetstreamSources = sources.filter(
+            (source) => source._tag === "JetstreamSource"
+          );
+          if (jetstreamSources.length === 0) {
+            return sources;
+          }
+          const warned = yield* Ref.get(warnedJetstreamRef);
+          if (!warned) {
+            yield* logWarn(
+              "Jetstream sources are not yet supported in store watch; skipping them.",
+              {
+                store: storeRef.name,
+                sources: jetstreamSources.map((source) => storeSourceId(source))
+              }
+            );
+            yield* Ref.set(warnedJetstreamRef, true);
+          }
+          const filtered = sources.filter(
+            (source) => source._tag !== "JetstreamSource"
+          );
+          if (filtered.length === 0) {
+            return yield* CliInputError.make({
+              message:
+                "Jetstream sources are not yet supported in store watch. Use watch jetstream for streaming.",
+              cause: { store: storeRef.name }
+            });
+          }
+          return filtered;
+        });
       const loadSources = () =>
         storeSources
           .list(storeRef)
           .pipe(
             Effect.flatMap((list) =>
               resolveStoreSources(list, { authorsOnly, feedsOnly, listsOnly })
-            )
+            ),
+            Effect.flatMap(filterJetstreamSources)
           );
       const initialSources = yield* loadSources();
       const basePolicy = storeConfig.syncPolicy ?? "dedupe";

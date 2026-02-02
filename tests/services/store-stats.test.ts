@@ -99,6 +99,37 @@ const samplePostLater = Schema.decodeUnknownSync(Post)({
   links: []
 });
 
+const engagementLow = Schema.decodeUnknownSync(Post)({
+  uri: "at://did:plc:example/app.bsky.feed.post/10",
+  author: "alice.bsky",
+  text: "Low engagement",
+  createdAt: "2026-01-02T00:00:00.000Z",
+  hashtags: [],
+  mentions: [],
+  links: [],
+  metrics: { likeCount: 2 }
+});
+const engagementMid = Schema.decodeUnknownSync(Post)({
+  uri: "at://did:plc:example/app.bsky.feed.post/11",
+  author: "bob.bsky",
+  text: "Mid engagement",
+  createdAt: "2026-01-03T00:00:00.000Z",
+  hashtags: [],
+  mentions: [],
+  links: [],
+  metrics: { replyCount: 1 }
+});
+const engagementHigh = Schema.decodeUnknownSync(Post)({
+  uri: "at://did:plc:example/app.bsky.feed.post/12",
+  author: "claire.bsky",
+  text: "High engagement",
+  createdAt: "2026-01-04T00:00:00.000Z",
+  hashtags: [],
+  mentions: [],
+  links: [],
+  metrics: { repostCount: 3 }
+});
+
 describe("StoreStats", () => {
   test("computes basic stats for a store", async () => {
     const tempDir = await Effect.runPromise(
@@ -180,6 +211,61 @@ describe("StoreStats", () => {
 
       expect(result.total).toBeGreaterThanOrEqual(1);
       expect(result.stores.some((store) => store.name === "summary")).toBe(true);
+    } finally {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.remove(tempDir, { recursive: true });
+        }).pipe(Effect.provide(BunContext.layer))
+      );
+    }
+  });
+
+  test("lists authors with engagement stats", async () => {
+    const tempDir = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return yield* fs.makeTempDirectory();
+      }).pipe(Effect.provide(BunContext.layer))
+    );
+
+    const program = Effect.gen(function* () {
+      const manager = yield* StoreManager;
+      const writer = yield* StoreWriter;
+      const index = yield* StoreIndex;
+      const stats = yield* StoreStats;
+
+      const name = Schema.decodeUnknownSync(StoreName)("authors");
+      const store = yield* manager.createStore(name, defaultStoreConfig);
+
+      const record1 = yield* writer.append(
+        store,
+        PostUpsert.make({ post: engagementLow, meta: sampleMeta })
+      );
+      const record2 = yield* writer.append(
+        store,
+        PostUpsert.make({ post: engagementMid, meta: sampleMeta })
+      );
+      const record3 = yield* writer.append(
+        store,
+        PostUpsert.make({ post: engagementHigh, meta: sampleMeta })
+      );
+      yield* index.apply(store, record1.record);
+      yield* index.apply(store, record2.record);
+      yield* index.apply(store, record3.record);
+
+      return yield* stats.authors(store, { sort: "engagement" });
+    });
+
+    const layer = testLayers(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      const authors = result.map((entry) => entry.author);
+      expect(authors).toEqual([
+        engagementHigh.author,
+        engagementMid.author,
+        engagementLow.author
+      ]);
     } finally {
       await Effect.runPromise(
         Effect.gen(function* () {

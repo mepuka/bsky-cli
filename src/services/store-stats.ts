@@ -117,6 +117,15 @@ type StoreSummaryResult = {
   readonly stores: ReadonlyArray<StoreSummaryEntry>;
 };
 
+type StoreAuthorStats = {
+  readonly author: string;
+  readonly posts: number;
+  readonly engagement: number;
+  readonly lastActive?: string;
+};
+
+type StoreAuthorSort = "posts" | "engagement" | "lastActive";
+
 /** Number of top items (hashtags/authors) to include in stats */
 const TOP_LIMIT = 5;
 
@@ -340,6 +349,20 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
      * ```
      */
     readonly summary: () => Effect.Effect<StoreSummaryResult, StoreIndexError | StoreIoError>;
+
+    /**
+     * List authors for a store with basic engagement statistics.
+     *
+     * @param store - Reference to the store to analyze
+     * @param options - Optional sort/limit controls
+     * @returns An Effect that resolves to author stats
+     * @throws {StoreIndexError} If accessing store index fails
+     * @throws {StoreIoError} If database operations fail
+     */
+    readonly authors: (
+      store: StoreRef,
+      options?: { readonly sort?: StoreAuthorSort; readonly limit?: number }
+    ) => Effect.Effect<ReadonlyArray<StoreAuthorStats>, StoreIndexError | StoreIoError>;
   }
 >() {
   /**
@@ -515,7 +538,54 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
         })
       );
 
-      return StoreStats.of({ stats: computeStats, summary });
+      const authors = Effect.fn("StoreStats.authors")(
+        (store: StoreRef, options?: { readonly sort?: StoreAuthorSort; readonly limit?: number }) =>
+          Effect.gen(function* () {
+            const sort = options?.sort ?? "posts";
+            const limit = options?.limit;
+
+            yield* index.count(store);
+
+            const rows = yield* storeDb
+              .withClient(store, (client) =>
+                Effect.gen(function* () {
+                  const orderBy =
+                    sort === "engagement"
+                      ? client`engagement DESC`
+                      : sort === "lastActive"
+                        ? client`last_active DESC`
+                        : client`posts DESC`;
+                  const limitClause =
+                    limit !== undefined ? client`LIMIT ${limit}` : client``;
+                  return yield* client`SELECT
+                      author,
+                      COUNT(*) as posts,
+                      MAX(created_at) as last_active,
+                      SUM(like_count + (repost_count * 2) + (reply_count * 3) + (quote_count * 2)) as engagement
+                    FROM posts
+                    WHERE author IS NOT NULL
+                    GROUP BY author
+                    ORDER BY ${orderBy}, author ASC
+                    ${limitClause}`;
+                })
+              )
+              .pipe(Effect.mapError(toStoreIoError(store.root)));
+
+            return rows
+              .map((row) => {
+                const author = typeof row.author === "string" ? row.author : "";
+                const posts = parseCount(row.posts);
+                const engagement = parseCount(row.engagement);
+                const lastActive =
+                  typeof row.last_active === "string" ? row.last_active : undefined;
+                const base = { author, posts, engagement };
+                return lastActive ? { ...base, lastActive } : base;
+              })
+              .filter((entry) => entry.author.length > 0);
+          })
+      );
+
+      return StoreStats.of({ stats: computeStats, summary, authors });
     })
   );
 }

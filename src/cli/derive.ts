@@ -1,10 +1,11 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Clock, Effect, Option } from "effect";
-import { filterExprSignature, isEffectfulFilter } from "../domain/filter.js";
+import { FilterExprSemigroup, filterExprSignature, isEffectfulFilter, not } from "../domain/filter.js";
 import { defaultStoreConfig } from "../domain/defaults.js";
-import { StoreName } from "../domain/primitives.js";
+import { Handle, StoreName } from "../domain/primitives.js";
 import { DerivationEngine } from "../services/derivation-engine.js";
 import { StoreManager } from "../services/store-manager.js";
+import { IdentityResolver } from "../services/identity-resolver.js";
 import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
 import { OutputManager } from "../services/output-manager.js";
 import { filterJsonDescription } from "./filter-help.js";
@@ -48,6 +49,22 @@ const yesFlag = Options.boolean("yes").pipe(
   Options.withDescription("Confirm destructive operations")
 );
 
+const includeAuthorOption = Options.text("include-author").pipe(
+  Options.withDescription("Comma-separated handles or DIDs to include"),
+  Options.optional
+);
+
+const excludeAuthorOption = Options.text("exclude-author").pipe(
+  Options.withDescription("Comma-separated handles or DIDs to exclude"),
+  Options.optional
+);
+
+const parseCsv = (value: string) =>
+  value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
 const mapMode = (mode: "event-time" | "derive-time"): FilterEvaluationMode => {
   return mode === "event-time" ? "EventTime" : "DeriveTime";
 };
@@ -59,11 +76,13 @@ export const deriveCommand = Command.make(
     target: targetArg,
     filter: filterOption,
     filterJson: filterJsonOption,
+    includeAuthor: includeAuthorOption,
+    excludeAuthor: excludeAuthorOption,
     mode: modeOption,
     reset: resetFlag,
     yes: yesFlag
   },
-  ({ source, target, filter, filterJson, mode, reset, yes }) =>
+  ({ source, target, filter, filterJson, includeAuthor, excludeAuthor, mode, reset, yes }) =>
     Effect.gen(function* () {
       const startTime = yield* Clock.currentTimeMillis;
       const engine = yield* DerivationEngine;
@@ -71,9 +90,52 @@ export const deriveCommand = Command.make(
       const manager = yield* StoreManager;
       const outputManager = yield* OutputManager;
       const preferences = yield* CliPreferences;
+      const identities = yield* IdentityResolver;
 
       // Parse filter expression
-      const filterExpr = yield* parseFilterExpr(filter, filterJson);
+      const baseFilterExpr = yield* parseFilterExpr(filter, filterJson);
+
+      const resolveAuthors = (value: Option.Option<string>) =>
+        Option.match(value, {
+          onNone: () => Effect.succeed([] as ReadonlyArray<Handle>),
+          onSome: (raw) =>
+            Effect.forEach(
+              parseCsv(raw),
+              (actor) =>
+                identities.resolveIdentity(actor).pipe(
+                  Effect.map((info) => info.handle),
+                  Effect.mapError((error) =>
+                    CliInputError.make({
+                      message: `Failed to resolve author: ${error.message}`,
+                      cause: error
+                    })
+                  )
+                ),
+              { concurrency: "unbounded" }
+            ).pipe(
+              Effect.map((handles) => Array.from(new Set(handles)))
+            )
+        });
+
+      const includeAuthors = yield* resolveAuthors(includeAuthor);
+      const excludeAuthors = yield* resolveAuthors(excludeAuthor);
+
+      let filterExpr = baseFilterExpr;
+      if (includeAuthors.length > 0) {
+        filterExpr = FilterExprSemigroup.combine(filterExpr, {
+          _tag: "AuthorIn",
+          handles: includeAuthors
+        });
+      }
+      if (excludeAuthors.length > 0) {
+        filterExpr = FilterExprSemigroup.combine(
+          filterExpr,
+          not({
+            _tag: "AuthorIn",
+            handles: excludeAuthors
+          })
+        );
+      }
 
       // Validation 1: EventTime mode guard for effectful filters
       // Defense-in-depth: CLI validates for UX (user-friendly errors),
@@ -197,7 +259,9 @@ export const deriveCommand = Command.make(
       "Derive a target store from a source store by applying a filter",
       [
         "skygent derive source-store derived-store --filter 'hashtag:#ai'",
-        "skygent derive source-store derived-store --filter 'hashtag:#ai' --mode derive-time"
+        "skygent derive source-store derived-store --filter 'hashtag:#ai' --mode derive-time",
+        "skygent derive source-store derived-store --include-author alice.bsky.social,bob.bsky.social",
+        "skygent derive source-store derived-store --exclude-author bot.bsky.social"
       ],
       ["Tip: use --reset --yes if you need to rebuild with a new filter or mode."]
     )
