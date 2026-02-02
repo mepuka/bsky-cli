@@ -106,6 +106,7 @@ const storeIndexLayer = Layer.succeed(
     query: () => Stream.empty,
     searchPosts: () => Effect.die("unused"),
     entries: () => Stream.empty,
+    threadGroups: () => Effect.die("unused"),
     count: () => Effect.die("unused"),
     rebuild: () => Effect.die("unused")
   })
