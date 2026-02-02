@@ -544,10 +544,22 @@ export class IdentityResolver extends Context.Tag("@skygent/IdentityResolver")<
       const resolveIdentity = Effect.fn("IdentityResolver.resolveIdentity")(
         (identifier: string) =>
           Effect.gen(function* () {
-            const normalized = identifier.startsWith("did:")
-              ? yield* decodeDid(identifier)
-              : yield* decodeHandle(identifier);
-            return yield* resolveViaResolveIdentity(normalized);
+            if (strict) {
+              const normalized = identifier.startsWith("did:")
+                ? yield* decodeDid(identifier)
+                : yield* decodeHandle(identifier);
+              return yield* resolveViaResolveIdentity(normalized);
+            }
+
+            if (identifier.startsWith("did:")) {
+              const did = yield* decodeDid(identifier);
+              const handle = yield* resolveHandle(did);
+              return IdentityInfo.make({ did, handle, didDoc: {} });
+            }
+
+            const handle = yield* decodeHandle(identifier);
+            const did = yield* resolveDid(handle);
+            return IdentityInfo.make({ did, handle, didDoc: {} });
           })
       );
 

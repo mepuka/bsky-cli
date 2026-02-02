@@ -1,7 +1,10 @@
 import type { EmbedImage, EmbedRecordTarget, PostEmbed } from "./bsky.js";
+import { Schema } from "effect";
 import {
+  EmbedImages,
   isEmbedExternal,
   isEmbedImages,
+  isEmbedUnknown,
   isEmbedRecord,
   isEmbedRecordView,
   isEmbedRecordWithMedia,
@@ -24,6 +27,16 @@ const toImageRef = (image: EmbedImage) =>
 
 const hasAltText = (image: ImageRef) =>
   typeof image.alt === "string" && image.alt.trim().length > 0;
+
+const extractImagesFromUnknown = (value: unknown) => {
+  if (value == null) return [];
+  try {
+    const decoded = Schema.decodeUnknownSync(EmbedImages)(value);
+    return decoded.images.map(toImageRef);
+  } catch {
+    return [];
+  }
+};
 
 const summarizeImages = (images: ReadonlyArray<ImageRef>) => {
   const thumbnailUrl = images.find((image) => image.thumbUrl.length > 0)?.thumbUrl;
@@ -85,6 +98,15 @@ export const extractImageRefs = (embed?: PostEmbed): ReadonlyArray<ImageRef> => 
   if (isEmbedRecordWithMedia(embed)) {
     const media = embedMedia(embed);
     return media && isEmbedImages(media) ? media.images.map(toImageRef) : [];
+  }
+  if (isEmbedUnknown(embed)) {
+    if (embed.rawType === "app.bsky.embed.images") {
+      return extractImagesFromUnknown(embed.data);
+    }
+    if (embed.rawType === "app.bsky.embed.recordWithMedia") {
+      const media = (embed.data as { media?: unknown })?.media;
+      return extractImagesFromUnknown(media);
+    }
   }
   return [];
 };

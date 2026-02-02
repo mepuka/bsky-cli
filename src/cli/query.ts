@@ -481,7 +481,7 @@ export const queryCommand = Command.make(
       const resolvedScanLimit =
         hasFilter
           ? userScanLimit ?? defaultScanLimit
-          : userScanLimit ?? userLimit;
+          : userScanLimit ?? (extractImages ? undefined : userLimit);
       if (defaultScanLimit !== undefined) {
         yield* output
           .writeStderr(
@@ -642,9 +642,10 @@ export const queryCommand = Command.make(
         storePostOrder
       );
 
+      const postStreamBase = merged;
       const postStream = Option.match(limit, {
-        onNone: () => merged,
-        onSome: (value) => merged.pipe(Stream.take(value))
+        onNone: () => postStreamBase,
+        onSome: (value) => postStreamBase.pipe(Stream.take(value))
       });
 
       const warnIfScanLimitReached = () =>
@@ -706,14 +707,21 @@ export const queryCommand = Command.make(
           );
         });
 
+      const imageSourceStream = extractImages ? postStreamBase : postStream;
+
       const imageStreamBase = resolveImagesEffective
-        ? postStream.pipe(
+        ? imageSourceStream.pipe(
             Stream.mapEffect(toImageOutputsResolved),
             Stream.mapConcat((rows) => rows)
           )
-        : postStream.pipe(Stream.mapConcat(toImageOutputs));
+        : imageSourceStream.pipe(Stream.mapConcat(toImageOutputs));
 
-      const imageStream = extractImages ? imageStreamBase : Stream.empty;
+      const imageStream = extractImages
+        ? Option.match(limit, {
+            onNone: () => imageStreamBase,
+            onSome: (value) => imageStreamBase.pipe(Stream.take(value))
+          })
+        : Stream.empty;
 
       const toOutput = (entry: StorePost) => {
         const projected = project(entry.post);

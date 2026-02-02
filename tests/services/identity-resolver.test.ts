@@ -129,4 +129,41 @@ describe("IdentityResolver", () => {
     expect(resolveIdentityCalls).toBe(1);
     expect(resolveHandleCalls).toBe(0);
   });
+
+  test("resolveIdentity falls back to resolveHandle when not strict", async () => {
+    let resolveHandleCalls = 0;
+    let resolveIdentityCalls = 0;
+    const bskyLayer = Layer.succeed(
+      BskyClient,
+      makeBskyClient({
+        resolveHandle: (handle) => {
+          resolveHandleCalls += 1;
+          return Effect.succeed(`did:plc:${handle}`);
+        },
+        resolveIdentity: () => {
+          resolveIdentityCalls += 1;
+          return Effect.fail(BskyError.make({ message: "unused" }));
+        },
+        getProfiles: () => Effect.succeed([])
+      })
+    );
+
+    const layer = IdentityResolver.layer.pipe(
+      Layer.provide(bskyLayer),
+      Layer.provide(KeyValueStore.layerMemory),
+      Layer.provide(envProvider([["SKYGENT_IDENTITY_REQUEST_CACHE_CAPACITY", "0"]]))
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const resolver = yield* IdentityResolver;
+        return yield* resolver.resolveIdentity("alice.bsky");
+      }).pipe(Effect.provide(layer))
+    );
+
+    expect(result.did).toBe("did:plc:alice.bsky");
+    expect(result.handle).toBe("alice.bsky");
+    expect(resolveIdentityCalls).toBe(0);
+    expect(resolveHandleCalls).toBe(1);
+  });
 });

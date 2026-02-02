@@ -46,7 +46,7 @@ const makePostWithImages = () =>
     uri: "at://did:plc:example/app.bsky.feed.post/1",
     author: "alice.bsky",
     text: "Photo post",
-    createdAt: "2026-01-01T00:00:00.000Z",
+    createdAt: "2026-01-01T00:01:00.000Z",
     hashtags: [],
     mentions: [],
     links: [],
@@ -59,6 +59,17 @@ const makePostWithImages = () =>
         })
       ]
     })
+  });
+
+const makePostWithoutImages = () =>
+  Schema.decodeUnknownSync(Post)({
+    uri: "at://did:plc:example/app.bsky.feed.post/2",
+    author: "alice.bsky",
+    text: "Text-only post",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    hashtags: [],
+    mentions: [],
+    links: []
   });
 
 const makeRecord = (post: Post, id: string) =>
@@ -510,6 +521,53 @@ describe("query image cache integration", () => {
       const output = stdout.join("");
       expect(output).toContain("Image URL");
       expect(output).toContain("https://example.com/full.png");
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("extract-images limit applies to images, not posts", async () => {
+    const fetcherLayer = makeFetcherLayer(() => undefined);
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(tempDir, [], fetcherLayer);
+    const run = Command.run(queryCommand, { name: "skygent", version: "0.0.0" });
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+
+          const store = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("images"),
+            sampleConfig
+          );
+          const postWithout = makePostWithoutImages();
+          const postWith = makePostWithImages();
+          yield* index.apply(store, makeRecord(postWithout, "01ARZ3NDEKTSV4RRFFQ69G5FB0"));
+          yield* index.apply(store, makeRecord(postWith, "01ARZ3NDEKTSV4RRFFQ69G5FB1"));
+
+          yield* run([
+            "node",
+            "skygent",
+            "images",
+            "--extract-images",
+            "--limit",
+            "1",
+            "--format",
+            "ndjson"
+          ]);
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
+      const payload = parseNdjson(stdout) as Array<{ postUri: string; imageUrl: string; thumbUrl: string }>;
+      expect(payload).toHaveLength(1);
+      expect(payload[0]).toMatchObject({
+        postUri: "at://did:plc:example/app.bsky.feed.post/1",
+        imageUrl: "https://example.com/full.png",
+        thumbUrl: "https://example.com/thumb.png"
+      });
     } finally {
       await removeTempDir(tempDir);
     }
