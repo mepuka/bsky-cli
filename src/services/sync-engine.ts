@@ -113,11 +113,13 @@ type SourceLabel =
 
 const toSyncError =
   (stage: SyncStage, fallback: string) => (cause: unknown) =>
-    SyncError.make({
-      stage,
-      message: messageFromCause(fallback, cause),
-      cause
-    });
+    cause instanceof SyncError
+      ? cause
+      : SyncError.make({
+          stage,
+          message: messageFromCause(fallback, cause),
+          cause
+        });
 
 const sourceLabel = (source: DataSource): SourceLabel => {
   return Match.type<DataSource>().pipe(
@@ -155,7 +157,11 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
       source: DataSource,
       target: StoreRef,
       filter: FilterExpr,
-      options?: { readonly policy?: SyncUpsertPolicy; readonly limit?: number }
+      options?: {
+        readonly policy?: SyncUpsertPolicy;
+        readonly limit?: number;
+        readonly concurrency?: number;
+      }
     ) => Stream.Stream<SyncResult, SyncError>;
     readonly sync: (
       source: DataSource,
@@ -181,7 +187,11 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
         source: DataSource,
         target: StoreRef,
         filter: FilterExpr,
-        options?: { readonly policy?: SyncUpsertPolicy; readonly limit?: number }
+        options?: {
+          readonly policy?: SyncUpsertPolicy;
+          readonly limit?: number;
+          readonly concurrency?: number;
+        }
       ): Stream.Stream<SyncResult, SyncError> =>
         Stream.unwrapScoped(
           Effect.gen(function* () {
@@ -378,7 +388,6 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               }
 
               type SyncState = {
-                readonly result: SyncResult;
                 readonly lastEventSeq: Option.Option<EventSeq>;
                 readonly latestCursor: Option.Option<string>;
                 readonly processed: number;
@@ -434,7 +443,6 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               const startTime = yield* Clock.currentTimeMillis;
               const progressIntervalMs = 5000;
               const initialState: SyncState = {
-                result: SyncResultMonoid.empty,
                 lastEventSeq: Option.none<EventSeq>(),
                 latestCursor: Option.none<string>(),
                 processed: 0,
@@ -559,7 +567,6 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       : state.lastEventSeq;
 
                   const nextState: SyncState = {
-                    result: SyncResultMonoid.combine(state.result, delta),
                     lastEventSeq: nextLastEventSeq,
                     latestCursor: nextCursor,
                     processed,
@@ -587,10 +594,11 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                   return delta;
                 });
 
+              const parseConcurrency = options?.concurrency ?? settings.concurrency;
               return rawStream.pipe(
                 Stream.mapError(toSyncError("source", "Source stream failed")),
                 Stream.mapEffect(prepareRaw, {
-                  concurrency: settings.concurrency,
+                  concurrency: parseConcurrency,
                   unordered: false
                 }),
                 Stream.grouped(settings.batchSize),

@@ -532,7 +532,8 @@ const syncStoreCommand = Command.make(
         sync
           .stream(dataSource, storeRef, expr, {
             policy,
-            ...(limitValue !== undefined ? { limit: limitValue } : {})
+            ...(limitValue !== undefined ? { limit: limitValue } : {}),
+            concurrency: 1
           })
           .pipe(
             Stream.runFold(SyncResultMonoid.empty, combineResults),
@@ -588,10 +589,19 @@ const syncStoreCommand = Command.make(
                   concurrency: Math.min(settings.concurrency, members.length || 1)
                 }
               ),
-              Stream.runFold(SyncResultMonoid.empty, combineResults)
-            );
+                Stream.runFold(SyncResultMonoid.empty, combineResults)
+              );
 
-            yield* storeSources.markSynced(storeRef, id, new Date());
+            if (combinedMembers.errors.length === 0) {
+              yield* storeSources.markSynced(storeRef, id, new Date());
+            } else {
+              yield* logWarn("List sync completed with errors; lastSyncedAt not updated", {
+                store: storeRef.name,
+                source: id,
+                list: source.uri,
+                errors: combinedMembers.errors.length
+              });
+            }
             return { id, type: source._tag, result: combinedMembers };
           }
 
@@ -605,7 +615,16 @@ const syncStoreCommand = Command.make(
 
           const syncResult = yield* runSync(dataSource, expr);
 
-          yield* storeSources.markSynced(storeRef, id, new Date());
+          if (syncResult.errors.length === 0) {
+            yield* storeSources.markSynced(storeRef, id, new Date());
+          } else {
+            yield* logWarn("Sync completed with errors; lastSyncedAt not updated", {
+              store: storeRef.name,
+              source: id,
+              type: source._tag,
+              errors: syncResult.errors.length
+            });
+          }
           return { id, type: source._tag, result: syncResult };
         }).pipe(
           Effect.catchAll((error) => {

@@ -588,7 +588,7 @@ const watchStoreCommand = Command.make(
           SyncResultMonoid.combine(acc, result);
         const runSync = (dataSource: DataSource, expr: FilterExpr) =>
           sync
-            .stream(dataSource, storeRef, expr, { policy })
+            .stream(dataSource, storeRef, expr, { policy, concurrency: 1 })
             .pipe(
               Stream.runFold(SyncResultMonoid.empty, combineResults),
               Effect.withRequestBatching(true),
@@ -646,7 +646,16 @@ const watchStoreCommand = Command.make(
                 Stream.runFold(SyncResultMonoid.empty, combineResults)
               );
 
-              yield* storeSources.markSynced(storeRef, id, new Date());
+              if (combinedMembers.errors.length === 0) {
+                yield* storeSources.markSynced(storeRef, id, new Date());
+              } else {
+                yield* logWarn("List sync completed with errors; lastSyncedAt not updated", {
+                  store: storeRef.name,
+                  source: id,
+                  list: source.uri,
+                  errors: combinedMembers.errors.length
+                });
+              }
               return { id, type: source._tag, result: combinedMembers };
             }
 
@@ -660,7 +669,16 @@ const watchStoreCommand = Command.make(
 
             const syncResult = yield* runSync(dataSource, expr);
 
-            yield* storeSources.markSynced(storeRef, id, new Date());
+            if (syncResult.errors.length === 0) {
+              yield* storeSources.markSynced(storeRef, id, new Date());
+            } else {
+              yield* logWarn("Sync completed with errors; lastSyncedAt not updated", {
+                store: storeRef.name,
+                source: id,
+                type: source._tag,
+                errors: syncResult.errors.length
+              });
+            }
             return { id, type: source._tag, result: syncResult };
           }).pipe(
             Effect.catchAll((error) => {
