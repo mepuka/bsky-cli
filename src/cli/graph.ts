@@ -32,6 +32,7 @@ import { storeOptions } from "./store.js";
 import { StoreQuery } from "../domain/events.js";
 import { PositiveInt, boundedInt } from "./option-schemas.js";
 import { degreeCentrality, graphFromSnapshot, pageRankCentrality } from "../graph/centrality.js";
+import { communitiesFromSnapshot } from "../graph/communities.js";
 
 const listUriArg = Args.text({ name: "uri" }).pipe(
   Args.withSchema(AtUri),
@@ -114,9 +115,21 @@ const iterationsOption = Options.integer("iterations").pipe(
   Options.optional
 );
 
+const communityIterationsOption = Options.integer("iterations").pipe(
+  Options.withSchema(boundedInt(1, 200)),
+  Options.withDescription("Community detection iterations (default: 10)"),
+  Options.optional
+);
+
 const topOption = Options.integer("top").pipe(
   Options.withSchema(PositiveInt),
   Options.withDescription("Limit number of ranked nodes in output"),
+  Options.optional
+);
+
+const minSizeOption = Options.integer("min-size").pipe(
+  Options.withSchema(PositiveInt),
+  Options.withDescription("Minimum community size to include"),
   Options.optional
 );
 
@@ -207,6 +220,19 @@ const renderCentralityTable = (entries: ReadonlyArray<{
     entry.score.toString()
   ]);
   return renderTableLegacy(["RANK", "DID", "HANDLE", "SCORE"], rows);
+};
+
+const renderCommunitiesTable = (entries: ReadonlyArray<{
+  readonly community: number;
+  readonly size: number;
+  readonly members: string;
+}>) => {
+  const rows = entries.map((entry) => [
+    String(entry.community),
+    String(entry.size),
+    entry.members
+  ]);
+  return renderTableLegacy(["COMMUNITY", "SIZE", "MEMBERS"], rows);
 };
 
 const renderListItemsTable = (items: ReadonlyArray<ListItemView>, cursor: string | undefined) => {
@@ -678,6 +704,93 @@ const centralityCommand = Command.make(
   )
 );
 
+const communitiesCommand = Command.make(
+  "communities",
+  {
+    store: storeOption,
+    range: rangeOption,
+    since: sinceOption,
+    until: untilOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    limit: limitOption,
+    scanLimit: scanLimitOption,
+    iterations: communityIterationsOption,
+    weighted: weightedOption,
+    minSize: minSizeOption,
+    top: topOption,
+    format: formatOption
+  },
+  ({ store, range, since, until, filter, filterJson, limit, scanLimit, iterations, weighted, minSize, top, format }) =>
+    Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const builder = yield* GraphBuilder;
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const parsedRange = yield* parseRangeOptions(range, since, until);
+      const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
+      const query = StoreQuery.make({
+        range: Option.getOrUndefined(parsedRange),
+        filter: Option.getOrUndefined(parsedFilter),
+        scanLimit: Option.getOrUndefined(scanLimit)
+      });
+      const limitValue = Option.getOrUndefined(limit);
+      const snapshot = yield* builder.buildInteractionNetwork(
+        storeRef,
+        limitValue === undefined ? { query } : { query, limit: limitValue }
+      );
+      const communityIterations = Option.getOrElse(iterations, () => 10);
+      const minSizeValue = Option.getOrElse(minSize, () => 1);
+      const communities = communitiesFromSnapshot(snapshot, {
+        iterations: communityIterations,
+        weighted,
+        minSize: minSizeValue
+      });
+      const topValue = Option.getOrUndefined(top);
+      const trimmed = topValue ? communities.slice(0, topValue) : communities;
+      const payload = trimmed.map((community, index) => ({
+        id: community.id,
+        size: community.members.length,
+        members: community.members.map((member) => ({
+          did: String(member.id),
+          ...(member.label ? { handle: member.label } : {})
+        }))
+      }));
+      const tableRows = trimmed.map((community, index) => {
+        const handles = community.members
+          .slice(0, 5)
+          .map((member) => member.label ?? String(member.id));
+        return {
+          community: index + 1,
+          size: community.members.length,
+          members: handles.join(", ")
+        };
+      });
+
+      yield* emitWithFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json",
+        {
+          json: writeJson({ communities: payload }),
+          ndjson:
+            payload.length === 0
+              ? writeText("[]")
+              : writeJsonStream(Stream.fromIterable(payload)),
+          table: writeText(renderCommunitiesTable(tableRows))
+        }
+      );
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Detect interaction communities in a store", [
+      "skygent graph communities --store my-store --min-size 3",
+      "skygent graph communities --store my-store --iterations 25 --weighted --format table"
+    ])
+  )
+);
+
 const listCommand = Command.make(
   "list",
   { uri: listUriArg, limit: limitOption, cursor: cursorOption, format: formatOption },
@@ -823,6 +936,7 @@ export const graphCommand = Command.make("graph", {}).pipe(
     relationshipsCommand,
     interactionsCommand,
     centralityCommand,
+    communitiesCommand,
     listsCommand,
     listCommand,
     blocksCommand,

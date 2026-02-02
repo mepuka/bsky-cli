@@ -1,5 +1,6 @@
 import { Graph, Option, Order } from "effect";
-import type { GraphEdge, GraphNode, GraphSnapshot } from "../domain/graph.js";
+import type { GraphEdge, GraphNode } from "../domain/graph.js";
+import { graphFromSnapshot } from "./snapshot.js";
 
 export type DegreeDirection = "in" | "out" | "both";
 
@@ -19,32 +20,7 @@ export type DegreeOptions = {
   readonly weighted?: boolean;
 };
 
-export const graphFromSnapshot = (
-  snapshot: GraphSnapshot
-): {
-  readonly graph: Graph.Graph<GraphNode, GraphEdge, Graph.Kind>;
-  readonly nodeIndexById: Map<string, Graph.NodeIndex>;
-} => {
-  const base = snapshot.directed
-    ? Graph.directed<GraphNode, GraphEdge>()
-    : Graph.undirected<GraphNode, GraphEdge>();
-  const nodeIndexById = new Map<string, Graph.NodeIndex>();
-  const graph = Graph.mutate(base, (mutable) => {
-    for (const node of snapshot.nodes) {
-      const index = Graph.addNode(mutable, node);
-      nodeIndexById.set(String(node.id), index);
-    }
-    for (const edge of snapshot.edges) {
-      const source = nodeIndexById.get(String(edge.from));
-      const target = nodeIndexById.get(String(edge.to));
-      if (source === undefined || target === undefined) {
-        continue;
-      }
-      Graph.addEdge(mutable, source, target, edge);
-    }
-  });
-  return { graph, nodeIndexById };
-};
+export { graphFromSnapshot };
 
 const scoreOrder = Order.make<CentralityEntry>((left, right) => {
   if (left.score < right.score) return 1;
