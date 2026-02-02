@@ -2,7 +2,7 @@
 
 Goal: deliver a shared, Effect‑native graph analytics layer that supports store analytics (#142), conversation grouping (#143), interaction networks (#144), centrality (#145), community detection (#146), and cross‑store topology (#147) without duplicating logic or violating module boundaries.
 
-Status: draft (architecture + phased plan).
+Status: implemented (phases 0-6 complete as of 2026-02-02).
 
 Decision: **Graph snapshots are keyed by DID** (normalize all handles to DID at boundaries).
 
@@ -165,46 +165,53 @@ Implementation: use `StoreIndex.threadGroups` (new) and `renderThread`.
 
 ## Effect‑native Implementation Plan (phases)
 
-**Phase 0 — Shared graph contract + fixes (1–2 days)**
+**Phase 0 — Shared graph contract + fixes (1–2 days) [done]**
 - Add `src/domain/graph.ts` types.
 - Add `GraphBuilder` service skeleton (no heavy algorithms yet).
 - Fix identity normalization in `src/graph/relationships.ts` (resolve handle → DID before build).
 - Update tests in `tests/graph/relationships.test.ts` for handle/DID normalization and mutual edges.
 
-**Phase 1 — Store analytics (#142)**
+**Phase 1 — Store analytics (#142) [done]**
 - Implement `StoreAnalytics` service (SQL `GROUP BY`).
 - Add CLI `store analytics` command.
 - Tests: `tests/services/store-analytics.test.ts` + CLI snapshots.
 
-**Phase 2 — Conversation grouping (#143)**
+**Phase 2 — Conversation grouping (#143) [done]**
 - Add reply columns + migration + `store-index-sql` write logic.
 - Implement `StoreIndex.threadGroups` (SQL query or CTE).
 - Update `query --format thread` to render per‑root groups with counts.
 - Tests: thread grouping with matches/ancestors.
 
-**Phase 3 — Interaction network (#144)**
+**Phase 3 — Interaction network (#144) [done]**
 - Implement `GraphBuilder.buildInteractionNetwork` using store posts (reply/mention/quote/repost).
 - Add CLI `graph interactions` (or `store graph`) to output `GraphSnapshot`.
 - Tests: known small graph (3–5 posts) with deterministic edges.
 
-**Phase 4 — Centrality (#145)**
+**Phase 4 — Centrality (#145) [done]**
 - Implement `graph-centrality.ts` (degree, weighted degree, PageRank‑lite).
 - CLI `graph centrality` for a store or snapshot (json output).
 
-**Phase 5 — Community detection (#146)**
+**Phase 5 — Community detection (#146) [done]**
 - Implement `graph-communities.ts` using undirected projection + label propagation.
 - CLI `graph communities` with `--min-size` + `--max` options.
 
-**Phase 6 — Cross‑store topology (#147)**
+**Phase 6 — Cross‑store topology (#147) [done]**
 - Build store‑level graph from `LineageStore` + `StoreSources`.
 - CLI `graph stores` (topology + summary metrics).
 
-## Open Questions
+## Open Questions (optional follow-ups)
 
 1) Should we cache graph snapshots (`GraphCache` service using KeyValueStore)?
 2) Should interaction edges include time windows by default?
 3) Which centrality algorithms are in scope (degree + PageRank only vs betweenness)?
 4) Do we want to expose graph output as `mermaid` (reuse `relationshipMermaid`)?
+
+## Implementation Notes (completed)
+
+- Services added: `src/services/graph-builder.ts`, `src/services/store-topology.ts`.
+- CLI commands added: `graph interactions`, `graph centrality`, `graph communities`, `graph stores`.
+- Thread grouping now uses reply root columns + `StoreIndex.threadGroups` / `StoreIndex.threadPosts`.
+- Centrality + communities are lightweight (no heavy graph library dependency).
 
 ## References (primary code)
 
