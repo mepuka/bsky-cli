@@ -104,8 +104,10 @@ const storeIndexLayer = Layer.succeed(
     loadCheckpoint: () => Effect.die("unused"),
     saveCheckpoint: () => Effect.die("unused"),
     query: () => Stream.empty,
+    threadPosts: () => Effect.die("unused"),
     searchPosts: () => Effect.die("unused"),
     entries: () => Stream.empty,
+    threadGroups: () => Effect.die("unused"),
     count: () => Effect.die("unused"),
     rebuild: () => Effect.die("unused")
   })

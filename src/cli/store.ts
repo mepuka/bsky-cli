@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Clock, Effect, Option, Schema } from "effect";
+import { Chunk, Clock, Duration, Effect, Option, Schema } from "effect";
 import { StoreManager } from "../services/store-manager.js";
 import { AppConfigService } from "../services/app-config.js";
 import { Terminal } from "@effect/platform";
@@ -27,6 +27,7 @@ import { formatStoreConfigHelp, formatStoreConfigParseError } from "./store-erro
 import { formatFilterExpr } from "../domain/filter-describe.js";
 import { CliPreferences } from "./preferences.js";
 import { StoreStats } from "../services/store-stats.js";
+import { StoreAnalytics } from "../services/store-analytics.js";
 import { withExamples } from "./help.js";
 import { resolveOutputFormat, treeTableJsonFormats } from "./output-format.js";
 import { StoreRenamer } from "../services/store-renamer.js";
@@ -44,6 +45,7 @@ import {
 } from "./shared-options.js";
 import { actorArg } from "./shared-options.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
+import { parseRangeOptions } from "./range-options.js";
 import {
   cacheStatusForStore,
   cacheStoreImages,
@@ -100,6 +102,26 @@ const treeAnsiOption = Options.boolean("ansi").pipe(
 const treeWidthOption = Options.integer("width").pipe(
   Options.withSchema(PositiveInt),
   Options.withDescription("Line width for tree rendering (enables wrapping)"),
+  Options.optional
+);
+const analyticsUnitOption = Options.choice("unit", ["day", "hour"]).pipe(
+  Options.withDescription("Bucket unit (day|hour)"),
+  Options.optional
+);
+const analyticsMetricsOption = Options.text("metrics").pipe(
+  Options.withDescription("Comma-separated metrics (posts,authors,likes,reposts,replies,quotes,engagement)"),
+  Options.optional
+);
+const analyticsRangeOption = Options.text("range").pipe(
+  Options.withDescription("ISO range as <start>..<end>"),
+  Options.optional
+);
+const analyticsSinceOption = Options.text("since").pipe(
+  Options.withDescription("Start time (ISO) or duration (e.g. 24h)"),
+  Options.optional
+);
+const analyticsUntilOption = Options.text("until").pipe(
+  Options.withDescription("End time (ISO) or duration (e.g. 30m)"),
   Options.optional
 );
 const cacheLimitOption = Options.integer("limit").pipe(
@@ -342,6 +364,49 @@ const validateDslFilters = (
   filter: Option.Option<string>,
   filterJson: Option.Option<string>
 ) => parseOptionalFilterExpr(filter, filterJson).pipe(Effect.asVoid);
+
+const analyticsMetricValues = [
+  "posts",
+  "authors",
+  "likes",
+  "reposts",
+  "replies",
+  "quotes",
+  "engagement"
+] as const;
+type AnalyticsMetricValue = (typeof analyticsMetricValues)[number];
+
+const parseAnalyticsMetrics = (raw: Option.Option<string>) =>
+  Effect.gen(function* () {
+    if (Option.isNone(raw)) {
+      return analyticsMetricValues as ReadonlyArray<AnalyticsMetricValue>;
+    }
+    const parsed = raw.value
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    if (parsed.length === 0) {
+      return yield* CliInputError.make({
+        message: "--metrics must include at least one metric.",
+        cause: { metrics: raw.value }
+      });
+    }
+    const invalid = parsed.filter(
+      (item) => !(analyticsMetricValues as ReadonlyArray<string>).includes(item)
+    );
+    if (invalid.length > 0) {
+      return yield* CliInputError.make({
+        message: `Unknown metrics: ${invalid.join(", ")}`,
+        cause: { metrics: raw.value, valid: analyticsMetricValues }
+      });
+    }
+    return Array.from(new Set(parsed)) as ReadonlyArray<AnalyticsMetricValue>;
+  });
+
+const bucketUnitForRange = (start: Date, end: Date): "hour" | "day" => {
+  const rangeMs = Math.max(0, end.getTime() - start.getTime());
+  return rangeMs <= Duration.toMillis(Duration.hours(48)) ? "hour" : "day";
+};
 
 export const storeCreate = Command.make(
   "create",
@@ -922,6 +987,43 @@ export const storeStats = Command.make(
   )
 );
 
+export const storeAnalytics = Command.make(
+  "analytics",
+  {
+    name: storeNameArg,
+    unit: analyticsUnitOption,
+    metrics: analyticsMetricsOption,
+    range: analyticsRangeOption,
+    since: analyticsSinceOption,
+    until: analyticsUntilOption
+  },
+  ({ name, unit, metrics, range, since, until }) =>
+    Effect.gen(function* () {
+      const analytics = yield* StoreAnalytics;
+      const storeRef = yield* loadStoreRef(name);
+      const parsedRange = yield* parseRangeOptions(range, since, until);
+      const metricList = yield* parseAnalyticsMetrics(metrics);
+      const unitValue = Option.getOrUndefined(unit) ?? Option.match(parsedRange, {
+        onNone: () => "day",
+        onSome: (value) => bucketUnitForRange(value.start, value.end)
+      });
+
+      const result = yield* analytics.timeBuckets(storeRef, {
+        unit: unitValue,
+        metrics: metricList,
+        ...(Option.isSome(parsedRange) ? { range: parsedRange.value } : {})
+      });
+      yield* writeJson(result);
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Show time-bucketed analytics for a store", [
+      "skygent store analytics my-store --unit day",
+      "skygent store analytics my-store --since 7d --metrics posts,authors,engagement"
+    ])
+  )
+);
+
 export const storeSummary = Command.make("summary", {}, () =>
   Effect.gen(function* () {
     const stats = yield* StoreStats;
@@ -1099,6 +1201,7 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeDelete,
     storeMaterialize,
     storeStats,
+    storeAnalytics,
     storeSummary,
     storeCache,
     storeCacheStatus,

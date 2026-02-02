@@ -82,6 +82,26 @@ const imagePostMissingAlt = Schema.decodeUnknownSync(Post)({
     ]
   })
 });
+const makeReplyPost = (
+  uri: string,
+  author: string,
+  createdAt: string,
+  rootUri: string,
+  parentUri: string
+) =>
+  Schema.decodeUnknownSync(Post)({
+    uri,
+    author,
+    text: `Reply ${uri}`,
+    createdAt,
+    hashtags: [],
+    mentions: [],
+    links: [],
+    reply: {
+      root: { uri: rootUri, cid: "cid-root" },
+      parent: { uri: parentUri, cid: "cid-parent" }
+    }
+  });
 
 const sampleMeta = Schema.decodeUnknownSync(EventMeta)({
   source: "timeline",
@@ -509,6 +529,134 @@ describe("StoreIndex", () => {
     try {
       const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
       expect(Chunk.toReadonlyArray(result)).toEqual([samplePost, samplePostEmoji]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("threadGroups groups posts by reply root", async () => {
+    const rootA = Schema.decodeUnknownSync(Post)({
+      uri: "at://did:plc:example/app.bsky.feed.post/201",
+      author: "alice.bsky",
+      text: "Root A",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      hashtags: [],
+      mentions: [],
+      links: []
+    });
+    const replyA = makeReplyPost(
+      "at://did:plc:example/app.bsky.feed.post/202",
+      "bob.bsky",
+      "2026-01-01T01:00:00.000Z",
+      rootA.uri,
+      rootA.uri
+    );
+    const rootB = Schema.decodeUnknownSync(Post)({
+      uri: "at://did:plc:example/app.bsky.feed.post/203",
+      author: "claire.bsky",
+      text: "Root B",
+      createdAt: "2026-01-02T00:00:00.000Z",
+      hashtags: [],
+      mentions: [],
+      links: []
+    });
+
+    const program = Effect.gen(function* () {
+      const storeIndex = yield* StoreIndex;
+
+      const recordA = PostEventRecord.make({
+        id: Schema.decodeUnknownSync(EventId)("01ARZ3NDEKTSV4RRFFQ69G5FBA"),
+        version: 1,
+        event: PostUpsert.make({ post: rootA, meta: sampleMeta })
+      });
+      const recordReply = PostEventRecord.make({
+        id: Schema.decodeUnknownSync(EventId)("01ARZ3NDEKTSV4RRFFQ69G5FBB"),
+        version: 1,
+        event: PostUpsert.make({ post: replyA, meta: sampleMeta })
+      });
+      const recordB = PostEventRecord.make({
+        id: Schema.decodeUnknownSync(EventId)("01ARZ3NDEKTSV4RRFFQ69G5FBC"),
+        version: 1,
+        event: PostUpsert.make({ post: rootB, meta: sampleMeta })
+      });
+
+      yield* storeIndex.apply(sampleStore, recordA);
+      yield* storeIndex.apply(sampleStore, recordReply);
+      yield* storeIndex.apply(sampleStore, recordB);
+
+      return yield* storeIndex.threadGroups(sampleStore, StoreQuery.make({}));
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      const byRoot = new Map(result.map((group) => [String(group.rootUri), group.count]));
+      expect(byRoot.get(String(rootA.uri))).toBe(2);
+      expect(byRoot.get(String(rootB.uri))).toBe(1);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("threadPosts returns posts for a thread root", async () => {
+    const rootA = Schema.decodeUnknownSync(Post)({
+      uri: "at://did:plc:example/app.bsky.feed.post/301",
+      author: "alice.bsky",
+      text: "Root A",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      hashtags: [],
+      mentions: [],
+      links: []
+    });
+    const replyA = makeReplyPost(
+      "at://did:plc:example/app.bsky.feed.post/302",
+      "bob.bsky",
+      "2026-02-01T01:00:00.000Z",
+      rootA.uri,
+      rootA.uri
+    );
+    const rootB = Schema.decodeUnknownSync(Post)({
+      uri: "at://did:plc:example/app.bsky.feed.post/303",
+      author: "claire.bsky",
+      text: "Root B",
+      createdAt: "2026-02-02T00:00:00.000Z",
+      hashtags: [],
+      mentions: [],
+      links: []
+    });
+
+    const program = Effect.gen(function* () {
+      const storeIndex = yield* StoreIndex;
+      const recordA = PostEventRecord.make({
+        id: Schema.decodeUnknownSync(EventId)("01ARZ3NDEKTSV4RRFFQ69G5FDA"),
+        version: 1,
+        event: PostUpsert.make({ post: rootA, meta: sampleMeta })
+      });
+      const recordReply = PostEventRecord.make({
+        id: Schema.decodeUnknownSync(EventId)("01ARZ3NDEKTSV4RRFFQ69G5FDB"),
+        version: 1,
+        event: PostUpsert.make({ post: replyA, meta: sampleMeta })
+      });
+      const recordB = PostEventRecord.make({
+        id: Schema.decodeUnknownSync(EventId)("01ARZ3NDEKTSV4RRFFQ69G5FDC"),
+        version: 1,
+        event: PostUpsert.make({ post: rootB, meta: sampleMeta })
+      });
+
+      yield* storeIndex.apply(sampleStore, recordA);
+      yield* storeIndex.apply(sampleStore, recordReply);
+      yield* storeIndex.apply(sampleStore, recordB);
+
+      return yield* storeIndex.threadPosts(sampleStore, rootA.uri);
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      const uris = result.map((post) => post.uri);
+      expect(uris).toEqual([rootA.uri, replyA.uri]);
     } finally {
       await removeTempDir(tempDir);
     }

@@ -52,6 +52,27 @@ const makePostWithMetrics = (
     metrics
   });
 
+const makeReplyPost = (
+  uri: string,
+  author: string,
+  createdAt: string,
+  rootUri: string,
+  parentUri: string
+) =>
+  Schema.decodeUnknownSync(Post)({
+    uri,
+    author,
+    text: `Post ${uri}`,
+    createdAt,
+    hashtags: [],
+    mentions: [],
+    links: [],
+    reply: {
+      root: { uri: rootUri, cid: "cid-root" },
+      parent: { uri: parentUri, cid: "cid-parent" }
+    }
+  });
+
 const sampleMeta = Schema.decodeUnknownSync(EventMeta)({
   source: "timeline",
   command: "sync timeline",
@@ -495,6 +516,60 @@ describe("query multi-store", () => {
       expect(items.length).toBe(2);
       expect(items[0]?.post?.uri).toBe("at://did:plc:example/app.bsky.feed.post/40");
       expect(items[1]?.post?.uri).toBe("at://did:plc:example/app.bsky.feed.post/41");
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+});
+
+describe("query thread output", () => {
+  test("groups results by thread root", async () => {
+    const run = Command.run(queryCommand, {
+      name: "skygent",
+      version: "0.0.0"
+    });
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(tempDir);
+
+    const rootA = makePost(
+      "at://did:plc:example/app.bsky.feed.post/201",
+      "alice.bsky",
+      "2026-01-01T00:00:00.000Z"
+    );
+    const replyA = makeReplyPost(
+      "at://did:plc:example/app.bsky.feed.post/202",
+      "bob.bsky",
+      "2026-01-01T01:00:00.000Z",
+      rootA.uri,
+      rootA.uri
+    );
+    const rootB = makePost(
+      "at://did:plc:example/app.bsky.feed.post/203",
+      "claire.bsky",
+      "2026-01-02T00:00:00.000Z"
+    );
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+          const store = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("alpha"),
+            sampleConfig
+          );
+
+          yield* index.apply(store, makeRecord(rootA, "01ARZ3NDEKTSV4RRFFQ69G5FCA"));
+          yield* index.apply(store, makeRecord(replyA, "01ARZ3NDEKTSV4RRFFQ69G5FCB"));
+          yield* index.apply(store, makeRecord(rootB, "01ARZ3NDEKTSV4RRFFQ69G5FCC"));
+
+          yield* run(["node", "skygent", "alpha", "--format", "thread", "--limit", "10"]);
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      const stdout = (await Effect.runPromise(Ref.get(stdoutRef))).join("");
+      expect(stdout).toContain(`Thread 1: ${rootA.uri} (2 posts)`);
+      expect(stdout).toContain(`Thread 2: ${rootB.uri} (1 post)`);
     } finally {
       await removeTempDir(tempDir);
     }

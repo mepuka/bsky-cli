@@ -26,6 +26,7 @@ import {
 import { renderPostCompact, renderPostCard } from "./doc/post.js";
 import { renderThread } from "./doc/thread.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
+import type { Annotation } from "./doc/annotation.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJson, writeJsonStream, writeText } from "./output.js";
 import { parseRangeOptions } from "./range-options.js";
@@ -919,10 +920,31 @@ export const queryCommand = Command.make(
               )
               .pipe(Effect.catchAll(() => Effect.void));
           }
-          const doc = renderThread(
-            posts,
-            w === undefined ? { compact: false } : { compact: false, lineWidth: w }
-          );
+          const groups = new Map<string, { rootUri: string; posts: Array<Post> }>();
+          for (const post of posts) {
+            const rootUri = post.reply?.root.uri ? String(post.reply.root.uri) : String(post.uri);
+            const group = groups.get(rootUri);
+            if (group) {
+              group.posts.push(post);
+            } else {
+              groups.set(rootUri, { rootUri, posts: [post] });
+            }
+          }
+          const threadOptions =
+            w === undefined ? { compact: false } : { compact: false, lineWidth: w };
+          const docs: Array<Doc.Doc<Annotation>> = [];
+          Array.from(groups.values()).forEach((group, index) => {
+            docs.push(
+              Doc.text(
+                `Thread ${index + 1}: ${group.rootUri} (${group.posts.length} post${group.posts.length === 1 ? "" : "s"})`
+              )
+            );
+            docs.push(renderThread(group.posts, threadOptions));
+            if (index < groups.size - 1) {
+              docs.push(Doc.empty);
+            }
+          });
+          const doc = Doc.vsep(docs);
           yield* writeText(ansi ? renderAnsi(doc, w) : renderPlain(doc, w));
           return;
         }

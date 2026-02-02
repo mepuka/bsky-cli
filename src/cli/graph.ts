@@ -4,8 +4,11 @@ import { BskyClient } from "../services/bsky-client.js";
 import { AppConfigService } from "../services/app-config.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import { ProfileResolver } from "../services/profile-resolver.js";
+import { GraphBuilder } from "../services/graph-builder.js";
+import { StoreTopology } from "../services/store-topology.js";
 import type { ListItemView, ListView } from "../domain/bsky.js";
-import { AtUri } from "../domain/primitives.js";
+import { AtUri, StoreName } from "../domain/primitives.js";
+import type { GraphSnapshot } from "../domain/graph.js";
 import { actorArg, decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
@@ -23,6 +26,15 @@ import {
   type RelationshipEntry,
   type RelationshipNode
 } from "../graph/relationships.js";
+import { parseRangeOptions } from "./range-options.js";
+import { parseOptionalFilterExpr } from "./filter-input.js";
+import { filterOption, filterJsonOption } from "./shared-options.js";
+import { storeOptions } from "./store.js";
+import { StoreQuery } from "../domain/events.js";
+import { PositiveInt, boundedInt } from "./option-schemas.js";
+import { degreeCentrality, graphFromSnapshot, pageRankCentrality } from "../graph/centrality.js";
+import { communitiesFromSnapshot } from "../graph/communities.js";
+import { formatFilterExpr } from "../domain/filter-describe.js";
 
 const listUriArg = Args.text({ name: "uri" }).pipe(
   Args.withSchema(AtUri),
@@ -31,6 +43,10 @@ const listUriArg = Args.text({ name: "uri" }).pipe(
 
 const limitOption = baseLimitOption.pipe(
   Options.withDescription("Maximum number of results")
+);
+
+const storeLimitOption = baseLimitOption.pipe(
+  Options.withDescription("Maximum posts to include when building store graphs")
 );
 
 const cursorOption = baseCursorOption.pipe(
@@ -53,8 +69,85 @@ const ensureSupportedFormat = (
       })
     : Effect.void;
 
+const snapshotMeta = (snapshot: GraphSnapshot, extra: Record<string, unknown> = {}) => ({
+  kind: "meta" as const,
+  directed: snapshot.directed,
+  builtAt: snapshot.builtAt,
+  sources: snapshot.sources,
+  window: snapshot.window,
+  filters: snapshot.filters,
+  nodeCount: snapshot.nodes.length,
+  edgeCount: snapshot.edges.length,
+  ...extra
+});
+
 const purposeOption = Options.choice("purpose", ["modlist", "curatelist"]).pipe(
   Options.withDescription("List purpose filter"),
+  Options.optional
+);
+
+const storeOption = Options.text("store").pipe(
+  Options.withSchema(StoreName),
+  Options.withDescription("Store name to build the interaction graph from")
+);
+
+const rangeOption = Options.text("range").pipe(
+  Options.withDescription("ISO range as <start>..<end>"),
+  Options.optional
+);
+const sinceOption = Options.text("since").pipe(
+  Options.withDescription(
+    "Start time (ISO timestamp, date, relative duration like 24h, or now/today/yesterday)"
+  ),
+  Options.optional
+);
+const untilOption = Options.text("until").pipe(
+  Options.withDescription(
+    "End time (ISO timestamp, date, relative duration like 24h, or now/today/yesterday)"
+  ),
+  Options.optional
+);
+const scanLimitOption = Options.integer("scan-limit").pipe(
+  Options.withSchema(PositiveInt),
+  Options.withDescription("Maximum rows to scan before filtering (advanced)"),
+  Options.optional
+);
+
+const metricOption = Options.choice("metric", ["degree", "pagerank"]).pipe(
+  Options.withDescription("Centrality metric (default: degree)"),
+  Options.optional
+);
+
+const directionOption = Options.choice("direction", ["in", "out", "both"]).pipe(
+  Options.withDescription("Degree direction (default: both)"),
+  Options.optional
+);
+
+const weightedOption = Options.boolean("weighted").pipe(
+  Options.withDescription("Use edge weights in centrality computation")
+);
+
+const iterationsOption = Options.integer("iterations").pipe(
+  Options.withSchema(boundedInt(1, 500)),
+  Options.withDescription("Pagerank iterations (default: 20)"),
+  Options.optional
+);
+
+const communityIterationsOption = Options.integer("iterations").pipe(
+  Options.withSchema(boundedInt(1, 200)),
+  Options.withDescription("Community detection iterations (default: 10)"),
+  Options.optional
+);
+
+const topOption = Options.integer("top").pipe(
+  Options.withSchema(PositiveInt),
+  Options.withDescription("Limit number of ranked nodes in output"),
+  Options.optional
+);
+
+const minSizeOption = Options.integer("min-size").pipe(
+  Options.withSchema(PositiveInt),
+  Options.withDescription("Minimum community size to include"),
   Options.optional
 );
 
@@ -114,6 +207,75 @@ const renderRelationshipsTable = (entries: ReadonlyArray<RelationshipEntry>) => 
     ],
     rows
   );
+};
+
+const renderInteractionTable = (snapshot: GraphSnapshot) => {
+  const labels = new Map(snapshot.nodes.map((node) => [String(node.id), node.label ?? ""]));
+  const rows = snapshot.edges.map((edge) => [
+    String(edge.from),
+    labels.get(String(edge.from)) ?? "",
+    String(edge.to),
+    labels.get(String(edge.to)) ?? "",
+    edge.type,
+    String(edge.weight ?? 1)
+  ]);
+  return renderTableLegacy(
+    ["FROM", "FROM_HANDLE", "TO", "TO_HANDLE", "TYPE", "WEIGHT"],
+    rows
+  );
+};
+
+const renderCentralityTable = (entries: ReadonlyArray<{
+  readonly rank: number;
+  readonly did: string;
+  readonly handle?: string;
+  readonly score: number;
+}>) => {
+  const rows = entries.map((entry) => [
+    String(entry.rank),
+    entry.did,
+    entry.handle ?? "",
+    entry.score.toString()
+  ]);
+  return renderTableLegacy(["RANK", "DID", "HANDLE", "SCORE"], rows);
+};
+
+const renderCommunitiesTable = (entries: ReadonlyArray<{
+  readonly community: string;
+  readonly size: number;
+  readonly members: string;
+}>) => {
+  const rows = entries.map((entry) => [
+    String(entry.community),
+    String(entry.size),
+    entry.members
+  ]);
+  return renderTableLegacy(["COMMUNITY", "SIZE", "MEMBERS"], rows);
+};
+
+const renderStoreTopologyTable = (
+  nodes: ReadonlyArray<{ readonly name: string; readonly derived: boolean; readonly posts: number; readonly sources: number; readonly root: boolean }>,
+  edges: ReadonlyArray<{ readonly source: string; readonly target: string; readonly filter: string; readonly mode: string; readonly derivedAt?: string }>
+) => {
+  const storeRows = nodes.map((node) => [
+    node.name,
+    node.derived ? "derived" : "source",
+    node.root ? "yes" : "no",
+    String(node.posts),
+    String(node.sources)
+  ]);
+  const edgeRows = edges.map((edge) => [
+    edge.source,
+    edge.target,
+    edge.filter,
+    edge.mode,
+    edge.derivedAt ?? "-"
+  ]);
+  const sections = [
+    `Stores\n${renderTableLegacy(["STORE", "KIND", "ROOT", "POSTS", "SOURCES"], storeRows)}`,
+    `Derivations\n${renderTableLegacy(["SOURCE", "TARGET", "FILTER", "MODE", "DERIVED AT"], edgeRows)}`
+  ];
+  return sections.join("\n\n");
 };
 
 const renderListItemsTable = (items: ReadonlyArray<ListItemView>, cursor: string | undefined) => {
@@ -443,6 +605,316 @@ const listsCommand = Command.make(
   )
 );
 
+const interactionsCommand = Command.make(
+  "interactions",
+  {
+    store: storeOption,
+    range: rangeOption,
+    since: sinceOption,
+    until: untilOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    limit: storeLimitOption,
+    scanLimit: scanLimitOption,
+    format: formatOption
+  },
+  ({ store, range, since, until, filter, filterJson, limit, scanLimit, format }) =>
+    Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const builder = yield* GraphBuilder;
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const parsedRange = yield* parseRangeOptions(range, since, until);
+      const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
+      const query = StoreQuery.make({
+        range: Option.getOrUndefined(parsedRange),
+        filter: Option.getOrUndefined(parsedFilter),
+        scanLimit: Option.getOrUndefined(scanLimit)
+      });
+      const limitValue = Option.getOrUndefined(limit);
+      const snapshot = yield* builder.buildInteractionNetwork(
+        storeRef,
+        limitValue === undefined ? { query } : { query, limit: limitValue }
+      );
+      const ndjsonItems = [
+        snapshotMeta(snapshot, { store: storeRef.name }),
+        ...snapshot.nodes.map((node) => ({ kind: "node", ...node })),
+        ...snapshot.edges.map((edge) => ({ kind: "edge", ...edge }))
+      ];
+      yield* emitWithFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json",
+        {
+          json: writeJson(snapshot),
+          ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
+          table: writeText(renderInteractionTable(snapshot))
+        }
+      );
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Build an interaction network from store posts", [
+      "skygent graph interactions --store my-store --range 2026-01-01..2026-01-31",
+      "skygent graph interactions --store my-store --filter 'hashtag:#ai' --format table",
+      "skygent graph interactions --store my-store --limit 500 --format ndjson"
+    ])
+  )
+);
+
+const centralityCommand = Command.make(
+  "centrality",
+  {
+    store: storeOption,
+    range: rangeOption,
+    since: sinceOption,
+    until: untilOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    limit: storeLimitOption,
+    scanLimit: scanLimitOption,
+    metric: metricOption,
+    direction: directionOption,
+    weighted: weightedOption,
+    iterations: iterationsOption,
+    top: topOption,
+    format: formatOption
+  },
+  ({ store, range, since, until, filter, filterJson, limit, scanLimit, metric, direction, weighted, iterations, top, format }) =>
+    Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const builder = yield* GraphBuilder;
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const parsedRange = yield* parseRangeOptions(range, since, until);
+      const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
+      const query = StoreQuery.make({
+        range: Option.getOrUndefined(parsedRange),
+        filter: Option.getOrUndefined(parsedFilter),
+        scanLimit: Option.getOrUndefined(scanLimit)
+      });
+      const limitValue = Option.getOrUndefined(limit);
+      const snapshot = yield* builder.buildInteractionNetwork(
+        storeRef,
+        limitValue === undefined ? { query } : { query, limit: limitValue }
+      );
+      const { graph } = graphFromSnapshot(snapshot);
+
+      const metricValue = Option.getOrElse(metric, () => "degree" as const);
+      const directionValue = Option.getOrElse(direction, () => "both" as const);
+      const iterationsValue = Option.getOrElse(iterations, () => 20);
+      if (metricValue === "pagerank" && Option.isSome(direction)) {
+        return yield* CliInputError.make({
+          message: "--direction is only supported for degree centrality.",
+          cause: { metric: metricValue, direction: directionValue }
+        });
+      }
+      const scores = metricValue === "pagerank"
+        ? pageRankCentrality(graph, { iterations: iterationsValue, weighted })
+        : degreeCentrality(graph, { direction: directionValue, weighted });
+
+      const topValue = Option.getOrUndefined(top);
+      const trimmed = topValue ? scores.slice(0, topValue) : scores;
+      const entries = trimmed.map((entry, index) => {
+        const base = {
+          rank: index + 1,
+          did: String(entry.node.id),
+          score: entry.score
+        };
+        return entry.node.label
+          ? { ...base, handle: entry.node.label }
+          : base;
+      });
+      const ndjsonItems = [
+        snapshotMeta(snapshot, {
+          store: storeRef.name,
+          metric: metricValue,
+          ...(metricValue === "degree" ? { direction: directionValue } : {}),
+          ...(metricValue === "pagerank" ? { iterations: iterationsValue } : {}),
+          weighted
+        }),
+        ...entries.map((entry) => ({ kind: "node", ...entry }))
+      ];
+
+      yield* emitWithFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json",
+        {
+          json: writeJson({
+            metric: metricValue,
+            nodes: entries
+          }),
+          ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
+          table: writeText(renderCentralityTable(entries))
+        }
+      );
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Rank actors by interaction centrality", [
+      "skygent graph centrality --store my-store --metric degree --top 50",
+      "skygent graph centrality --store my-store --metric degree --direction in --weighted",
+      "skygent graph centrality --store my-store --metric pagerank --iterations 50 --top 25"
+    ])
+  )
+);
+
+const communitiesCommand = Command.make(
+  "communities",
+  {
+    store: storeOption,
+    range: rangeOption,
+    since: sinceOption,
+    until: untilOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    limit: storeLimitOption,
+    scanLimit: scanLimitOption,
+    iterations: communityIterationsOption,
+    weighted: weightedOption,
+    minSize: minSizeOption,
+    top: topOption,
+    format: formatOption
+  },
+  ({ store, range, since, until, filter, filterJson, limit, scanLimit, iterations, weighted, minSize, top, format }) =>
+    Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const builder = yield* GraphBuilder;
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const parsedRange = yield* parseRangeOptions(range, since, until);
+      const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
+      const query = StoreQuery.make({
+        range: Option.getOrUndefined(parsedRange),
+        filter: Option.getOrUndefined(parsedFilter),
+        scanLimit: Option.getOrUndefined(scanLimit)
+      });
+      const limitValue = Option.getOrUndefined(limit);
+      const snapshot = yield* builder.buildInteractionNetwork(
+        storeRef,
+        limitValue === undefined ? { query } : { query, limit: limitValue }
+      );
+      const communityIterations = Option.getOrElse(iterations, () => 10);
+      const minSizeValue = Option.getOrElse(minSize, () => 1);
+      const communities = communitiesFromSnapshot(snapshot, {
+        iterations: communityIterations,
+        weighted,
+        minSize: minSizeValue
+      });
+      const topValue = Option.getOrUndefined(top);
+      const trimmed = topValue ? communities.slice(0, topValue) : communities;
+      const payload = trimmed.map((community) => ({
+        id: community.id,
+        size: community.members.length,
+        members: community.members.map((member) => ({
+          did: String(member.id),
+          ...(member.label ? { handle: member.label } : {})
+        }))
+      }));
+      const tableRows = trimmed.map((community) => {
+        const handles = community.members
+          .slice(0, 5)
+          .map((member) => member.label ?? String(member.id));
+        return {
+          community: community.id,
+          size: community.members.length,
+          members: handles.join(", ")
+        };
+      });
+      const ndjsonItems = [
+        snapshotMeta(snapshot, {
+          store: storeRef.name,
+          iterations: communityIterations,
+          weighted,
+          minSize: minSizeValue,
+          totalCommunities: communities.length
+        }),
+        ...payload.map((community) => ({ kind: "community", ...community }))
+      ];
+
+      yield* emitWithFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json",
+        {
+          json: writeJson({ communities: payload }),
+          ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
+          table: writeText(renderCommunitiesTable(tableRows))
+        }
+      );
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Detect interaction communities in a store", [
+      "skygent graph communities --store my-store --min-size 3",
+      "skygent graph communities --store my-store --iterations 25 --weighted --format table"
+    ])
+  )
+);
+
+const storesCommand = Command.make(
+  "stores",
+  { format: formatOption },
+  ({ format }) =>
+    Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const topology = yield* StoreTopology;
+      const data = yield* topology.build();
+      const roots = new Set(data.roots);
+      const nodes = data.nodes.map((node) => ({
+        name: node.name,
+        derived: node.derived,
+        posts: node.posts,
+        sources: node.sources,
+        root: roots.has(node.name)
+      }));
+      const edges = data.edges.map((edge) => {
+        const base = {
+          source: edge.source,
+          target: edge.target,
+          filter: formatFilterExpr(edge.filter),
+          mode: edge.mode
+        };
+        return edge.derivedAt ? { ...base, derivedAt: edge.derivedAt } : base;
+      });
+      const payload = { roots: data.roots, nodes, edges };
+      const ndjsonItems = [
+        {
+          kind: "meta" as const,
+          roots: data.roots,
+          nodeCount: nodes.length,
+          edgeCount: edges.length
+        },
+        ...nodes.map((node) => ({ kind: "node", ...node })),
+        ...edges.map((edge) => ({ kind: "edge", ...edge }))
+      ];
+
+      yield* emitWithFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json",
+        {
+          json: writeJson(payload),
+          ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
+          table: writeText(renderStoreTopologyTable(nodes, edges))
+        }
+      );
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Show cross-store topology from lineage data", [
+      "skygent graph stores --format table",
+      "skygent graph stores --format ndjson"
+    ])
+  )
+);
+
 const listCommand = Command.make(
   "list",
   { uri: listUriArg, limit: limitOption, cursor: cursorOption, format: formatOption },
@@ -519,10 +991,7 @@ const blocksCommand = Command.make(
         "json",
         {
           json: writeJson(payload),
-          ndjson:
-            blocks.length === 0
-              ? writeText("[]")
-              : writeJsonStream(blocksStream),
+          ndjson: writeJsonStream(blocksStream),
           table: writeText(renderProfileTable(result.blocks, result.cursor))
         }
       );
@@ -564,10 +1033,7 @@ const mutesCommand = Command.make(
         "json",
         {
           json: writeJson(payload),
-          ndjson:
-            mutes.length === 0
-              ? writeText("[]")
-              : writeJsonStream(mutesStream),
+          ndjson: writeJsonStream(mutesStream),
           table: writeText(renderProfileTable(result.mutes, result.cursor))
         }
       );
@@ -586,6 +1052,10 @@ export const graphCommand = Command.make("graph", {}).pipe(
     followsCommand,
     knownFollowersCommand,
     relationshipsCommand,
+    interactionsCommand,
+    centralityCommand,
+    communitiesCommand,
+    storesCommand,
     listsCommand,
     listCommand,
     blocksCommand,
