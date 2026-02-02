@@ -1,5 +1,11 @@
 # @mepuka/skygent
 
+## 0.4.1
+
+### Patch Changes
+
+- Fix store delete failing silently on stores with pending migrations, resolve identity resolution 404 errors for handle-based operations (add-source, remove-source --prune, remove-author, derive --include/exclude-author), fix extract-images producing no output, and detect unreadable stdin in pipe command instead of hanging indefinitely.
+
 ## 0.4.0
 
 ### Minor Changes
