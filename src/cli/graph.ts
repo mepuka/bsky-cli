@@ -4,8 +4,10 @@ import { BskyClient } from "../services/bsky-client.js";
 import { AppConfigService } from "../services/app-config.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import { ProfileResolver } from "../services/profile-resolver.js";
+import { GraphBuilder } from "../services/graph-builder.js";
 import type { ListItemView, ListView } from "../domain/bsky.js";
-import { AtUri } from "../domain/primitives.js";
+import { AtUri, StoreName } from "../domain/primitives.js";
+import type { GraphSnapshot } from "../domain/graph.js";
 import { actorArg, decodeActor } from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
@@ -23,6 +25,12 @@ import {
   type RelationshipEntry,
   type RelationshipNode
 } from "../graph/relationships.js";
+import { parseRangeOptions } from "./range-options.js";
+import { parseOptionalFilterExpr } from "./filter-input.js";
+import { filterOption, filterJsonOption } from "./shared-options.js";
+import { storeOptions } from "./store.js";
+import { StoreQuery } from "../domain/events.js";
+import { PositiveInt } from "./option-schemas.js";
 
 const listUriArg = Args.text({ name: "uri" }).pipe(
   Args.withSchema(AtUri),
@@ -55,6 +63,33 @@ const ensureSupportedFormat = (
 
 const purposeOption = Options.choice("purpose", ["modlist", "curatelist"]).pipe(
   Options.withDescription("List purpose filter"),
+  Options.optional
+);
+
+const storeOption = Options.text("store").pipe(
+  Options.withSchema(StoreName),
+  Options.withDescription("Store name to build the interaction graph from")
+);
+
+const rangeOption = Options.text("range").pipe(
+  Options.withDescription("ISO range as <start>..<end>"),
+  Options.optional
+);
+const sinceOption = Options.text("since").pipe(
+  Options.withDescription(
+    "Start time (ISO timestamp, date, relative duration like 24h, or now/today/yesterday)"
+  ),
+  Options.optional
+);
+const untilOption = Options.text("until").pipe(
+  Options.withDescription(
+    "End time (ISO timestamp, date, relative duration like 24h, or now/today/yesterday)"
+  ),
+  Options.optional
+);
+const scanLimitOption = Options.integer("scan-limit").pipe(
+  Options.withSchema(PositiveInt),
+  Options.withDescription("Maximum rows to scan before filtering (advanced)"),
   Options.optional
 );
 
@@ -112,6 +147,22 @@ const renderRelationshipsTable = (entries: ReadonlyArray<RelationshipEntry>) => 
       "BLOCK BY LIST",
       "BLOCKED BY LIST"
     ],
+    rows
+  );
+};
+
+const renderInteractionTable = (snapshot: GraphSnapshot) => {
+  const labels = new Map(snapshot.nodes.map((node) => [String(node.id), node.label ?? ""]));
+  const rows = snapshot.edges.map((edge) => [
+    String(edge.from),
+    labels.get(String(edge.from)) ?? "",
+    String(edge.to),
+    labels.get(String(edge.to)) ?? "",
+    edge.type,
+    String(edge.weight ?? 1)
+  ]);
+  return renderTableLegacy(
+    ["FROM", "FROM_HANDLE", "TO", "TO_HANDLE", "TYPE", "WEIGHT"],
     rows
   );
 };
@@ -443,6 +494,62 @@ const listsCommand = Command.make(
   )
 );
 
+const interactionsCommand = Command.make(
+  "interactions",
+  {
+    store: storeOption,
+    range: rangeOption,
+    since: sinceOption,
+    until: untilOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    limit: limitOption,
+    scanLimit: scanLimitOption,
+    format: formatOption
+  },
+  ({ store, range, since, until, filter, filterJson, limit, scanLimit, format }) =>
+    Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const builder = yield* GraphBuilder;
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const parsedRange = yield* parseRangeOptions(range, since, until);
+      const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
+      const query = StoreQuery.make({
+        range: Option.getOrUndefined(parsedRange),
+        filter: Option.getOrUndefined(parsedFilter),
+        scanLimit: Option.getOrUndefined(scanLimit)
+      });
+      const limitValue = Option.getOrUndefined(limit);
+      const snapshot = yield* builder.buildInteractionNetwork(
+        storeRef,
+        limitValue === undefined ? { query } : { query, limit: limitValue }
+      );
+      yield* emitWithFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json",
+        {
+          json: writeJson(snapshot),
+          ndjson:
+            snapshot.edges.length === 0
+              ? writeText("[]")
+              : writeJsonStream(Stream.fromIterable(snapshot.edges)),
+          table: writeText(renderInteractionTable(snapshot))
+        }
+      );
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Build an interaction network from store posts", [
+      "skygent graph interactions --store my-store --range 2026-01-01..2026-01-31",
+      "skygent graph interactions --store my-store --filter 'hashtag:#ai' --format table",
+      "skygent graph interactions --store my-store --limit 500 --format ndjson"
+    ])
+  )
+);
+
 const listCommand = Command.make(
   "list",
   { uri: listUriArg, limit: limitOption, cursor: cursorOption, format: formatOption },
@@ -586,6 +693,7 @@ export const graphCommand = Command.make("graph", {}).pipe(
     followsCommand,
     knownFollowersCommand,
     relationshipsCommand,
+    interactionsCommand,
     listsCommand,
     listCommand,
     blocksCommand,
