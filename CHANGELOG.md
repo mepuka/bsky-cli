@@ -1,5 +1,18 @@
 # @mepuka/skygent
 
+## 0.4.0
+
+### Minor Changes
+
+- Add store source registry, engagement sorting, image cache, digest command, and pipe/stream fixes.
+
+  - **Store sources**: persistent source config (`store add-source`, `store sources`, `store remove-source`), source-aware sync with concurrent fetch and serialized writes
+  - **Engagement sorting**: `--sort by-likes`, `--sort by-reposts`, `--sort by-engagement` on query
+  - **Image cache**: image embed caching and query UX improvements
+  - **Digest command**: new `digest` command for summarized store output
+  - **Pipe fix**: use CliInput TTY flag instead of process.stdin.isTTY
+  - **Refactors**: Match/Predicate for tag guards, stream-first sync semantics
+
 ## 0.3.2
 
 ### Patch Changes
