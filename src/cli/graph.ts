@@ -5,6 +5,7 @@ import { AppConfigService } from "../services/app-config.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import { ProfileResolver } from "../services/profile-resolver.js";
 import { GraphBuilder } from "../services/graph-builder.js";
+import { StoreTopology } from "../services/store-topology.js";
 import type { ListItemView, ListView } from "../domain/bsky.js";
 import { AtUri, StoreName } from "../domain/primitives.js";
 import type { GraphSnapshot } from "../domain/graph.js";
@@ -33,6 +34,7 @@ import { StoreQuery } from "../domain/events.js";
 import { PositiveInt, boundedInt } from "./option-schemas.js";
 import { degreeCentrality, graphFromSnapshot, pageRankCentrality } from "../graph/centrality.js";
 import { communitiesFromSnapshot } from "../graph/communities.js";
+import { formatFilterExpr } from "../domain/filter-describe.js";
 
 const listUriArg = Args.text({ name: "uri" }).pipe(
   Args.withSchema(AtUri),
@@ -233,6 +235,31 @@ const renderCommunitiesTable = (entries: ReadonlyArray<{
     entry.members
   ]);
   return renderTableLegacy(["COMMUNITY", "SIZE", "MEMBERS"], rows);
+};
+
+const renderStoreTopologyTable = (
+  nodes: ReadonlyArray<{ readonly name: string; readonly derived: boolean; readonly posts: number; readonly sources: number; readonly root: boolean }>,
+  edges: ReadonlyArray<{ readonly source: string; readonly target: string; readonly filter: string; readonly mode: string; readonly derivedAt?: string }>
+) => {
+  const storeRows = nodes.map((node) => [
+    node.name,
+    node.derived ? "derived" : "source",
+    node.root ? "yes" : "no",
+    String(node.posts),
+    String(node.sources)
+  ]);
+  const edgeRows = edges.map((edge) => [
+    edge.source,
+    edge.target,
+    edge.filter,
+    edge.mode,
+    edge.derivedAt ?? "-"
+  ]);
+  const sections = [
+    `Stores\n${renderTableLegacy(["STORE", "KIND", "ROOT", "POSTS", "SOURCES"], storeRows)}`,
+    `Derivations\n${renderTableLegacy(["SOURCE", "TARGET", "FILTER", "MODE", "DERIVED AT"], edgeRows)}`
+  ];
+  return sections.join("\n\n");
 };
 
 const renderListItemsTable = (items: ReadonlyArray<ListItemView>, cursor: string | undefined) => {
@@ -791,6 +818,63 @@ const communitiesCommand = Command.make(
   )
 );
 
+const storesCommand = Command.make(
+  "stores",
+  { format: formatOption },
+  ({ format }) =>
+    Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const topology = yield* StoreTopology;
+      const data = yield* topology.build();
+      const roots = new Set(data.roots);
+      const nodes = data.nodes.map((node) => ({
+        name: node.name,
+        derived: node.derived,
+        posts: node.posts,
+        sources: node.sources,
+        root: roots.has(node.name)
+      }));
+      const edges = data.edges.map((edge) => {
+        const base = {
+          source: edge.source,
+          target: edge.target,
+          filter: formatFilterExpr(edge.filter),
+          mode: edge.mode
+        };
+        return edge.derivedAt ? { ...base, derivedAt: edge.derivedAt } : base;
+      });
+      const payload = { roots: data.roots, nodes, edges };
+
+      const ndjsonItems = [
+        ...nodes.map((node) => ({ kind: "node", ...node })),
+        ...edges.map((edge) => ({ kind: "edge", ...edge }))
+      ];
+
+      yield* emitWithFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json",
+        {
+          json: writeJson(payload),
+          ndjson:
+            ndjsonItems.length === 0
+              ? writeText("[]")
+              : writeJsonStream(Stream.fromIterable(ndjsonItems)),
+          table: writeText(renderStoreTopologyTable(nodes, edges))
+        }
+      );
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Show cross-store topology from lineage data", [
+      "skygent graph stores --format table",
+      "skygent graph stores --format ndjson"
+    ])
+  )
+);
+
 const listCommand = Command.make(
   "list",
   { uri: listUriArg, limit: limitOption, cursor: cursorOption, format: formatOption },
@@ -937,6 +1021,7 @@ export const graphCommand = Command.make("graph", {}).pipe(
     interactionsCommand,
     centralityCommand,
     communitiesCommand,
+    storesCommand,
     listsCommand,
     listCommand,
     blocksCommand,

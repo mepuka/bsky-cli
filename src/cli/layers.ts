@@ -46,6 +46,7 @@ import { StoreAnalytics } from "../services/store-analytics.js";
 import { ProfileResolver } from "../services/profile-resolver.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import { GraphBuilder } from "../services/graph-builder.js";
+import { StoreTopology } from "../services/store-topology.js";
 
 const appConfigLayer = AppConfigService.layer;
 const credentialLayer = CredentialStore.layer.pipe(Layer.provideMerge(appConfigLayer));
@@ -212,6 +213,12 @@ const graphBuilderLayer = GraphBuilder.layer.pipe(
   Layer.provideMerge(indexLayer),
   Layer.provideMerge(runtimeLayer)
 );
+const storeTopologyLayer = StoreTopology.layer.pipe(
+  Layer.provideMerge(managerLayer),
+  Layer.provideMerge(indexLayer),
+  Layer.provideMerge(lineageLayer),
+  Layer.provideMerge(storeSourcesLayer)
+);
 
 export const CliLive = Layer.mergeAll(
   appConfigLayer,
@@ -237,6 +244,7 @@ export const CliLive = Layer.mergeAll(
   storeStatsLayer,
   storeAnalyticsLayer,
   graphBuilderLayer,
+  storeTopologyLayer,
   compilerLayer,
   postParserLayer,
   filterLibraryLayer,
