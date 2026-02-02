@@ -4,7 +4,7 @@ import * as Doc from "@effect/printer/Doc";
 import { all } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { StoreQuery } from "../domain/events.js";
-import { StoreName, Timestamp } from "../domain/primitives.js";
+import { StoreName } from "../domain/primitives.js";
 import type { Post } from "../domain/post.js";
 import type { StoreRef } from "../domain/store.js";
 import type { ImageRef, ImageVariant } from "../domain/images.js";
@@ -28,8 +28,7 @@ import { renderThread } from "./doc/thread.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJson, writeJsonStream, writeText } from "./output.js";
-import { parseRange } from "./range.js";
-import { parseTimeInput } from "./time.js";
+import { parseRangeOptions } from "./range-options.js";
 import { CliPreferences } from "./preferences.js";
 import { projectFields, resolveFieldSelectors } from "./query-fields.js";
 import { CliInputError } from "./errors.js";
@@ -168,62 +167,6 @@ const hasUnicodeInsensitiveContains = (expr: FilterExpr): boolean =>
     Match.orElse(() => false)
   )(expr);
 
-const parseRangeOptions = (
-  range: Option.Option<string>,
-  since: Option.Option<string>,
-  until: Option.Option<string>
-) =>
-  Effect.gen(function* () {
-    const toTimestamp = (date: Date, label: string) =>
-      Schema.decodeUnknown(Timestamp)(date).pipe(
-        Effect.mapError((cause) =>
-          CliInputError.make({
-            message: `Computed ${label} timestamp is invalid.`,
-            cause
-          })
-        )
-      );
-    const hasRange = Option.isSome(range);
-    const hasSince = Option.isSome(since);
-    const hasUntil = Option.isSome(until);
-
-    if (hasRange && (hasSince || hasUntil)) {
-      return yield* CliInputError.make({
-        message: "Use either --range or --since/--until, not both.",
-        cause: { range: range.value, since: Option.getOrUndefined(since), until: Option.getOrUndefined(until) }
-      });
-    }
-
-    if (hasRange) {
-      const parsed = yield* parseRange(range.value);
-      return Option.some(parsed);
-    }
-
-    if (!hasSince && !hasUntil) {
-      return Option.none();
-    }
-
-    const nowMillis = yield* Clock.currentTimeMillis;
-    const now = new Date(nowMillis);
-
-    const start = hasSince
-      ? yield* parseTimeInput(since.value, now, { label: "--since" })
-      : new Date(0);
-    const end = hasUntil
-      ? yield* parseTimeInput(until.value, now, { label: "--until" })
-      : now;
-
-    if (start.getTime() > end.getTime()) {
-      return yield* CliInputError.make({
-        message: `Invalid time range: start ${start.toISOString()} must be before end ${end.toISOString()}.`,
-        cause: { start, end }
-      });
-    }
-
-    const startTimestamp = yield* toTimestamp(start, "start");
-    const endTimestamp = yield* toTimestamp(end, "end");
-    return Option.some({ start: startTimestamp, end: endTimestamp });
-  });
 
 const splitStoreNames = (raw: ReadonlyArray<string>) =>
   raw.flatMap((value) =>
