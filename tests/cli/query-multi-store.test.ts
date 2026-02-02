@@ -35,6 +35,23 @@ const makePost = (uri: string, author: string, createdAt: string) =>
     links: []
   });
 
+const makePostWithMetrics = (
+  uri: string,
+  author: string,
+  createdAt: string,
+  metrics: { likeCount?: number; repostCount?: number; replyCount?: number; quoteCount?: number }
+) =>
+  Schema.decodeUnknownSync(Post)({
+    uri,
+    author,
+    text: `Post ${uri}`,
+    createdAt,
+    hashtags: [],
+    mentions: [],
+    links: [],
+    metrics
+  });
+
 const sampleMeta = Schema.decodeUnknownSync(EventMeta)({
   source: "timeline",
   command: "sync timeline",
@@ -221,6 +238,64 @@ describe("query multi-store", () => {
       expect(items[1]?.post?.uri).toBe(postB.uri);
       expect(items[2]?.store).toBe("alpha");
       expect(items[2]?.post?.uri).toBe(postC.uri);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("sorts by engagement across stores", async () => {
+    const run = Command.run(queryCommand, {
+      name: "skygent",
+      version: "0.0.0"
+    });
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(tempDir);
+
+    const postHigh = makePostWithMetrics(
+      "at://did:plc:example/app.bsky.feed.post/101",
+      "alpha.bsky",
+      "2026-01-01T00:00:00.000Z",
+      { replyCount: 3, quoteCount: 1 }
+    );
+    const postMid = makePostWithMetrics(
+      "at://did:plc:example/app.bsky.feed.post/102",
+      "beta.bsky",
+      "2026-01-02T00:00:00.000Z",
+      { repostCount: 2 }
+    );
+    const postLow = makePostWithMetrics(
+      "at://did:plc:example/app.bsky.feed.post/103",
+      "gamma.bsky",
+      "2026-01-03T00:00:00.000Z",
+      { likeCount: 2 }
+    );
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+
+          const storeA = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("alpha"),
+            sampleConfig
+          );
+          const storeB = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("beta"),
+            sampleConfig
+          );
+
+          yield* index.apply(storeA, makeRecord(postHigh, "01ARZ3NDEKTSV4RRFFQ69G5FAW"));
+          yield* index.apply(storeB, makeRecord(postMid, "01ARZ3NDEKTSV4RRFFQ69G5FAX"));
+          yield* index.apply(storeB, makeRecord(postLow, "01ARZ3NDEKTSV4RRFFQ69G5FAY"));
+
+          yield* run(["node", "skygent", "alpha,beta", "--format", "ndjson", "--sort", "by-engagement"]);
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      const results = parseNdjson(await Effect.runPromise(Ref.get(stdoutRef)));
+      const uris = results.map((row) => row.post?.uri).filter((uri): uri is string => uri !== undefined);
+      expect(uris).toEqual([postHigh.uri, postMid.uri, postLow.uri]);
     } finally {
       await removeTempDir(tempDir);
     }

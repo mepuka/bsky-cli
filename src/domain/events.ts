@@ -6,6 +6,16 @@ import { FilterExprSchema } from "./filter.js";
 export const StoreQueryOrder = Schema.Literal("asc", "desc");
 export type StoreQueryOrder = typeof StoreQueryOrder.Type;
 
+export const StoreQuerySort = Schema.Literal(
+  "createdAt",
+  "likeCount",
+  "repostCount",
+  "replyCount",
+  "quoteCount",
+  "engagement"
+);
+export type StoreQuerySort = typeof StoreQuerySort.Type;
+
 export class EventMeta extends Schema.Class<EventMeta>("EventMeta")({
   source: Schema.Literal(
     "timeline",
@@ -53,5 +63,6 @@ export class StoreQuery extends Schema.Class<StoreQuery>("StoreQuery")({
   range: Schema.optional(Schema.Struct({ start: Timestamp, end: Timestamp })),
   filter: Schema.optional(FilterExprSchema),
   scanLimit: Schema.optional(Schema.NonNegativeInt),
+  sortBy: Schema.optional(StoreQuerySort),
   order: Schema.optional(StoreQueryOrder)
 }) {}

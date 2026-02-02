@@ -256,6 +256,68 @@ describe("StoreIndex", () => {
     }
   });
 
+  test("query orders posts by engagement when requested", async () => {
+    const postLow = Schema.decodeUnknownSync(Post)({
+      uri: "at://did:plc:example/app.bsky.feed.post/10",
+      author: "alice.bsky",
+      text: "Low engagement",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      hashtags: [],
+      mentions: [],
+      links: [],
+      metrics: { likeCount: 2 }
+    });
+    const postMid = Schema.decodeUnknownSync(Post)({
+      uri: "at://did:plc:example/app.bsky.feed.post/11",
+      author: "bob.bsky",
+      text: "Mid engagement",
+      createdAt: "2026-01-02T00:00:00.000Z",
+      hashtags: [],
+      mentions: [],
+      links: [],
+      metrics: { repostCount: 2 }
+    });
+    const postHigh = Schema.decodeUnknownSync(Post)({
+      uri: "at://did:plc:example/app.bsky.feed.post/12",
+      author: "claire.bsky",
+      text: "High engagement",
+      createdAt: "2026-01-03T00:00:00.000Z",
+      hashtags: [],
+      mentions: [],
+      links: [],
+      metrics: { replyCount: 3, quoteCount: 1 }
+    });
+
+    const upserts = [
+      PostUpsert.make({ post: postLow, meta: sampleMeta }),
+      PostUpsert.make({ post: postMid, meta: sampleMeta }),
+      PostUpsert.make({ post: postHigh, meta: sampleMeta })
+    ];
+
+    const program = Effect.gen(function* () {
+      const writer = yield* StoreWriter;
+      const storeIndex = yield* StoreIndex;
+
+      for (const upsert of upserts) {
+        yield* writer.append(sampleStore, upsert);
+      }
+      yield* storeIndex.rebuild(sampleStore);
+
+      const query = StoreQuery.make({ sortBy: "engagement", order: "desc" });
+      return yield* storeIndex.query(sampleStore, query).pipe(Stream.runCollect);
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      const uris = Chunk.toReadonlyArray(result).map((post) => post.uri);
+      expect(uris).toEqual([postHigh.uri, postMid.uri, postLow.uri]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
   test("query applies SQL pushdown for author and hashtag filters", async () => {
     const upsert1 = PostUpsert.make({ post: samplePost, meta: sampleMeta });
     const upsert2 = PostUpsert.make({ post: samplePostLater, meta: sampleMeta });

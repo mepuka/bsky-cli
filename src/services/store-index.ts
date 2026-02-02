@@ -77,11 +77,19 @@ type SearchSort = "relevance" | "newest" | "oldest";
 type QueryCursorState = {
   readonly lastCreatedAt: string | undefined;
   readonly lastUri: string | undefined;
+  readonly lastMetric: number | undefined;
   readonly fetched: number;
 };
 
 const postUriRow = Schema.Struct({ uri: PostUri });
 const postJsonRow = Schema.Struct({ post_json: Schema.String });
+const postMetricRow = Schema.Struct({
+  post_json: Schema.String,
+  like_count: Schema.Number,
+  repost_count: Schema.Number,
+  reply_count: Schema.Number,
+  quote_count: Schema.Number
+});
 const postEntryRow = Schema.Struct({
   uri: PostUri,
   created_date: Schema.String,
@@ -1000,18 +1008,20 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         const start = q.range ? toIso(q.range.start) : undefined;
         const end = q.range ? toIso(q.range.end) : undefined;
         const scanLimit = q.scanLimit;
+        const sortBy = q.sortBy ?? "createdAt";
         const order = q.order === "desc" ? "DESC" : "ASC";
         const pushdownExpr = buildPushdown(q.filter);
 
         const initialState: QueryCursorState = {
           lastCreatedAt: undefined,
           lastUri: undefined,
+          lastMetric: undefined,
           fetched: 0
         };
 
         return Stream.paginateChunkEffect(
           initialState,
-          ({ lastCreatedAt, lastUri, fetched }) =>
+          ({ lastCreatedAt, lastUri, lastMetric, fetched }) =>
             withClient(store, "StoreIndex.query failed", (client) =>
               Effect.gen(function* () {
                 if (scanLimit !== undefined && fetched >= scanLimit) {
@@ -1022,16 +1032,35 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
                     ? Math.min(entryPageSize, scanLimit - fetched)
                     : entryPageSize;
 
+                const metricExpr =
+                  sortBy === "likeCount"
+                    ? client`p.like_count`
+                    : sortBy === "repostCount"
+                      ? client`p.repost_count`
+                      : sortBy === "replyCount"
+                        ? client`p.reply_count`
+                        : sortBy === "quoteCount"
+                          ? client`p.quote_count`
+                          : sortBy === "engagement"
+                            ? client`(p.like_count + (p.repost_count * 2) + (p.reply_count * 3) + (p.quote_count * 2))`
+                            : undefined;
+
                 const rangeClause =
                   start && end
                     ? client`p.created_at >= ${start} AND p.created_at <= ${end}`
                     : undefined;
                 const keysetClause =
-                  lastCreatedAt && lastUri
-                    ? order === "ASC"
-                      ? client`(p.created_at > ${lastCreatedAt} OR (p.created_at = ${lastCreatedAt} AND p.uri > ${lastUri}))`
-                      : client`(p.created_at < ${lastCreatedAt} OR (p.created_at = ${lastCreatedAt} AND p.uri < ${lastUri}))`
-                    : undefined;
+                  sortBy === "createdAt"
+                    ? lastCreatedAt && lastUri
+                      ? order === "ASC"
+                        ? client`(p.created_at > ${lastCreatedAt} OR (p.created_at = ${lastCreatedAt} AND p.uri > ${lastUri}))`
+                        : client`(p.created_at < ${lastCreatedAt} OR (p.created_at = ${lastCreatedAt} AND p.uri < ${lastUri}))`
+                      : undefined
+                    : metricExpr && lastMetric !== undefined && lastCreatedAt && lastUri
+                      ? order === "ASC"
+                        ? client`(${metricExpr} > ${lastMetric} OR (${metricExpr} = ${lastMetric} AND (p.created_at > ${lastCreatedAt} OR (p.created_at = ${lastCreatedAt} AND p.uri > ${lastUri}))))`
+                        : client`(${metricExpr} < ${lastMetric} OR (${metricExpr} = ${lastMetric} AND (p.created_at < ${lastCreatedAt} OR (p.created_at = ${lastCreatedAt} AND p.uri < ${lastUri}))))`
+                      : undefined;
                 const pushdownClause = pushdownToSql(client, pushdownExpr);
                 const whereParts = [
                   ...(rangeClause ? [rangeClause] : []),
@@ -1040,19 +1069,32 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
                 ];
                 const where = client.and(whereParts);
 
-                const rows = yield* client`SELECT post_json FROM posts p
+                const selectColumns =
+                  sortBy === "createdAt"
+                    ? client.unsafe("post_json")
+                    : client.unsafe("post_json, like_count, repost_count, reply_count, quote_count");
+
+                const orderBy =
+                  sortBy === "createdAt" || !metricExpr
+                    ? client`p.created_at ${client.unsafe(order)}, p.uri ${client.unsafe(order)}`
+                    : client`${metricExpr} ${client.unsafe(order)}, p.created_at ${client.unsafe(order)}, p.uri ${client.unsafe(order)}`;
+
+                const rows = yield* client`SELECT ${selectColumns} FROM posts p
                       WHERE ${where}
-                      ORDER BY p.created_at ${client.unsafe(order)}, p.uri ${client.unsafe(order)}
+                      ORDER BY ${orderBy}
                       LIMIT ${pageSize}`;
 
-                const decoded = yield* Schema.decodeUnknown(
-                  Schema.Array(postJsonRow)
-                )(rows).pipe(
-                  Effect.mapError(toStoreIndexError("StoreIndex.query decode failed"))
-                );
+                const decodedRows =
+                  sortBy === "createdAt"
+                    ? yield* Schema.decodeUnknown(Schema.Array(postJsonRow))(rows).pipe(
+                        Effect.mapError(toStoreIndexError("StoreIndex.query decode failed"))
+                      )
+                    : yield* Schema.decodeUnknown(Schema.Array(postMetricRow))(rows).pipe(
+                        Effect.mapError(toStoreIndexError("StoreIndex.query decode failed"))
+                      );
 
                 const posts = yield* Effect.forEach(
-                  decoded,
+                  decodedRows,
                   (row) => decodePostJson(row.post_json),
                   { discard: false }
                 );
@@ -1064,10 +1106,46 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
                 const lastPost = posts.length > 0 ? posts[posts.length - 1] : undefined;
                 const nextCreatedAt = lastPost ? toIso(lastPost.createdAt) : lastCreatedAt;
                 const nextUri = lastPost ? lastPost.uri : lastUri;
+                const metricRows =
+                  sortBy === "createdAt"
+                    ? undefined
+                    : (decodedRows as ReadonlyArray<{
+                        readonly post_json: string;
+                        readonly like_count: number;
+                        readonly repost_count: number;
+                        readonly reply_count: number;
+                        readonly quote_count: number;
+                      }>);
+
+                const nextMetric =
+                  sortBy === "createdAt" || !metricRows
+                    ? lastMetric
+                    : posts.length > 0
+                      ? (() => {
+                          const lastRow = metricRows[metricRows.length - 1];
+                          if (!lastRow) {
+                            return lastMetric;
+                          }
+                          switch (sortBy) {
+                            case "likeCount":
+                              return lastRow.like_count;
+                            case "repostCount":
+                              return lastRow.repost_count;
+                            case "replyCount":
+                              return lastRow.reply_count;
+                            case "quoteCount":
+                              return lastRow.quote_count;
+                            case "engagement":
+                              return lastRow.like_count + (lastRow.repost_count * 2) + (lastRow.reply_count * 3) + (lastRow.quote_count * 2);
+                            default:
+                              return lastMetric;
+                          }
+                        })()
+                      : lastMetric;
 
                 const next = done
                   ? Option.none<QueryCursorState>()
-                  : Option.some({ lastCreatedAt: nextCreatedAt, lastUri: nextUri, fetched: newFetched });
+                  : Option.some({ lastCreatedAt: nextCreatedAt, lastUri: nextUri, lastMetric: nextMetric, fetched: newFetched });
 
                 return [Chunk.fromIterable(posts), next] as const;
               })

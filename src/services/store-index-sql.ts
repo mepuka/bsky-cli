@@ -69,6 +69,7 @@ export const upsertPost = (
     const likeCount = metrics?.likeCount ?? 0;
     const repostCount = metrics?.repostCount ?? 0;
     const replyCount = metrics?.replyCount ?? 0;
+    const quoteCount = metrics?.quoteCount ?? 0;
 
     yield* sql`INSERT INTO posts (
         uri,
@@ -92,6 +93,7 @@ export const upsertPost = (
         like_count,
         repost_count,
         reply_count,
+        quote_count,
         post_json
       )
       VALUES (
@@ -116,6 +118,7 @@ export const upsertPost = (
         ${likeCount},
         ${repostCount},
         ${replyCount},
+        ${quoteCount},
         ${postJson}
       )
       ON CONFLICT(uri) DO UPDATE SET
@@ -139,6 +142,7 @@ export const upsertPost = (
         like_count = excluded.like_count,
         repost_count = excluded.repost_count,
         reply_count = excluded.reply_count,
+        quote_count = excluded.quote_count,
         post_json = excluded.post_json`;
 
     yield* sql`DELETE FROM post_hashtag WHERE uri = ${post.uri}`;
@@ -184,6 +188,7 @@ export const insertPostIfMissing = (
     const likeCount = metrics?.likeCount ?? 0;
     const repostCount = metrics?.repostCount ?? 0;
     const replyCount = metrics?.replyCount ?? 0;
+    const quoteCount = metrics?.quoteCount ?? 0;
 
     const rows = yield* sql`INSERT INTO posts (
         uri,
@@ -207,6 +212,7 @@ export const insertPostIfMissing = (
         like_count,
         repost_count,
         reply_count,
+        quote_count,
         post_json
       )
       VALUES (
@@ -231,6 +237,7 @@ export const insertPostIfMissing = (
         ${likeCount},
         ${repostCount},
         ${replyCount},
+        ${quoteCount},
         ${postJson}
       )
       ON CONFLICT(uri) DO NOTHING

@@ -3,7 +3,7 @@ import { Chunk, Clock, Effect, Match, Option, Order, Ref, Schema, Stream } from 
 import * as Doc from "@effect/printer/Doc";
 import { all } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
-import { StoreQuery } from "../domain/events.js";
+import { StoreQuery, type StoreQueryOrder, type StoreQuerySort } from "../domain/events.js";
 import { StoreName } from "../domain/primitives.js";
 import type { Post } from "../domain/post.js";
 import type { StoreRef } from "../domain/store.js";
@@ -37,7 +37,7 @@ import { filterOption, filterJsonOption } from "./shared-options.js";
 import { filterByFlags } from "../typeclass/chunk.js";
 import { StoreManager } from "../services/store-manager.js";
 import { StoreNotFound } from "../domain/errors.js";
-import { StorePostOrder } from "../domain/order.js";
+import { LocaleStringOrder, StorePostOrder } from "../domain/order.js";
 import { formatSchemaError } from "./shared.js";
 import { mergeOrderedStreams } from "./stream-merge.js";
 import { jsonNdjsonTableFormats, queryOutputFormats, resolveOutputFormat } from "./output-format.js";
@@ -77,8 +77,21 @@ const scanLimitOption = Options.integer("scan-limit").pipe(
   Options.withDescription("Maximum rows to scan before filtering (advanced)"),
   Options.optional
 );
-const sortOption = Options.choice("sort", ["asc", "desc"]).pipe(
-  Options.withDescription("Sort order for results (default: asc)"),
+const sortValues = [
+  "asc",
+  "desc",
+  "by-likes",
+  "by-reposts",
+  "by-replies",
+  "by-quotes",
+  "by-engagement"
+] as const;
+type SortValue = typeof sortValues[number];
+
+const sortOption = Options.choice("sort", sortValues).pipe(
+  Options.withDescription(
+    "Sort order: asc/desc (time) or by-likes/by-reposts/by-replies/by-quotes/by-engagement (desc)"
+  ),
   Options.optional
 );
 const newestFirstOption = Options.boolean("newest-first").pipe(
@@ -122,6 +135,28 @@ const countOption = Options.boolean("count").pipe(
 );
 
 const DEFAULT_FILTER_SCAN_LIMIT = 5000;
+
+const resolveSort = (
+  value: SortValue | undefined
+): { sortBy: StoreQuerySort; order: StoreQueryOrder } => {
+  switch (value) {
+    case "desc":
+      return { sortBy: "createdAt", order: "desc" };
+    case "by-likes":
+      return { sortBy: "likeCount", order: "desc" };
+    case "by-reposts":
+      return { sortBy: "repostCount", order: "desc" };
+    case "by-replies":
+      return { sortBy: "replyCount", order: "desc" };
+    case "by-quotes":
+      return { sortBy: "quoteCount", order: "desc" };
+    case "by-engagement":
+      return { sortBy: "engagement", order: "desc" };
+    case "asc":
+    default:
+      return { sortBy: "createdAt", order: "asc" };
+  }
+};
 
 type StorePost = {
   readonly store: StoreRef;
@@ -420,16 +455,20 @@ export const queryCommand = Command.make(
       const w = Option.getOrUndefined(width);
 
       const sortValue = Option.getOrUndefined(sort);
-      const order =
-        newestFirst
-          ? "desc"
-          : sortValue;
+      if (newestFirst && sortValue && sortValue !== "asc" && sortValue !== "desc") {
+        return yield* CliInputError.make({
+          message: "--newest-first only applies to time sorting (asc/desc).",
+          cause: { newestFirst, sort: sortValue }
+        });
+      }
       if (newestFirst && sortValue === "asc") {
         return yield* CliInputError.make({
           message: "--newest-first conflicts with --sort asc.",
           cause: { newestFirst, sort: sortValue }
         });
       }
+      const resolvedSort: SortValue | undefined = newestFirst ? "desc" : sortValue;
+      const { sortBy, order } = resolveSort(resolvedSort);
 
       const hasFilter = Option.isSome(parsedFilter);
       if (hasFilter && hasUnicodeInsensitiveContains(expr)) {
@@ -472,6 +511,7 @@ export const queryCommand = Command.make(
         range: Option.getOrUndefined(parsedRange),
         filter: Option.getOrUndefined(parsedFilter),
         scanLimit: resolvedScanLimit,
+        sortBy,
         order
       });
 
@@ -569,8 +609,42 @@ export const queryCommand = Command.make(
         )
         .filter((entry): entry is { store: StoreRef; ref: Ref.Ref<{ scanned: number; matched: number }> } => entry !== undefined);
 
+      const metricValue = (post: Post) => {
+        const metrics = post.metrics;
+        const likeCount = metrics?.likeCount ?? 0;
+        const repostCount = metrics?.repostCount ?? 0;
+        const replyCount = metrics?.replyCount ?? 0;
+        const quoteCount = metrics?.quoteCount ?? 0;
+        switch (sortBy) {
+          case "likeCount":
+            return likeCount;
+          case "repostCount":
+            return repostCount;
+          case "replyCount":
+            return replyCount;
+          case "quoteCount":
+            return quoteCount;
+          case "engagement":
+            return likeCount + (repostCount * 2) + (replyCount * 3) + (quoteCount * 2);
+          default:
+            return 0;
+        }
+      };
+
+      const metricStorePostOrder = Order.mapInput(
+        Order.tuple(Order.number, Order.Date, LocaleStringOrder, LocaleStringOrder),
+        (entry: StorePost) =>
+          [metricValue(entry.post), entry.post.createdAt, entry.post.uri, entry.store.name] as const
+      );
+
       const storePostOrder =
-        order === "desc" ? Order.reverse(StorePostOrder) : StorePostOrder;
+        sortBy === "createdAt"
+          ? order === "desc"
+            ? Order.reverse(StorePostOrder)
+            : StorePostOrder
+          : order === "desc"
+            ? Order.reverse(metricStorePostOrder)
+            : metricStorePostOrder;
 
       const merged = mergeOrderedStreams(
         storeStreams.map((entry) => entry.stream),
@@ -879,6 +953,7 @@ export const queryCommand = Command.make(
         "skygent query my-store --format thread --ansi --width 120",
         "skygent query my-store --format compact --limit 50",
         "skygent query my-store --sort desc --limit 25",
+        "skygent query my-store --sort by-engagement --limit 25",
         "skygent query my-store --filter 'contains:ai' --count",
         "skygent query my-store --filter 'has:images' --extract-images --resolve-images --format ndjson",
         "skygent query store-a,store-b --format ndjson"
