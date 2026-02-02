@@ -1,9 +1,8 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Console, Effect, Option, Stream } from "effect";
+import { Console, Effect, Option } from "effect";
 import { PostUri, StoreName } from "../domain/primitives.js";
 import type { Post } from "../domain/post.js";
 import { all } from "../domain/filter.js";
-import { StoreQuery } from "../domain/events.js";
 import { DataSource } from "../domain/sync.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { PostParser } from "../services/post-parser.js";
@@ -11,7 +10,7 @@ import { StoreIndex } from "../services/store-index.js";
 import { SyncEngine } from "../services/sync-engine.js";
 import { renderThread } from "./doc/thread.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
-import { CliOutput, writeJson, writeText } from "./output.js";
+import { writeJson, writeText } from "./output.js";
 import { storeOptions } from "./store.js";
 import { withExamples } from "./help.js";
 import { CliInputError } from "./errors.js";
@@ -72,7 +71,6 @@ export const threadCommand = Command.make(
   },
   ({ uri, store, compact, ansi, width, format, depth, parentHeight }) =>
     Effect.gen(function* () {
-      const output = yield* CliOutput;
       const outputFormat = Option.getOrElse(format, () => "text" as const);
       const w = Option.getOrUndefined(width);
       const { depth: depthValue, parentHeight: parentHeightValue } =
@@ -85,25 +83,13 @@ export const threadCommand = Command.make(
       if (Option.isSome(store)) {
         const index = yield* StoreIndex;
         const storeRef = yield* storeOptions.loadStoreRef(store.value);
-        const totalPosts = yield* index.count(storeRef);
-        if (totalPosts > 20000) {
-          yield* output
-            .writeStderr(
-              `ℹ️  Store ${storeRef.name} has ${totalPosts} posts. Thread rendering will load all posts into memory.`
-            )
-            .pipe(Effect.catchAll(() => Effect.void));
-        }
         const hasTarget = yield* index.hasUri(storeRef, uri);
         if (!hasTarget) {
           const engine = yield* SyncEngine;
           const source = DataSource.thread(uri, { depth: d, parentHeight: ph });
           yield* engine.sync(source, storeRef, all());
         }
-        const query = StoreQuery.make({});
-        const stream = index.query(storeRef, query);
-        const collected = yield* Stream.runCollect(stream);
-        const allPosts = Chunk.toReadonlyArray(collected);
-        const threadPosts = selectThreadPosts(allPosts, String(uri));
+        const threadPosts = yield* index.threadPosts(storeRef, uri);
         if (threadPosts.length === 0) {
           return yield* CliInputError.make({
             message: `Thread not found for ${uri}.`,
@@ -146,48 +132,3 @@ export const threadCommand = Command.make(
     )
   )
 );
-
-const selectThreadPosts = (posts: ReadonlyArray<Post>, targetUri: string) => {
-  const byUri = new Map(posts.map((post) => [String(post.uri), post]));
-  if (!byUri.has(targetUri)) {
-    return [] as ReadonlyArray<Post>;
-  }
-
-  const childMap = new Map<string, Post[]>();
-  for (const post of posts) {
-    const parentUri = post.reply?.parent?.uri ? String(post.reply.parent.uri) : undefined;
-    if (!parentUri || !byUri.has(parentUri)) {
-      continue;
-    }
-    const siblings = childMap.get(parentUri) ?? [];
-    siblings.push(post);
-    childMap.set(parentUri, siblings);
-  }
-
-  const threadUris = new Set<string>();
-  let current: Post | undefined = byUri.get(targetUri);
-  while (current) {
-    const currentUri = String(current.uri);
-    threadUris.add(currentUri);
-    const parentUri = current.reply?.parent?.uri
-      ? String(current.reply.parent.uri)
-      : undefined;
-    current = parentUri ? byUri.get(parentUri) : undefined;
-  }
-
-  const queue: Array<string> = [targetUri];
-  while (queue.length > 0) {
-    const next = queue.shift();
-    if (!next) break;
-    const children = childMap.get(next) ?? [];
-    for (const child of children) {
-      const childUri = String(child.uri);
-      if (!threadUris.has(childUri)) {
-        threadUris.add(childUri);
-        queue.push(childUri);
-      }
-    }
-  }
-
-  return posts.filter((post) => threadUris.has(String(post.uri)));
-};

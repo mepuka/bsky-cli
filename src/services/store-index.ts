@@ -89,6 +89,7 @@ export type ThreadGroup = {
 
 const postUriRow = Schema.Struct({ uri: PostUri });
 const postJsonRow = Schema.Struct({ post_json: Schema.String });
+const threadRootRow = Schema.Struct({ root_uri: PostUri });
 const postMetricRow = Schema.Struct({
   post_json: Schema.String,
   like_count: Schema.Number,
@@ -724,6 +725,20 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
     ) => Stream.Stream<Post, StoreIndexError>;
 
     /**
+     * Load posts for a thread containing the target URI
+     *
+     * Uses reply_root_uri to find the root, then returns all posts in that thread.
+     *
+     * @param store - Store reference to query
+     * @param uri - Post URI in the thread
+     * @returns Effect containing array of posts in the thread
+     */
+    readonly threadPosts: (
+      store: StoreRef,
+      uri: PostUri
+    ) => Effect.Effect<ReadonlyArray<Post>, StoreIndexError>;
+
+    /**
      * Search posts using full-text search (FTS5)
      *
      * Performs a full-text search across post content using SQLite FTS5.
@@ -1210,6 +1225,43 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         );
       };
 
+      const threadPosts = Effect.fn("StoreIndex.threadPosts")(
+        (store: StoreRef, uri: PostUri) =>
+          withClient(store, "StoreIndex.threadPosts failed", (client) =>
+            Effect.gen(function* () {
+              const rootRows = yield* client`SELECT COALESCE(reply_root_uri, uri) as root_uri
+                FROM posts
+                WHERE uri = ${uri}
+                LIMIT 1`;
+
+              if (rootRows.length === 0) {
+                return [] as ReadonlyArray<Post>;
+              }
+
+              const decodedRoot = yield* Schema.decodeUnknown(threadRootRow)(rootRows[0]).pipe(
+                Effect.mapError(toStoreIndexError("StoreIndex.threadPosts root decode failed"))
+              );
+              const rootUri = decodedRoot.root_uri;
+
+              const rows = yield* client`SELECT post_json FROM posts
+                WHERE uri = ${rootUri} OR reply_root_uri = ${rootUri}
+                ORDER BY created_at ASC`;
+
+              const decoded = yield* Schema.decodeUnknown(
+                Schema.Array(postJsonRow)
+              )(rows).pipe(
+                Effect.mapError(toStoreIndexError("StoreIndex.threadPosts decode failed"))
+              );
+
+              return yield* Effect.forEach(
+                decoded,
+                (row) => decodePostJson(row.post_json),
+                { discard: false }
+              );
+            })
+          )
+      );
+
       const searchPosts = Effect.fn("StoreIndex.searchPosts")(
         (store: StoreRef, input: { readonly query: string; readonly limit?: number; readonly cursor?: number; readonly sort?: SearchSort }) =>
           withClient(store, "StoreIndex.searchPosts failed", (client) =>
@@ -1373,6 +1425,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         loadCheckpoint,
         saveCheckpoint,
         query,
+        threadPosts,
         searchPosts,
         entries,
         threadGroups,
