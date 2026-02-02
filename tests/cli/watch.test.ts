@@ -160,6 +160,7 @@ describe("watch command", () => {
     const engineLayer = Layer.succeed(
       SyncEngine,
       SyncEngine.of({
+        stream: () => Stream.empty,
         sync: () => Effect.succeed(makeResult(0)),
         watch: () => Stream.fromIterable(events)
       })
@@ -209,6 +210,7 @@ describe("watch command", () => {
     const engineLayer = Layer.succeed(
       SyncEngine,
       SyncEngine.of({
+        stream: () => Stream.empty,
         sync: () => Effect.succeed(makeResult(0)),
         watch: () => timedStream
       })

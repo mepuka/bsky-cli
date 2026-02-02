@@ -134,7 +134,8 @@ skygent store remove-source <store> <id> [--prune]   # prune only for author
 
 Output via `writeJson` / `writeText` consistent with existing CLI conventions.
 
-Note: `--expand-members` is reserved for Phase 4. It is persisted but has no runtime effect yet.
+Note: `--expand-members` is implemented. List sources can fan out to author feeds
+at sync/watch time and aggregate results back to the list source.
 
 ### Sync/watch (primary path)
 
@@ -145,25 +146,24 @@ skygent watch <store> [--interval ...]
 
 Behavior:
 - Read active sources from `StoreSources`.
-- Run **serial** sync for correctness (Phase 2).
+- Use a **stream-first** pipeline (`SyncEngine.stream`) and per-source concurrency.
 - Per-source errors are captured in the output and do **not** stop other sources.
 - `lastSyncedAt` is updated only after a source sync completes successfully.
 - Watch reloads the store source registry each cycle so edits are picked up automatically.
-- Later optimization: concurrent fetch + serialized writes (see Phase 3).
 
 Existing `sync timeline|author|feed|list` commands remain for one‑off operations.
 
 ## Concurrency + Batch Patterns (Effect‑native)
 
-For Phase 3 (bulk sync):
-- Introduce a `SyncCoordinator` that:
-  - builds per‑source sync effects
-  - fetches concurrently (`Effect.forEach` with `concurrency` or `Stream.mapEffect`)
-  - serializes writes using an explicit per‑store `Semaphore` (pattern: `StoreDb` client cache)
-  - checkpoints only after successful batch writes
-- If batching external calls is needed, use `RequestResolver.makeBatched` with `Request.TaggedClass`,
-  combine with `RequestResolver.batchN`, and optionally `RequestResolver.dataLoader` (micro‑batching).
-Source-level concurrency should use `SyncSettings.concurrency` (env: `SKYGENT_SYNC_CONCURRENCY`).
+Current approach:
+- Stream-first sync (`SyncEngine.stream`) with `Stream.mapEffect` for concurrency.
+- Per-store serialization handled by a `Semaphore` inside `StoreCommitter`.
+- Checkpoints are saved from the stream pipeline (batch-aware).
+- Source-level concurrency uses `SyncSettings.concurrency` (env: `SKYGENT_SYNC_CONCURRENCY`).
+
+If external batching becomes necessary, use `RequestResolver.makeBatched` with
+`Request.TaggedClass`, combine with `RequestResolver.batchN`, and optionally
+`RequestResolver.dataLoader` (micro-batching).
 
 ## Pruning
 
@@ -197,7 +197,7 @@ Applied automatically by `StoreDb` migrator.
 - Per‑source `lastSyncedAt` updates.
 
 **Phase 4**
-- List expansion (`expandMembers`) and membership reconciliation.
+- List expansion (`expandMembers`) and membership reconciliation. (Implemented fan‑out + aggregation.)
 
 ## Open Questions
 

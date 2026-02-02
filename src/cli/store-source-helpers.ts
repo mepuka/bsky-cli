@@ -1,8 +1,10 @@
-import { Effect, Option } from "effect";
+import { Context, Effect, Option } from "effect";
 import { DataSource } from "../domain/sync.js";
 import type { StoreSource } from "../domain/store-sources.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { CliInputError, CliJsonError } from "./errors.js";
+import { BskyClient } from "../services/bsky-client.js";
+import type { Did } from "../domain/primitives.js";
 
 export type StoreSourceSelection = {
   readonly authorsOnly: boolean;
@@ -81,6 +83,42 @@ export const storeSourceDataSource = (source: StoreSource): DataSource => {
       return DataSource.jetstream();
   }
 };
+
+export const loadListMembers = (
+  client: Context.Tag.Service<typeof BskyClient>,
+  uri: string,
+  limit: number
+) =>
+  Effect.gen(function* () {
+    const members = new Set<Did>();
+    let cursor: string | undefined = undefined;
+
+    while (true) {
+      const response: {
+        readonly items: ReadonlyArray<{ readonly subject: { readonly did: Did } }>;
+        readonly cursor?: string;
+      } = yield* client.getList(
+        uri,
+        cursor ? { cursor, limit } : { limit }
+      );
+      for (const item of response.items) {
+        members.add(item.subject.did);
+      }
+      if (!response.cursor) {
+        break;
+      }
+      cursor = response.cursor;
+    }
+
+    return [...members] as ReadonlyArray<Did>;
+  }).pipe(
+    Effect.mapError((error) =>
+      CliInputError.make({
+        message: `Failed to load list members for ${uri}.`,
+        cause: error
+      })
+    )
+  );
 
 const wrapFilterError =
   (source: StoreSource, sourceId: string) => (error: CliInputError | CliJsonError) =>
