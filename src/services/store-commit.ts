@@ -11,7 +11,8 @@
  * - Error handling and mapping to StoreIoError
  */
 
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Ref } from "effect";
+import type { Semaphore } from "effect/Effect";
 import { StoreIoError } from "../domain/errors.js";
 import type { StorePath } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
@@ -124,19 +125,45 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
     Effect.gen(function* () {
       const storeDb = yield* StoreDb;
       const writer = yield* StoreWriter;
+      const locks = yield* Ref.make(new Map<string, Semaphore>());
+
+      const getLock = (storeName: string) =>
+        Effect.gen(function* () {
+          const current = yield* Ref.get(locks);
+          const existing = current.get(storeName);
+          if (existing) {
+            return existing;
+          }
+          const created = yield* Effect.makeSemaphore(1);
+          const next = new Map(current);
+          next.set(storeName, created);
+          yield* Ref.set(locks, next);
+          return created;
+        });
+
+      const withStoreLock = <A, E, R>(
+        store: StoreRef,
+        effect: Effect.Effect<A, E, R>
+      ): Effect.Effect<A, E, R> =>
+        getLock(store.name).pipe(
+          Effect.flatMap((semaphore) => semaphore.withPermits(1)(effect))
+        );
 
       const appendUpsert = Effect.fn("StoreCommitter.appendUpsert")(
         (store: StoreRef, event: PostUpsert) =>
-          storeDb
-            .withClient(store, (client) =>
-              client.withTransaction(
-                Effect.gen(function* () {
-                  yield* upsertPost(client, event.post);
-                  return yield* writer.appendWithClient(client, event);
-                })
+          withStoreLock(
+            store,
+            storeDb
+              .withClient(store, (client) =>
+                client.withTransaction(
+                  Effect.gen(function* () {
+                    yield* upsertPost(client, event.post);
+                    return yield* writer.appendWithClient(client, event);
+                  })
+                )
               )
-            )
-            .pipe(Effect.mapError(toStoreIoError(store.root)))
+              .pipe(Effect.mapError(toStoreIoError(store.root)))
+          )
       );
 
       const appendUpserts = Effect.fn("StoreCommitter.appendUpserts")(
@@ -144,50 +171,32 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
           if (events.length === 0) {
             return Effect.succeed([] as ReadonlyArray<EventLogEntry>);
           }
-          return storeDb
-            .withClient(store, (client) =>
-              client.withTransaction(
-                Effect.forEach(events, (event) =>
-                  Effect.gen(function* () {
-                    yield* upsertPost(client, event.post);
-                    return yield* writer.appendWithClient(client, event);
-                  })
+          return withStoreLock(
+            store,
+            storeDb
+              .withClient(store, (client) =>
+                client.withTransaction(
+                  Effect.forEach(events, (event) =>
+                    Effect.gen(function* () {
+                      yield* upsertPost(client, event.post);
+                      return yield* writer.appendWithClient(client, event);
+                    })
+                  )
                 )
               )
-            )
-            .pipe(Effect.mapError(toStoreIoError(store.root)));
+              .pipe(Effect.mapError(toStoreIoError(store.root)))
+          );
         }
       );
 
       const appendUpsertIfMissing = Effect.fn(
         "StoreCommitter.appendUpsertIfMissing"
       )((store: StoreRef, event: PostUpsert) =>
-        storeDb
-          .withClient(store, (client) =>
-            client.withTransaction(
-              Effect.gen(function* () {
-                const inserted = yield* insertPostIfMissing(client, event.post);
-                if (!inserted) {
-                  return Option.none<EventLogEntry>();
-                }
-                const entry = yield* writer.appendWithClient(client, event);
-                return Option.some(entry);
-              })
-            )
-          )
-          .pipe(Effect.mapError(toStoreIoError(store.root)))
-      );
-
-      const appendUpsertsIfMissing = Effect.fn(
-        "StoreCommitter.appendUpsertsIfMissing"
-      )((store: StoreRef, events: ReadonlyArray<PostUpsert>) => {
-        if (events.length === 0) {
-          return Effect.succeed([] as ReadonlyArray<Option.Option<EventLogEntry>>);
-        }
-        return storeDb
-          .withClient(store, (client) =>
-            client.withTransaction(
-              Effect.forEach(events, (event) =>
+        withStoreLock(
+          store,
+          storeDb
+            .withClient(store, (client) =>
+              client.withTransaction(
                 Effect.gen(function* () {
                   const inserted = yield* insertPostIfMissing(client, event.post);
                   if (!inserted) {
@@ -198,22 +207,52 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
                 })
               )
             )
-          )
-          .pipe(Effect.mapError(toStoreIoError(store.root)));
+            .pipe(Effect.mapError(toStoreIoError(store.root)))
+        )
+      );
+
+      const appendUpsertsIfMissing = Effect.fn(
+        "StoreCommitter.appendUpsertsIfMissing"
+      )((store: StoreRef, events: ReadonlyArray<PostUpsert>) => {
+        if (events.length === 0) {
+          return Effect.succeed([] as ReadonlyArray<Option.Option<EventLogEntry>>);
+        }
+        return withStoreLock(
+          store,
+          storeDb
+            .withClient(store, (client) =>
+              client.withTransaction(
+                Effect.forEach(events, (event) =>
+                  Effect.gen(function* () {
+                    const inserted = yield* insertPostIfMissing(client, event.post);
+                    if (!inserted) {
+                      return Option.none<EventLogEntry>();
+                    }
+                    const entry = yield* writer.appendWithClient(client, event);
+                    return Option.some(entry);
+                  })
+                )
+              )
+            )
+            .pipe(Effect.mapError(toStoreIoError(store.root)))
+        );
       });
 
       const appendDelete = Effect.fn("StoreCommitter.appendDelete")(
         (store: StoreRef, event: PostDelete) =>
-          storeDb
-            .withClient(store, (client) =>
-              client.withTransaction(
-                Effect.gen(function* () {
-                  yield* deletePost(client, event.uri);
-                  return yield* writer.appendWithClient(client, event);
-                })
+          withStoreLock(
+            store,
+            storeDb
+              .withClient(store, (client) =>
+                client.withTransaction(
+                  Effect.gen(function* () {
+                    yield* deletePost(client, event.uri);
+                    return yield* writer.appendWithClient(client, event);
+                  })
+                )
               )
-            )
-            .pipe(Effect.mapError(toStoreIoError(store.root)))
+              .pipe(Effect.mapError(toStoreIoError(store.root)))
+          )
       );
 
       return StoreCommitter.of({

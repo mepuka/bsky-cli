@@ -12,6 +12,7 @@ import { OutputManager } from "../services/output-manager.js";
 import { StoreIndex } from "../services/store-index.js";
 import { StoreSources } from "../services/store-sources.js";
 import { SyncEngine } from "../services/sync-engine.js";
+import { SyncSettings } from "../services/sync-settings.js";
 import { CliOutput, writeJson } from "./output.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { withExamples } from "./help.js";
@@ -495,6 +496,7 @@ const syncStoreCommand = Command.make(
       const outputManager = yield* OutputManager;
       const index = yield* StoreIndex;
       const storeSources = yield* StoreSources;
+      const settings = yield* SyncSettings;
 
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const storeConfig = yield* storeOptions.loadStoreConfig(store);
@@ -521,56 +523,63 @@ const syncStoreCommand = Command.make(
 
       const reporter = makeSyncReporter(quiet, monitor, output);
       const limitValue = Option.getOrUndefined(limit);
-      let combined = SyncResultMonoid.empty;
-      const sourceResults: Array<{
-        readonly id: string;
-        readonly type: string;
-        readonly result: SyncResult;
-      }> = [];
+      const results = yield* Effect.forEach(
+        sources,
+        (source) => {
+          const id = storeSourceId(source);
+          return Effect.gen(function* () {
+            const expr = yield* storeSourceFilterExpr(source, id);
+            const dataSource = storeSourceDataSource(source);
 
-      for (const source of sources) {
-        const id = storeSourceId(source);
-        const result = yield* Effect.gen(function* () {
-          const expr = yield* storeSourceFilterExpr(source, id);
-          const dataSource = storeSourceDataSource(source);
-
-          yield* logInfo("Starting sync", {
-            source: id,
-            type: source._tag,
-            store: storeRef.name
-          });
-
-          const syncResult = yield* sync
-            .sync(dataSource, storeRef, expr, {
-              policy,
-              ...(limitValue !== undefined ? { limit: limitValue } : {})
-            })
-            .pipe(Effect.provideService(SyncReporter, reporter));
-
-          yield* storeSources.markSynced(storeRef, id, new Date());
-          return syncResult;
-        }).pipe(
-          Effect.catchAll((error) => {
-            const message = error instanceof Error ? error.message : String(error);
-            const syncError = SyncError.make({ stage: "source", message, cause: error });
-            const failure = SyncResult.make({
-              postsAdded: 0,
-              postsDeleted: 0,
-              postsSkipped: 0,
-              errors: [syncError]
-            });
-            return logWarn("Source sync failed", {
-              store: storeRef.name,
+            yield* logInfo("Starting sync", {
               source: id,
               type: source._tag,
-              error: message
-            }).pipe(Effect.orElseSucceed(() => undefined), Effect.as(failure));
-          })
-        );
+              store: storeRef.name
+            });
 
-        combined = SyncResultMonoid.combine(combined, result);
-        sourceResults.push({ id, type: source._tag, result });
-      }
+            const syncResult = yield* sync
+              .sync(dataSource, storeRef, expr, {
+                policy,
+                ...(limitValue !== undefined ? { limit: limitValue } : {})
+              })
+              .pipe(Effect.provideService(SyncReporter, reporter));
+
+            yield* storeSources.markSynced(storeRef, id, new Date());
+            return { id, type: source._tag, result: syncResult };
+          }).pipe(
+            Effect.catchAll((error) => {
+              const message = error instanceof Error ? error.message : String(error);
+              const syncError = SyncError.make({ stage: "source", message, cause: error });
+              const failure = SyncResult.make({
+                postsAdded: 0,
+                postsDeleted: 0,
+                postsSkipped: 0,
+                errors: [syncError]
+              });
+              return logWarn("Source sync failed", {
+                store: storeRef.name,
+                source: id,
+                type: source._tag,
+                error: message
+              }).pipe(
+                Effect.orElseSucceed(() => undefined),
+                Effect.as({ id, type: source._tag, result: failure })
+              );
+            })
+          );
+        },
+        { concurrency: Math.min(settings.concurrency, sources.length || 1) }
+      );
+
+      const combined = results.reduce(
+        (acc, entry) => SyncResultMonoid.combine(acc, entry.result),
+        SyncResultMonoid.empty
+      );
+      const sourceResults = results.map((entry) => ({
+        id: entry.id,
+        type: entry.type,
+        result: entry.result
+      }));
 
       const materialized = yield* outputManager.materializeStore(storeRef);
       if (materialized.filters.length > 0) {

@@ -163,6 +163,7 @@ For Phase 3 (bulk sync):
   - checkpoints only after successful batch writes
 - If batching external calls is needed, use `RequestResolver.makeBatched` with `Request.TaggedClass`,
   combine with `RequestResolver.batchN`, and optionally `RequestResolver.dataLoader` (micro‑batching).
+Source-level concurrency should use `SyncSettings.concurrency` (env: `SKYGENT_SYNC_CONCURRENCY`).
 
 ## Pruning
 
