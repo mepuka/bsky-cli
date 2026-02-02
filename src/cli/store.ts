@@ -460,6 +460,11 @@ export const storeAddSource = Command.make(
             });
           }
 
+          const authorFilter =
+            apiFilter !== undefined
+              ? (apiFilter as (typeof authorFeedFilterValues)[number])
+              : undefined;
+
           yield* validateDslFilters(postFilter, postFilterJson);
 
           const identities = yield* IdentityResolver;
@@ -481,7 +486,7 @@ export const storeAddSource = Command.make(
           const source = AuthorSource.make({
             actor: resolved.did,
             ...(resolved.handle ? { display: resolved.handle } : {}),
-            ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
+            ...(authorFilter !== undefined ? { filter: authorFilter } : {}),
             ...(Option.isSome(postFilter) ? { postFilter: postFilter.value } : {}),
             ...(Option.isSome(postFilterJson) ? { postFilterJson: postFilterJson.value } : {}),
             addedAt,

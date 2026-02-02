@@ -1,10 +1,11 @@
 import { Schema } from "effect";
+import { AuthorFeedFilter } from "./bsky.js";
 import { AtUri, Did, Handle, Timestamp } from "./primitives.js";
 
 export class AuthorSource extends Schema.TaggedClass<AuthorSource>()("AuthorSource", {
   actor: Did,
   display: Schema.optional(Handle),
-  filter: Schema.optional(Schema.String),
+  filter: Schema.optional(AuthorFeedFilter),
   postFilter: Schema.optional(Schema.String),
   postFilterJson: Schema.optional(Schema.String),
   addedAt: Timestamp,

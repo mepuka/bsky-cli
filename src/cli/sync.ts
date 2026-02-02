@@ -2,7 +2,7 @@ import { Command, Options } from "@effect/cli";
 import { Effect, Layer, Option } from "effect";
 import { Jetstream } from "effect-jetstream";
 import { filterExprSignature } from "../domain/filter.js";
-import { DataSource, SyncResult } from "../domain/sync.js";
+import { DataSource, SyncResult, SyncResultMonoid } from "../domain/sync.js";
 import { JetstreamSyncEngine } from "../services/jetstream-sync.js";
 import { storeOptions } from "./store.js";
 import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
@@ -10,6 +10,8 @@ import { SyncReporter } from "../services/sync-reporter.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { OutputManager } from "../services/output-manager.js";
 import { StoreIndex } from "../services/store-index.js";
+import { StoreSources } from "../services/store-sources.js";
+import { SyncEngine } from "../services/sync-engine.js";
 import { CliOutput, writeJson } from "./output.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { withExamples } from "./help.js";
@@ -38,6 +40,12 @@ import {
   strictOption,
   maxErrorsOption
 } from "./shared-options.js";
+import { storeSourceId } from "../domain/store-sources.js";
+import {
+  resolveStoreSources,
+  storeSourceDataSource,
+  storeSourceFilterExpr
+} from "./store-source-helpers.js";
 import {
   depthOption as threadDepthOption,
   parentHeightOption as threadParentHeightOption,
@@ -65,6 +73,16 @@ const depthOption = threadDepthOption(
 );
 const parentHeightOption = threadParentHeightOption(
   "Thread parent height to include (0-1000, default 80)"
+);
+
+const authorsOnlyOption = Options.boolean("authors-only").pipe(
+  Options.withDescription("Sync only author sources from the store registry")
+);
+const feedsOnlyOption = Options.boolean("feeds-only").pipe(
+  Options.withDescription("Sync only feed sources from the store registry")
+);
+const listsOnlyOption = Options.boolean("lists-only").pipe(
+  Options.withDescription("Sync only list sources from the store registry")
 );
 
 
@@ -442,7 +460,153 @@ const jetstreamCommand = Command.make(
   )
 );
 
-export const syncCommand = Command.make("sync", {}).pipe(
+const syncStoreCommand = Command.make(
+  "sync",
+  {
+    store: storeNameOption,
+    authorsOnly: authorsOnlyOption,
+    feedsOnly: feedsOnlyOption,
+    listsOnly: listsOnlyOption,
+    quiet: quietOption,
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption,
+    noCacheImagesThumbnails: noCacheImagesThumbnailsOption,
+    limit: syncLimitOption
+  },
+  ({
+    store,
+    authorsOnly,
+    feedsOnly,
+    listsOnly,
+    quiet,
+    refresh,
+    cacheImages,
+    cacheImagesMode,
+    cacheImagesLimit,
+    noCacheImagesThumbnails,
+    limit
+  }) =>
+    Effect.gen(function* () {
+      const sync = yield* SyncEngine;
+      const monitor = yield* ResourceMonitor;
+      const output = yield* CliOutput;
+      const outputManager = yield* OutputManager;
+      const index = yield* StoreIndex;
+      const storeSources = yield* StoreSources;
+
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const storeConfig = yield* storeOptions.loadStoreConfig(store);
+      const sources = yield* storeSources
+        .list(storeRef)
+        .pipe(Effect.flatMap((list) =>
+          resolveStoreSources(list, { authorsOnly, feedsOnly, listsOnly })
+        ));
+      const basePolicy = storeConfig.syncPolicy ?? "dedupe";
+      const policy = refresh ? "refresh" : basePolicy;
+
+      yield* logInfo("Starting sync", {
+        source: "store",
+        store: storeRef.name,
+        sources: sources.length
+      });
+
+      if (policy === "refresh") {
+        yield* logWarn("Refresh mode updates existing posts and may grow the event log.", {
+          source: "store",
+          store: storeRef.name
+        });
+      }
+
+      const reporter = makeSyncReporter(quiet, monitor, output);
+      const limitValue = Option.getOrUndefined(limit);
+      let combined = SyncResultMonoid.empty;
+      const sourceResults: Array<{
+        readonly id: string;
+        readonly type: string;
+        readonly result: SyncResult;
+      }> = [];
+
+      for (const source of sources) {
+        const id = storeSourceId(source);
+        const expr = yield* storeSourceFilterExpr(source);
+        const dataSource = storeSourceDataSource(source);
+
+        yield* logInfo("Starting sync", {
+          source: id,
+          type: source._tag,
+          store: storeRef.name
+        });
+
+        const result = yield* sync
+          .sync(dataSource, storeRef, expr, {
+            policy,
+            ...(limitValue !== undefined ? { limit: limitValue } : {})
+          })
+          .pipe(Effect.provideService(SyncReporter, reporter));
+
+        combined = SyncResultMonoid.combine(combined, result);
+        sourceResults.push({ id, type: source._tag, result });
+        yield* storeSources.markSynced(storeRef, id, new Date());
+      }
+
+      const materialized = yield* outputManager.materializeStore(storeRef);
+      if (materialized.filters.length > 0) {
+        yield* logInfo("Materialized filter outputs", {
+          store: storeRef.name,
+          filters: materialized.filters.map((spec) => spec.name)
+        });
+      }
+
+      const totalPosts = yield* index.count(storeRef);
+
+      if (cacheImages) {
+        const mode = resolveCacheMode(cacheImagesMode);
+        const cacheLimit = resolveCacheLimit(mode, combined.postsAdded, cacheImagesLimit);
+        const shouldRun = mode === "full" || combined.postsAdded > 0;
+        if (shouldRun && cacheLimit !== 0) {
+          yield* Effect.gen(function* () {
+            if (mode === "full") {
+              yield* logWarn("Running full image cache scan", {
+                store: storeRef.name,
+                source: "store"
+              });
+            }
+            yield* logInfo("Caching image embeds", {
+              store: storeRef.name,
+              source: "store",
+              postsAdded: combined.postsAdded
+            });
+            const cacheResult = yield* cacheStoreImages(storeRef, {
+              includeThumbnails: !noCacheImagesThumbnails,
+              ...(cacheLimit !== undefined ? { limit: cacheLimit } : {})
+            });
+            yield* logInfo("Image cache complete", cacheResult);
+          }).pipe(
+            Effect.catchAll((error) =>
+              logWarn("Image cache failed", {
+                store: storeRef.name,
+                source: "store",
+                error
+              }).pipe(Effect.orElseSucceed(() => undefined))
+            )
+          );
+        }
+      }
+
+      yield* logInfo("Sync complete", { source: "store", store: storeRef.name });
+
+      yield* writeJson({
+        store: storeRef.name,
+        sources: sourceResults,
+        ...(combined as SyncResult),
+        totalPosts
+      });
+    })
+);
+
+export const syncCommand = syncStoreCommand.pipe(
   Command.withSubcommands([
     timelineCommand,
     feedCommand,
@@ -454,6 +618,7 @@ export const syncCommand = Command.make("sync", {}).pipe(
   ]),
   Command.withDescription(
     withExamples("Sync content into stores", [
+      "skygent sync my-store",
       "skygent sync timeline --store my-store"
     ])
   )

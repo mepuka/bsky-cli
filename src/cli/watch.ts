@@ -1,10 +1,11 @@
 import { Command, Options } from "@effect/cli";
-import { Effect, Layer, Option, Stream } from "effect";
+import { Effect, Layer, Option, Schedule, Stream } from "effect";
 import { Jetstream } from "effect-jetstream";
 import { filterExprSignature } from "../domain/filter.js";
-import { DataSource } from "../domain/sync.js";
+import { DataSource, SyncResult, SyncResultMonoid } from "../domain/sync.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { JetstreamSyncEngine } from "../services/jetstream-sync.js";
+import { SyncEngine } from "../services/sync-engine.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { CliOutput, writeJsonStream } from "./output.js";
 import { storeOptions } from "./store.js";
@@ -13,7 +14,7 @@ import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { makeWatchCommandBody, resolveCacheLimit, resolveCacheMode } from "./sync-factory.js";
-import { parseOptionalDuration } from "./interval.js";
+import { parseInterval, parseOptionalDuration } from "./interval.js";
 import { cacheStoreImages } from "./image-cache.js";
 import {
   feedUriArg,
@@ -36,6 +37,13 @@ import {
   strictOption,
   maxErrorsOption
 } from "./shared-options.js";
+import { storeSourceId } from "../domain/store-sources.js";
+import { StoreSources } from "../services/store-sources.js";
+import {
+  resolveStoreSources,
+  storeSourceDataSource,
+  storeSourceFilterExpr
+} from "./store-source-helpers.js";
 import {
   depthOption as threadDepthOption,
   parentHeightOption as threadParentHeightOption,
@@ -65,6 +73,16 @@ const depthOption = threadDepthOption(
 );
 const parentHeightOption = threadParentHeightOption(
   "Thread parent height to include (0-1000, default 80)"
+);
+
+const authorsOnlyOption = Options.boolean("authors-only").pipe(
+  Options.withDescription("Watch only author sources from the store registry")
+);
+const feedsOnlyOption = Options.boolean("feeds-only").pipe(
+  Options.withDescription("Watch only feed sources from the store registry")
+);
+const listsOnlyOption = Options.boolean("lists-only").pipe(
+  Options.withDescription("Watch only list sources from the store registry")
 );
 
 const timelineCommand = Command.make(
@@ -467,7 +485,183 @@ const jetstreamCommand = Command.make(
   )
 );
 
-export const watchCommand = Command.make("watch", {}).pipe(
+const watchStoreCommand = Command.make(
+  "watch",
+  {
+    store: storeNameOption,
+    authorsOnly: authorsOnlyOption,
+    feedsOnly: feedsOnlyOption,
+    listsOnly: listsOnlyOption,
+    interval: intervalOption,
+    maxCycles: maxCyclesOption,
+    until: untilOption,
+    quiet: quietOption,
+    refresh: refreshOption,
+    cacheImages: cacheImagesOption,
+    cacheImagesMode: cacheImagesModeOption,
+    cacheImagesLimit: cacheImagesLimitOption,
+    noCacheImagesThumbnails: noCacheImagesThumbnailsOption
+  },
+  ({
+    store,
+    authorsOnly,
+    feedsOnly,
+    listsOnly,
+    interval,
+    maxCycles,
+    until,
+    quiet,
+    refresh,
+    cacheImages,
+    cacheImagesMode,
+    cacheImagesLimit,
+    noCacheImagesThumbnails
+  }) =>
+    Effect.gen(function* () {
+      const sync = yield* SyncEngine;
+      const monitor = yield* ResourceMonitor;
+      const output = yield* CliOutput;
+      const storeSources = yield* StoreSources;
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const storeConfig = yield* storeOptions.loadStoreConfig(store);
+      const sources = yield* storeSources
+        .list(storeRef)
+        .pipe(Effect.flatMap((list) =>
+          resolveStoreSources(list, { authorsOnly, feedsOnly, listsOnly })
+        ));
+      const basePolicy = storeConfig.syncPolicy ?? "dedupe";
+      const policy = refresh ? "refresh" : basePolicy;
+      const parsedInterval = parseInterval(interval);
+      const parsedUntil = parseOptionalDuration(until);
+      const reporter = makeSyncReporter(quiet, monitor, output);
+      const cacheMode = cacheImages ? resolveCacheMode(cacheImagesMode) : "new";
+
+      yield* logInfo("Starting watch", {
+        source: "store",
+        store: storeRef.name,
+        sources: sources.length
+      });
+
+      if (policy === "refresh") {
+        yield* logWarn("Refresh mode updates existing posts and may grow the event log.", {
+          source: "store",
+          store: storeRef.name
+        });
+      }
+
+      if (cacheImages && cacheMode === "full") {
+        yield* Effect.gen(function* () {
+          yield* logWarn("Running full image cache scan", {
+            store: storeRef.name,
+            source: "store"
+          });
+          const cacheResult = yield* cacheStoreImages(storeRef, {
+            includeThumbnails: !noCacheImagesThumbnails,
+            ...(Option.isSome(cacheImagesLimit)
+              ? { limit: cacheImagesLimit.value }
+              : {})
+          });
+          yield* logInfo("Image cache complete", cacheResult);
+        }).pipe(
+          Effect.catchAll((error) =>
+            logWarn("Image cache failed", {
+              store: storeRef.name,
+              source: "store",
+              error
+            }).pipe(Effect.orElseSucceed(() => undefined))
+          )
+        );
+      }
+
+      const runCycle = Effect.gen(function* () {
+        let combined = SyncResultMonoid.empty;
+        const sourceResults: Array<{
+          readonly id: string;
+          readonly type: string;
+          readonly result: SyncResult;
+        }> = [];
+
+        for (const source of sources) {
+          const id = storeSourceId(source);
+          const expr = yield* storeSourceFilterExpr(source);
+          const dataSource = storeSourceDataSource(source);
+
+          yield* logInfo("Starting sync", {
+            source: id,
+            type: source._tag,
+            store: storeRef.name
+          });
+
+          const result = yield* sync
+            .sync(dataSource, storeRef, expr, { policy })
+            .pipe(Effect.provideService(SyncReporter, reporter));
+
+          combined = SyncResultMonoid.combine(combined, result);
+          sourceResults.push({ id, type: source._tag, result });
+          yield* storeSources.markSynced(storeRef, id, new Date());
+        }
+
+        return {
+          store: storeRef.name,
+          sources: sourceResults,
+          ...(combined as SyncResult)
+        };
+      });
+
+      const baseStream = Stream.repeatEffectWithSchedule(
+        runCycle,
+        Schedule.spaced(parsedInterval)
+      );
+
+      let outputStream = cacheImages
+        ? baseStream.pipe(
+            Stream.mapEffect((result) =>
+              result.postsAdded > 0
+                ? Effect.gen(function* () {
+                    const cacheLimit = resolveCacheLimit(
+                      "new",
+                      result.postsAdded,
+                      cacheImagesLimit
+                    );
+                    yield* logInfo("Caching image embeds", {
+                      store: storeRef.name,
+                      source: "store",
+                      postsAdded: result.postsAdded
+                    });
+                    const cacheResult = yield* cacheStoreImages(storeRef, {
+                      includeThumbnails: !noCacheImagesThumbnails,
+                      ...(cacheLimit !== undefined && cacheLimit > 0
+                        ? { limit: cacheLimit }
+                        : {})
+                    });
+                    yield* logInfo("Image cache complete", cacheResult);
+                  }).pipe(
+                    Effect.catchAll((error) =>
+                      logWarn("Image cache failed", {
+                        store: storeRef.name,
+                        source: "store",
+                        error
+                      }).pipe(Effect.orElseSucceed(() => undefined))
+                    ),
+                    Effect.as(result)
+                  )
+                : Effect.succeed(result)
+            )
+          )
+        : baseStream;
+
+      const limited = Option.isSome(maxCycles)
+        ? outputStream.pipe(Stream.take(maxCycles.value))
+        : outputStream;
+      const timed = Option.isSome(parsedUntil)
+        ? limited.pipe(Stream.interruptWhen(Effect.sleep(parsedUntil.value)))
+        : limited;
+
+      return yield* writeJsonStream(timed);
+    })
+);
+
+export const watchCommand = watchStoreCommand.pipe(
   Command.withSubcommands([
     timelineCommand,
     feedCommand,
@@ -479,6 +673,7 @@ export const watchCommand = Command.make("watch", {}).pipe(
   ]),
   Command.withDescription(
     withExamples("Continuously sync and emit results", [
+      "skygent watch my-store --interval \"5 minutes\"",
       "skygent watch timeline --store my-store --interval \"2 minutes\""
     ])
   )
