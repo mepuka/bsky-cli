@@ -1,6 +1,6 @@
+import { BunStream } from "@effect/platform-bun";
 import { SystemError, type PlatformError } from "@effect/platform/Error";
-import { Context, Effect, Layer, Stream } from "effect";
-import { createInterface } from "node:readline";
+import { Context, Layer, Stream } from "effect";
 import { fstatSync } from "node:fs";
 import { isatty } from "node:tty";
 
@@ -10,31 +10,24 @@ export interface CliInputService {
   readonly isReadable: boolean;
 }
 
-const makeLines = () =>
-  Stream.unwrapScoped(
-    Effect.acquireRelease(
-      Effect.sync(() =>
-        createInterface({
-          input: process.stdin,
-          crlfDelay: Infinity
-        })
-      ),
-      (rl) => Effect.sync(() => rl.close())
-    ).pipe(
-      Effect.map((rl) =>
-        Stream.fromAsyncIterable(
-          rl,
-          (cause) =>
-            new SystemError({
-              module: "Stream",
-              method: "stdin",
-              reason: "Unknown",
-              cause
-            })
-        )
-      )
-    )
+const makeLines = () => {
+  const decoder = new TextDecoder();
+  return BunStream.fromReadable(
+    () => process.stdin,
+    (cause) =>
+      new SystemError({
+        module: "Stream",
+        method: "stdin",
+        reason: "Unknown",
+        cause
+      }),
+    { closeOnDone: false }
+  ).pipe(
+    Stream.map((chunk) => decoder.decode(chunk, { stream: true })),
+    Stream.concat(Stream.succeed(decoder.decode())),
+    Stream.splitLines
   );
+};
 
 export class CliInput extends Context.Tag("@skygent/CliInput")<
   CliInput,
