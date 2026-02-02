@@ -2,7 +2,7 @@
 
 Goal: deliver an Effect-native system for image/embed indexing, extraction, rendering, and local caching that addresses issues #135-#138.
 
-Status: in progress (phases 0–2 implemented; cache/archive underway).
+Status: in progress (core extraction/rendering/indexing implemented; cache cleanup + docs/tests/FTS alt-text pushdown pending).
 
 ## Scope (issues)
 
@@ -36,10 +36,12 @@ Status: in progress (phases 0–2 implemented; cache/archive underway).
 ## Current state (relevant)
 
 - Embeds modeled in `src/domain/bsky.ts` (`EmbedImages`, `EmbedVideo`, `EmbedExternal`).
-- Store index has `has_images` and `has_video` only.
-- FTS `posts_fts` indexes `posts.text`.
-- Compact output drops embed details; card/table/thread omit images.
-- Raw embed data preserved in `post_json` only.
+- Image extraction + summaries in `src/domain/embeds.ts` + `src/domain/images.ts`.
+- Store index includes `image_count`, `alt_text`, `has_alt_text` with migration 008.
+- Filter DSL/runtime supports `min-images`, `alt-text`, `no-alt-text`, `has:alt-text`.
+- Compact output includes `embedSummary`; card/table/thread render embed summaries.
+- Query supports `@images`, `@embeds`, `@media`, `--extract-images`, `--resolve-images`, `--cache-images`.
+- Image cache stack implemented (fetcher, archive, persisted metadata cache, CLI commands, sync/watch/query flags).
 
 ## Data model and extraction
 
@@ -136,15 +138,15 @@ Integration points:
 
 ## Terminal rendering (#138)
 
-- Card format: add `[N images]`, alt snippets, external preview, quote indicator.
-- Table format: add `embed` summary column (e.g. `4img`, `1vid`, `link:example.com`, `quote`).
-- ANSI thread: placeholders for images + alt text, embed type indicators.
+- Implemented:
+  - Card + thread: embed summaries + details in `src/cli/doc/post.ts`.
+  - Table/markdown: embed summary column in `src/domain/format.ts`.
+  - ANSI styling in `src/cli/doc/annotation.ts`.
 
 Integration points:
 - `src/cli/doc/post.ts`
 - `src/cli/doc/annotation.ts`
-- `src/cli/output-render.ts`
-- `src/cli/output-format.ts`
+- `src/domain/format.ts`
 
 ## Caching + archival (#137)
 
@@ -198,6 +200,28 @@ Suggested env knobs:
 - Flags require images to be in the output (`--extract-images` or `--fields` including `images`).
 - Optional lazy caching during query (opt-in).
 - Background caching during sync/watch (opt-in via `--cache-images`).
+
+## Remaining work (updated)
+
+### #135 Index image count and alt text for filtering
+- Use FTS `alt_text` column for `alt-text:` pushdown (currently falls back to `instr` on `posts.alt_text`).
+- Decide on backfill strategy for stores without full event logs (document dependency vs add backfill path).
+- Update filter docs/help to include `min-images`, `alt-text`, `no-alt-text`, `has:alt-text`.
+
+### #136 Image/embed extraction to query output
+- Add tests for `--extract-images` in json/ndjson/table modes and `embedSummary` projection.
+- Update README/query docs with new presets + flags.
+- Clarify `--limit` semantics when `--extract-images` is active (or add a dedicated `--image-limit`).
+- Document or extend field selectors for array subfields (e.g. `images.*.alt`).
+
+### #137 Local image caching and archival
+- Add cache integrity + cleanup: verify archive file existence on metadata hit, delete orphaned files on invalidate/TTL sweep.
+- Add an archive ref-index (hash/path → refcount, lastAccessed) to prevent leaks with content-hash storage.
+- Add `--cache-images-thumbnails` (or `--no-cache-images-thumbnails`) for sync/watch parity with store cache.
+- Add tests for invalidation cleanup, missing-file status, and sweep behavior.
+
+### #138 Render image embeds in card and terminal output
+- Add tests for alt-text/detail rendering and record-with-media images.
 
 ## Services and layers
 
