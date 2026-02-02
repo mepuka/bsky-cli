@@ -163,7 +163,8 @@ Implemented:
 - `derive` supports `--include-author` / `--exclude-author`.
 - `sync <store>` + `watch <store>` read from store source registry.
 - Per-source concurrency + `lastSyncedAt` updates on success.
-- List expansion (`expandMembers`) fan-out with aggregation.
+- List expansion (`expandMembers`) fan‑out with aggregation.
+- `sync <store> --limit` applies across list members when `expandMembers` is enabled (sequential).
 
 Known gaps (next steps):
 - **JetstreamSource watch**: store watch skips Jetstream sources (use `watch jetstream` for streaming).

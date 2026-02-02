@@ -808,10 +808,7 @@ export const storeDelete = Command.make(
         const confirmed = normalized === "y" || normalized === "yes";
         if (!confirmed) {
           yield* writeJson({ deleted: false, reason: "cancelled" });
-          return yield* CliInputError.make({
-            message: `Store "${name}" was not deleted (cancelled by user).`,
-            cause: { deleted: false, reason: "cancelled" }
-          });
+          return;
         }
       }
       const cleaner = yield* StoreCleaner;

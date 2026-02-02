@@ -167,10 +167,12 @@ export class StoreSources extends Context.Tag("@skygent/StoreSources")<
                 )
               );
               if (rows.length === 0) {
-                return yield* StoreSourcesError.make({
-                  message: `Source not found: ${id}`,
-                  operation: "storeSourcesUpdate"
-                });
+                return yield* Effect.fail(
+                  StoreSourcesError.make({
+                    message: `Source not found: ${id}`,
+                    operation: "storeSourcesUpdate"
+                  })
+                );
               }
               const decoded = yield* Schema.decodeUnknown(
                 Schema.Array(Schema.Struct({ source_json: Schema.String }))

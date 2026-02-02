@@ -103,4 +103,27 @@ describe("StoreSources", () => {
       await removeTempDir(tempDir);
     }
   });
+
+  test("setEnabled fails when source id is missing", async () => {
+    const program = Effect.gen(function* () {
+      const sources = yield* StoreSources;
+      return yield* sources
+        .setEnabled(sampleStore, "missing-source", false)
+        .pipe(Effect.either);
+    });
+
+    const tempDir = await makeTempDir();
+    try {
+      const layer = buildLayer(tempDir);
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("StoreSourcesError");
+        expect(result.left.message).toContain("Source not found");
+      }
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
 });
