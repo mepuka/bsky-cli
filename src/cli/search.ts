@@ -15,6 +15,7 @@ import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
+import { normalizeDateOnlyInput } from "./time.js";
 
 const queryArg = Args.text({ name: "query" }).pipe(
   Args.withDescription("Search query string")
@@ -288,12 +289,14 @@ const postsCommand = Command.make(
         });
         const parsedAuthor = Option.getOrUndefined(author);
         const parsedMentions = Option.getOrUndefined(mentions);
-      const result = yield* client.searchPosts(queryValue, {
-        ...(limitValue !== undefined ? { limit: limitValue } : {}),
-        ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
-        ...(sortValue ? { sort: sortValue } : {}),
-        ...(Option.isSome(since) ? { since: since.value } : {}),
-          ...(Option.isSome(until) ? { until: until.value } : {}),
+        const normalizedSince = Option.map(since, (value) => normalizeDateOnlyInput(value));
+        const normalizedUntil = Option.map(until, (value) => normalizeDateOnlyInput(value));
+        const result = yield* client.searchPosts(queryValue, {
+          ...(limitValue !== undefined ? { limit: limitValue } : {}),
+          ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
+          ...(sortValue ? { sort: sortValue } : {}),
+          ...(Option.isSome(normalizedSince) ? { since: normalizedSince.value } : {}),
+          ...(Option.isSome(normalizedUntil) ? { until: normalizedUntil.value } : {}),
           ...(parsedMentions ? { mentions: parsedMentions } : {}),
           ...(parsedAuthor ? { author: parsedAuthor } : {}),
           ...(Option.isSome(lang) ? { lang: lang.value } : {}),

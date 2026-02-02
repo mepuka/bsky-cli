@@ -169,3 +169,9 @@ export const parseTimeInput = (
       })
     );
   });
+
+export const normalizeDateOnlyInput = (raw: string): string => {
+  const trimmed = raw.trim();
+  const dateOnly = parseDateOnly(trimmed);
+  return dateOnly ? dateOnly.toISOString() : trimmed;
+};
