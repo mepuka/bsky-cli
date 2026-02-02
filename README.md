@@ -116,12 +116,16 @@ skygent query my-store --limit 25 --format table
 skygent query my-store --filter 'hashtag:#ai' --sort desc --format json
 skygent query my-store --range 2024-01-01T00:00:00Z..2024-01-31T00:00:00Z
 skygent query my-store --fields @minimal --newest-first
+skygent query my-store --fields @images --resolve-images
+skygent query my-store --extract-images --format json
 skygent query store-a,store-b --format ndjson
 ```
 
 **Formats:** `json`, `ndjson`, `table`, `markdown`, `compact`, `card`, `thread`
 
-**Field presets:** `@minimal`, `@social`, `@full`, or comma-separated field names with dot notation.
+**Field presets:** `@minimal`, `@social`, `@full`, `@images`, `@embeds`, `@media`, or comma-separated field names with dot notation (use `*` to traverse arrays, e.g. `images.*.alt`).
+
+**Image options:** `--extract-images`, `--resolve-images`, `--cache-images` (requires images in output), `--no-cache-images-thumbnails`.
 
 Multi-store queries accept comma-separated store lists or repeated store arguments and include store names in output by default.
 

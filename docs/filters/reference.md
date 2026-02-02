@@ -37,6 +37,16 @@ Need a quick predicate list? Run `skygent filter help`.
   - `{"_tag":"Engagement","minLikes":100,"minReplies":5}`
 - Images: `hasimages`
   - `{"_tag":"HasImages"}`
+- Minimum images: `min-images:2`
+  - `{"_tag":"MinImages","min":2}`
+- Has alt text: `has:alt-text`
+  - `{"_tag":"HasAltText"}`
+- No alt text: `no-alt-text`
+  - `{"_tag":"NoAltText"}`
+- Alt text: `alt-text:"diagram"`
+  - `{"_tag":"AltText","text":"diagram"}`
+- Alt text regex: `alt-text:/diagram/i`
+  - `{"_tag":"AltTextRegex","pattern":"diagram","flags":"i"}`
 - Video: `hasvideo`
   - `{"_tag":"HasVideo"}`
 - Links: `haslinks`
@@ -93,7 +103,7 @@ Defaults:
 - `authors:alice,bob` → `authorin:alice,bob`
 - `tags:#ai,#ml` → `hashtagin:#ai,#ml`
 - `is:reply|quote|repost|original`
-- `has:images|video|links|media|embed`
+- `has:images|video|links|media|embed|alt-text`
 
 ## Named filters
 

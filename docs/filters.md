@@ -60,6 +60,16 @@ Each entry shows a DSL example and the equivalent JSON shape.
   - `{ "_tag": "Engagement", "minLikes": 100, "minReplies": 5 }`
 - Images: `hasimages` or `images`
   - `{ "_tag": "HasImages" }`
+- Minimum images: `min-images:2`
+  - `{ "_tag": "MinImages", "min": 2 }`
+- Has alt text: `has:alt-text`
+  - `{ "_tag": "HasAltText" }`
+- No alt text: `no-alt-text`
+  - `{ "_tag": "NoAltText" }`
+- Alt text: `alt-text:"diagram"`
+  - `{ "_tag": "AltText", "text": "diagram" }`
+- Alt text regex: `alt-text:/diagram/i`
+  - `{ "_tag": "AltTextRegex", "pattern": "diagram", "flags": "i" }`
 - Video: `hasvideo` or `video`
   - `{ "_tag": "HasVideo" }`
 - Links: `haslinks`

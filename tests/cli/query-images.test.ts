@@ -1,6 +1,6 @@
 import { Command } from "@effect/cli";
 import { BunContext } from "@effect/platform-bun";
-import { FileSystem } from "@effect/platform";
+import { FileSystem, Path } from "@effect/platform";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import * as Persistence from "@effect/experimental/Persistence";
 import { describe, expect, test } from "bun:test";
@@ -24,6 +24,7 @@ import { ImageArchive } from "../../src/services/images/image-archive.js";
 import { ImageCache } from "../../src/services/images/image-cache.js";
 import { ImageConfig } from "../../src/services/images/image-config.js";
 import { ImagePipeline } from "../../src/services/images/image-pipeline.js";
+import { cacheSweepForStore, cacheTtlSweep } from "../../src/cli/image-cache.js";
 
 const sampleConfig = Schema.decodeUnknownSync(StoreConfig)({
   format: { json: true, markdown: false },
@@ -232,6 +233,14 @@ const setupAppLayer = (
 const parseJson = (stdout: ReadonlyArray<string>) =>
   JSON.parse(stdout.join("").trim());
 
+const parseNdjson = (stdout: ReadonlyArray<string>) =>
+  stdout
+    .join("")
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+
 describe("query image cache integration", () => {
   test("resolve-images rewrites URLs without fetching", async () => {
     let calls = 0;
@@ -375,6 +384,131 @@ describe("query image cache integration", () => {
     }
   });
 
+  test("extract-images outputs json image rows", async () => {
+    const fetcherLayer = makeFetcherLayer(() => undefined);
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(tempDir, [], fetcherLayer);
+    const run = Command.run(queryCommand, { name: "skygent", version: "0.0.0" });
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+
+          const store = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("images"),
+            sampleConfig
+          );
+          const post = makePostWithImages();
+          yield* index.apply(store, makeRecord(post, "01ARZ3NDEKTSV4RRFFQ69G5FAX"));
+
+          yield* run([
+            "node",
+            "skygent",
+            "images",
+            "--extract-images",
+            "--format",
+            "json"
+          ]);
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
+      const payload = parseJson(stdout) as Array<{ postUri: string; imageUrl: string; thumbUrl: string; alt?: string }>;
+      expect(payload).toHaveLength(1);
+      expect(payload[0]).toMatchObject({
+        postUri: "at://did:plc:example/app.bsky.feed.post/1",
+        imageUrl: "https://example.com/full.png",
+        thumbUrl: "https://example.com/thumb.png"
+      });
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("extract-images outputs ndjson image rows", async () => {
+    const fetcherLayer = makeFetcherLayer(() => undefined);
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(tempDir, [], fetcherLayer);
+    const run = Command.run(queryCommand, { name: "skygent", version: "0.0.0" });
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+
+          const store = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("images"),
+            sampleConfig
+          );
+          const post = makePostWithImages();
+          yield* index.apply(store, makeRecord(post, "01ARZ3NDEKTSV4RRFFQ69G5FAY"));
+
+          yield* run([
+            "node",
+            "skygent",
+            "images",
+            "--extract-images",
+            "--format",
+            "ndjson"
+          ]);
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
+      const payload = parseNdjson(stdout) as Array<{ postUri: string; imageUrl: string; thumbUrl: string }>;
+      expect(payload).toHaveLength(1);
+      expect(payload[0]).toMatchObject({
+        postUri: "at://did:plc:example/app.bsky.feed.post/1",
+        imageUrl: "https://example.com/full.png",
+        thumbUrl: "https://example.com/thumb.png"
+      });
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("extract-images outputs table rows", async () => {
+    const fetcherLayer = makeFetcherLayer(() => undefined);
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(tempDir, [], fetcherLayer);
+    const run = Command.run(queryCommand, { name: "skygent", version: "0.0.0" });
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+
+          const store = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("images"),
+            sampleConfig
+          );
+          const post = makePostWithImages();
+          yield* index.apply(store, makeRecord(post, "01ARZ3NDEKTSV4RRFFQ69G5FAZ"));
+
+          yield* run([
+            "node",
+            "skygent",
+            "images",
+            "--extract-images",
+            "--format",
+            "table"
+          ]);
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
+      const output = stdout.join("");
+      expect(output).toContain("Image URL");
+      expect(output).toContain("https://example.com/full.png");
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
   test("cache-images requires images in output", async () => {
     const fetcherLayer = makeFetcherLayer(() => undefined);
     const tempDir = await makeTempDir();
@@ -448,6 +582,149 @@ describe("query image cache integration", () => {
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("CliInputError");
       }
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("fields preset embeds includes embedSummary", async () => {
+    const fetcherLayer = makeFetcherLayer(() => undefined);
+    const tempDir = await makeTempDir();
+    const { appLayer, stdoutRef } = setupAppLayer(
+      tempDir,
+      [["SKYGENT_IMAGE_CACHE_ENABLED", "true"]],
+      fetcherLayer
+    );
+    const run = Command.run(queryCommand, { name: "skygent", version: "0.0.0" });
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+          const store = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("images"),
+            sampleConfig
+          );
+          const post = makePostWithImages();
+          yield* index.apply(store, makeRecord(post, "01ARZ3NDEKTSV4RRFFQ69G5FAX"));
+
+          yield* run([
+            "node",
+            "skygent",
+            "images",
+            "--fields",
+            "@embeds",
+            "--format",
+            "json"
+          ]);
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
+      const payload = parseJson(stdout) as Array<{ embedSummary?: { type?: string; imageSummary?: { imageCount?: number } } }>;
+      const summary = payload[0]?.embedSummary;
+
+      expect(summary?.type).toBe("images");
+      expect(summary?.imageSummary?.imageCount).toBe(1);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("cache sweep removes orphaned files", async () => {
+    const fetcherLayer = makeFetcherLayer(() => undefined);
+    const tempDir = await makeTempDir();
+    const { appLayer } = setupAppLayer(
+      tempDir,
+      [["SKYGENT_IMAGE_CACHE_ENABLED", "true"]],
+      fetcherLayer
+    );
+
+    try {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const index = yield* StoreIndex;
+          const cache = yield* ImageCache;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const config = yield* ImageConfig;
+
+          const store = yield* manager.createStore(
+            Schema.decodeUnknownSync(StoreName)("images"),
+            sampleConfig
+          );
+          const post = makePostWithImages();
+          yield* index.apply(store, makeRecord(post, "01ARZ3NDEKTSV4RRFFQ69G5FAY"));
+
+          yield* cache.get("https://example.com/full.png", "original");
+
+          const orphanDir = path.join(config.cacheRoot, "original");
+          const orphanPath = path.join(orphanDir, "orphan.bin");
+          yield* fs.makeDirectory(orphanDir, { recursive: true });
+          yield* fs.writeFile(orphanPath, new Uint8Array([1, 2, 3]));
+
+          const sweep = yield* cacheSweepForStore(store, {
+            includeThumbnails: false,
+            remove: true
+          });
+          const orphanExists = yield* fs.exists(orphanPath).pipe(
+            Effect.orElseSucceed(() => false)
+          );
+
+          return { sweep, orphanExists };
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      expect(result.sweep.orphanedFiles).toBe(1);
+      expect(result.sweep.removedFiles).toBe(1);
+      expect(result.orphanExists).toBe(false);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("cache ttl sweep removes expired files", async () => {
+    const fetcherLayer = makeFetcherLayer(() => undefined);
+    const tempDir = await makeTempDir();
+    const { appLayer } = setupAppLayer(
+      tempDir,
+      [
+        ["SKYGENT_IMAGE_CACHE_ENABLED", "true"],
+        ["SKYGENT_IMAGE_CACHE_TTL", "0 millis"]
+      ],
+      fetcherLayer
+    );
+
+    try {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const cache = yield* ImageCache;
+          const archive = yield* ImageArchive;
+          const fs = yield* FileSystem.FileSystem;
+
+          const asset = yield* cache.get(
+            "https://example.com/full.png",
+            "original"
+          );
+          const filePath = archive.resolvePath(asset);
+
+          const sweep = yield* cacheTtlSweep({
+            includeThumbnails: false,
+            remove: true
+          });
+          const existsAfter = yield* fs.exists(filePath).pipe(
+            Effect.orElseSucceed(() => false)
+          );
+
+          return { sweep, existsAfter };
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      expect(result.sweep.expiredFiles).toBe(1);
+      expect(result.sweep.removedFiles).toBe(1);
+      expect(result.existsAfter).toBe(false);
     } finally {
       await removeTempDir(tempDir);
     }

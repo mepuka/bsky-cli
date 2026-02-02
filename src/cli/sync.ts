@@ -34,6 +34,7 @@ import {
   cacheImagesOption,
   cacheImagesModeOption,
   cacheImagesLimitOption,
+  noCacheImagesThumbnailsOption,
   strictOption,
   maxErrorsOption
 } from "./shared-options.js";
@@ -78,6 +79,7 @@ const timelineCommand = Command.make(
     cacheImages: cacheImagesOption,
     cacheImagesMode: cacheImagesModeOption,
     cacheImagesLimit: cacheImagesLimitOption,
+    noCacheImagesThumbnails: noCacheImagesThumbnailsOption,
     limit: syncLimitOption
   },
   makeSyncCommandBody("timeline", () => DataSource.timeline())
@@ -106,6 +108,7 @@ const feedCommand = Command.make(
     cacheImages: cacheImagesOption,
     cacheImagesMode: cacheImagesModeOption,
     cacheImagesLimit: cacheImagesLimitOption,
+    noCacheImagesThumbnails: noCacheImagesThumbnailsOption,
     limit: syncLimitOption
   },
   ({ uri, ...rest }) => makeSyncCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
@@ -133,6 +136,7 @@ const listCommand = Command.make(
     cacheImages: cacheImagesOption,
     cacheImagesMode: cacheImagesModeOption,
     cacheImagesLimit: cacheImagesLimitOption,
+    noCacheImagesThumbnails: noCacheImagesThumbnailsOption,
     limit: syncLimitOption
   },
   ({ uri, ...rest }) => makeSyncCommandBody("list", () => DataSource.list(uri), { uri })(rest)
@@ -159,6 +163,7 @@ const notificationsCommand = Command.make(
     cacheImages: cacheImagesOption,
     cacheImagesMode: cacheImagesModeOption,
     cacheImagesLimit: cacheImagesLimitOption,
+    noCacheImagesThumbnails: noCacheImagesThumbnailsOption,
     limit: syncLimitOption
   },
   makeSyncCommandBody("notifications", () => DataSource.notifications())
@@ -186,9 +191,10 @@ const authorCommand = Command.make(
     cacheImages: cacheImagesOption,
     cacheImagesMode: cacheImagesModeOption,
     cacheImagesLimit: cacheImagesLimitOption,
+    noCacheImagesThumbnails: noCacheImagesThumbnailsOption,
     limit: syncLimitOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, limit }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, store, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, noCacheImagesThumbnails, limit }) =>
     Effect.gen(function* () {
       const apiFilter = Option.getOrUndefined(filter);
       const source = DataSource.author(actor, {
@@ -209,6 +215,7 @@ const authorCommand = Command.make(
         cacheImages,
         cacheImagesMode,
         cacheImagesLimit,
+        noCacheImagesThumbnails,
         limit
       });
     })
@@ -239,9 +246,10 @@ const threadCommand = Command.make(
     cacheImages: cacheImagesOption,
     cacheImagesMode: cacheImagesModeOption,
     cacheImagesLimit: cacheImagesLimitOption,
+    noCacheImagesThumbnails: noCacheImagesThumbnailsOption,
     limit: syncLimitOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, limit }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, store, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, noCacheImagesThumbnails, limit }) =>
     Effect.gen(function* () {
       const { depth: depthValue, parentHeight: parentHeightValue } =
         parseThreadDepth(depth, parentHeight);
@@ -254,7 +262,18 @@ const threadCommand = Command.make(
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
-      return yield* run({ store, filter, filterJson, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, limit });
+      return yield* run({
+        store,
+        filter,
+        filterJson,
+        quiet,
+        refresh,
+        cacheImages,
+        cacheImagesMode,
+        cacheImagesLimit,
+        noCacheImagesThumbnails,
+        limit
+      });
     })
 ).pipe(
   Command.withDescription(
@@ -285,6 +304,7 @@ const jetstreamCommand = Command.make(
     cacheImages: cacheImagesOption,
     cacheImagesMode: cacheImagesModeOption,
     cacheImagesLimit: cacheImagesLimitOption,
+    noCacheImagesThumbnails: noCacheImagesThumbnailsOption,
     limit: jetstreamLimitOption,
     duration: durationOption,
     strict: strictOption,
@@ -304,6 +324,7 @@ const jetstreamCommand = Command.make(
     cacheImages,
     cacheImagesMode,
     cacheImagesLimit,
+    noCacheImagesThumbnails,
     limit,
     duration,
     strict,
@@ -390,7 +411,7 @@ const jetstreamCommand = Command.make(
               postsAdded: result.postsAdded
             });
             const cacheResult = yield* cacheStoreImages(storeRef, {
-              includeThumbnails: true,
+              includeThumbnails: !noCacheImagesThumbnails,
               ...(cacheLimit !== undefined ? { limit: cacheLimit } : {})
             });
             yield* logInfo("Image cache complete", cacheResult);

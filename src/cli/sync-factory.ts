@@ -24,6 +24,7 @@ export interface CommonCommandInput {
   readonly cacheImages: boolean;
   readonly cacheImagesMode: Option.Option<CacheImagesMode>;
   readonly cacheImagesLimit: Option.Option<number>;
+  readonly noCacheImagesThumbnails: boolean;
   readonly limit?: Option.Option<number>;
 }
 
@@ -108,7 +109,7 @@ export const makeSyncCommandBody = (
               postsAdded: result.postsAdded
             });
             const cacheResult = yield* cacheStoreImages(storeRef, {
-              includeThumbnails: true,
+              includeThumbnails: !input.noCacheImagesThumbnails,
               ...(cacheLimit !== undefined ? { limit: cacheLimit } : {})
             });
             yield* logInfo("Image cache complete", cacheResult);
@@ -169,7 +170,7 @@ export const makeWatchCommandBody = (
             source: sourceName
           });
           const cacheResult = yield* cacheStoreImages(storeRef, {
-            includeThumbnails: true,
+            includeThumbnails: !input.noCacheImagesThumbnails,
             ...(Option.isSome(input.cacheImagesLimit)
               ? { limit: input.cacheImagesLimit.value }
               : {})
@@ -215,7 +216,7 @@ export const makeWatchCommandBody = (
                       postsAdded: result.postsAdded
                     });
                     const cacheResult = yield* cacheStoreImages(storeRef, {
-                      includeThumbnails: true,
+                      includeThumbnails: !input.noCacheImagesThumbnails,
                       ...(cacheLimit !== undefined && cacheLimit > 0
                         ? { limit: cacheLimit }
                         : {})

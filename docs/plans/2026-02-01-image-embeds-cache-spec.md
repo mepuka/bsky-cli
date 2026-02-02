@@ -2,7 +2,7 @@
 
 Goal: deliver an Effect-native system for image/embed indexing, extraction, rendering, and local caching that addresses issues #135-#138.
 
-Status: in progress (phases 0–2 implemented; cache/archive underway).
+Status: in progress (core extraction/rendering/indexing implemented; remaining: ref-index).
 
 ## Scope (issues)
 
@@ -36,10 +36,12 @@ Status: in progress (phases 0–2 implemented; cache/archive underway).
 ## Current state (relevant)
 
 - Embeds modeled in `src/domain/bsky.ts` (`EmbedImages`, `EmbedVideo`, `EmbedExternal`).
-- Store index has `has_images` and `has_video` only.
-- FTS `posts_fts` indexes `posts.text`.
-- Compact output drops embed details; card/table/thread omit images.
-- Raw embed data preserved in `post_json` only.
+- Image extraction + summaries in `src/domain/embeds.ts` + `src/domain/images.ts`.
+- Store index includes `image_count`, `alt_text`, `has_alt_text` with migration 008.
+- Filter DSL/runtime supports `min-images`, `alt-text`, `no-alt-text`, `has:alt-text`.
+- Compact output includes `embedSummary`; card/table/thread render embed summaries.
+- Query supports `@images`, `@embeds`, `@media`, `--extract-images`, `--resolve-images`, `--cache-images`.
+- Image cache stack implemented (fetcher, archive, persisted metadata cache, CLI commands, sync/watch/query flags).
 
 ## Data model and extraction
 
@@ -95,11 +97,10 @@ Rationale: `alt-text:` queries should target alt text only, without conflating w
   - Plain text -> `posts_fts MATCH` on `alt_text` column.
   - Regex-like -> runtime filter.
 
-### Migration/backfill
+### Migration
 
-- Migration adds columns, rebuilds FTS, and backfills from `post_json`.
-- Backfill uses the same extraction helpers as the live indexer.
-- Rebuild FTS after backfill to ensure consistent indexing.
+- Migration adds columns and rebuilds FTS for new/greenfield stores.
+- Backfill of legacy stores is out of scope (greenfield assumption).
 
 ## Output + extraction (#136)
 
@@ -136,15 +137,15 @@ Integration points:
 
 ## Terminal rendering (#138)
 
-- Card format: add `[N images]`, alt snippets, external preview, quote indicator.
-- Table format: add `embed` summary column (e.g. `4img`, `1vid`, `link:example.com`, `quote`).
-- ANSI thread: placeholders for images + alt text, embed type indicators.
+- Implemented:
+  - Card + thread: embed summaries + details in `src/cli/doc/post.ts`.
+  - Table/markdown: embed summary column in `src/domain/format.ts`.
+  - ANSI styling in `src/cli/doc/annotation.ts`.
 
 Integration points:
 - `src/cli/doc/post.ts`
 - `src/cli/doc/annotation.ts`
-- `src/cli/output-render.ts`
-- `src/cli/output-format.ts`
+- `src/domain/format.ts`
 
 ## Caching + archival (#137)
 
@@ -185,7 +186,10 @@ Suggested env knobs:
 
 - `store cache <name> [--thumbnails] [--limit N]`
 - `store cache-status <name> [--thumbnails] [--limit N]`
+- `store cache-sweep <name> [--thumbnails] [--force]` (dry-run unless `--force`)
+- `store cache-ttl-sweep <name> [--thumbnails] [--force]` (TTL-based, dry-run unless `--force`)
 - `store cache-clean --force`
+- `image-cache sweep [--thumbnails] [--force]` (global TTL sweep)
 - `sync/watch ... --cache-images [--cache-images-mode new|full] [--cache-images-limit N]`
   - `new` (default) caches newly added posts after each cycle.
   - `full` runs a full-store scan once (sync: after run; watch: before streaming).
@@ -198,6 +202,21 @@ Suggested env knobs:
 - Flags require images to be in the output (`--extract-images` or `--fields` including `images`).
 - Optional lazy caching during query (opt-in).
 - Background caching during sync/watch (opt-in via `--cache-images`).
+
+## Remaining work (updated)
+
+### #135 Index image count and alt text for filtering
+
+### #136 Image/embed extraction to query output
+- Clarify `--limit` semantics when `--extract-images` is active (CLI help updated; docs may still need a note).
+
+### #137 Local image caching and archival
+- Add cache integrity + cleanup: manual sweep + TTL sweep commands remove orphaned/expired files; still missing ref-index.
+- Add an archive ref-index (hash/path → refcount, lastAccessed) to prevent leaks with content-hash storage.
+- Add tests for missing-file status + sweep behavior (done for manual sweep).
+
+### #138 Render image embeds in card and terminal output
+- Add tests for record-with-media image rendering (done; alt-text/detail rendering covered).
 
 ## Services and layers
 

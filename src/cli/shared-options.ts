@@ -68,6 +68,12 @@ export const cacheImagesLimitOption = Options.integer("cache-images-limit").pipe
   Options.optional
 );
 
+export const noCacheImagesThumbnailsOption = Options.boolean(
+  "no-cache-images-thumbnails"
+).pipe(
+  Options.withDescription("Disable thumbnail caching when caching images")
+);
+
 /** --strict flag to stop on first error */
 export const strictOption = Options.boolean("strict").pipe(
   Options.withDescription("Stop on first error and do not advance the checkpoint")

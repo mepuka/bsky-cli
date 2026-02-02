@@ -18,6 +18,7 @@ import { graphCommand } from "./graph.js";
 import { feedCommand } from "./feed.js";
 import { postCommand } from "./post.js";
 import { pipeCommand } from "./pipe.js";
+import { imageCacheCommand } from "./image-cache-command.js";
 import { configCommand } from "./config-command.js";
 import {
   configOptions,
@@ -41,6 +42,7 @@ export const app = Command.make("skygent", configOptions).pipe(
     graphCommand,
     feedCommand,
     postCommand,
+    imageCacheCommand,
     pipeCommand
   ]),
   Command.provide((config) =>
