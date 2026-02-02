@@ -52,6 +52,8 @@ export const upsertPost = (
     const normalizedLangs = normalizeLangs(post.langs);
     const lang = normalizedLangs[0];
     const isReply = Boolean(post.reply);
+    const replyParentUri = post.reply?.parent.uri ? String(post.reply.parent.uri) : null;
+    const replyRootUri = post.reply?.root.uri ? String(post.reply.root.uri) : null;
     const quote = isQuote(post);
     const repost = isRepost(post);
     const original = !isReply && !quote && !repost;
@@ -79,6 +81,8 @@ export const upsertPost = (
         text,
         lang,
         is_reply,
+        reply_parent_uri,
+        reply_root_uri,
         is_quote,
         is_repost,
         is_original,
@@ -104,6 +108,8 @@ export const upsertPost = (
         ${post.text},
         ${lang},
         ${toFlag(isReply)},
+        ${replyParentUri},
+        ${replyRootUri},
         ${toFlag(quote)},
         ${toFlag(repost)},
         ${toFlag(original)},
@@ -128,6 +134,8 @@ export const upsertPost = (
         text = excluded.text,
         lang = excluded.lang,
         is_reply = excluded.is_reply,
+        reply_parent_uri = excluded.reply_parent_uri,
+        reply_root_uri = excluded.reply_root_uri,
         is_quote = excluded.is_quote,
         is_repost = excluded.is_repost,
         is_original = excluded.is_original,
@@ -171,6 +179,8 @@ export const insertPostIfMissing = (
     const normalizedLangs = normalizeLangs(post.langs);
     const lang = normalizedLangs[0];
     const isReply = Boolean(post.reply);
+    const replyParentUri = post.reply?.parent.uri ? String(post.reply.parent.uri) : null;
+    const replyRootUri = post.reply?.root.uri ? String(post.reply.root.uri) : null;
     const quote = isQuote(post);
     const repost = isRepost(post);
     const original = !isReply && !quote && !repost;
@@ -198,6 +208,8 @@ export const insertPostIfMissing = (
         text,
         lang,
         is_reply,
+        reply_parent_uri,
+        reply_root_uri,
         is_quote,
         is_repost,
         is_original,
@@ -223,6 +235,8 @@ export const insertPostIfMissing = (
         ${post.text},
         ${lang},
         ${toFlag(isReply)},
+        ${replyParentUri},
+        ${replyRootUri},
         ${toFlag(quote)},
         ${toFlag(repost)},
         ${toFlag(original)},
