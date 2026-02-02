@@ -780,6 +780,8 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
      *
      * Uses reply_root_uri when available (falls back to post uri) and returns
      * counts plus the earliest creation time per thread.
+     * Note: only pushdown-compatible filters are applied; runtime-only filters
+     * are ignored for this aggregate.
      *
      * @param store - Store reference to query
      * @param query - Query configuration including filter and range

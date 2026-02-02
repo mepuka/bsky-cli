@@ -45,6 +45,10 @@ const limitOption = baseLimitOption.pipe(
   Options.withDescription("Maximum number of results")
 );
 
+const storeLimitOption = baseLimitOption.pipe(
+  Options.withDescription("Maximum posts to include when building store graphs")
+);
+
 const cursorOption = baseCursorOption.pipe(
   Options.withDescription("Pagination cursor")
 );
@@ -64,6 +68,18 @@ const ensureSupportedFormat = (
         cause: { format: configFormat }
       })
     : Effect.void;
+
+const snapshotMeta = (snapshot: GraphSnapshot, extra: Record<string, unknown> = {}) => ({
+  kind: "meta" as const,
+  directed: snapshot.directed,
+  builtAt: snapshot.builtAt,
+  sources: snapshot.sources,
+  window: snapshot.window,
+  filters: snapshot.filters,
+  nodeCount: snapshot.nodes.length,
+  edgeCount: snapshot.edges.length,
+  ...extra
+});
 
 const purposeOption = Options.choice("purpose", ["modlist", "curatelist"]).pipe(
   Options.withDescription("List purpose filter"),
@@ -225,7 +241,7 @@ const renderCentralityTable = (entries: ReadonlyArray<{
 };
 
 const renderCommunitiesTable = (entries: ReadonlyArray<{
-  readonly community: number;
+  readonly community: string;
   readonly size: number;
   readonly members: string;
 }>) => {
@@ -598,7 +614,7 @@ const interactionsCommand = Command.make(
     until: untilOption,
     filter: filterOption,
     filterJson: filterJsonOption,
-    limit: limitOption,
+    limit: storeLimitOption,
     scanLimit: scanLimitOption,
     format: formatOption
   },
@@ -620,6 +636,11 @@ const interactionsCommand = Command.make(
         storeRef,
         limitValue === undefined ? { query } : { query, limit: limitValue }
       );
+      const ndjsonItems = [
+        snapshotMeta(snapshot, { store: storeRef.name }),
+        ...snapshot.nodes.map((node) => ({ kind: "node", ...node })),
+        ...snapshot.edges.map((edge) => ({ kind: "edge", ...edge }))
+      ];
       yield* emitWithFormat(
         format,
         appConfig.outputFormat,
@@ -627,10 +648,7 @@ const interactionsCommand = Command.make(
         "json",
         {
           json: writeJson(snapshot),
-          ndjson:
-            snapshot.edges.length === 0
-              ? writeText("[]")
-              : writeJsonStream(Stream.fromIterable(snapshot.edges)),
+          ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
           table: writeText(renderInteractionTable(snapshot))
         }
       );
@@ -654,7 +672,7 @@ const centralityCommand = Command.make(
     until: untilOption,
     filter: filterOption,
     filterJson: filterJsonOption,
-    limit: limitOption,
+    limit: storeLimitOption,
     scanLimit: scanLimitOption,
     metric: metricOption,
     direction: directionOption,
@@ -686,6 +704,12 @@ const centralityCommand = Command.make(
       const metricValue = Option.getOrElse(metric, () => "degree" as const);
       const directionValue = Option.getOrElse(direction, () => "both" as const);
       const iterationsValue = Option.getOrElse(iterations, () => 20);
+      if (metricValue === "pagerank" && Option.isSome(direction)) {
+        return yield* CliInputError.make({
+          message: "--direction is only supported for degree centrality.",
+          cause: { metric: metricValue, direction: directionValue }
+        });
+      }
       const scores = metricValue === "pagerank"
         ? pageRankCentrality(graph, { iterations: iterationsValue, weighted })
         : degreeCentrality(graph, { direction: directionValue, weighted });
@@ -702,6 +726,16 @@ const centralityCommand = Command.make(
           ? { ...base, handle: entry.node.label }
           : base;
       });
+      const ndjsonItems = [
+        snapshotMeta(snapshot, {
+          store: storeRef.name,
+          metric: metricValue,
+          ...(metricValue === "degree" ? { direction: directionValue } : {}),
+          ...(metricValue === "pagerank" ? { iterations: iterationsValue } : {}),
+          weighted
+        }),
+        ...entries.map((entry) => ({ kind: "node", ...entry }))
+      ];
 
       yield* emitWithFormat(
         format,
@@ -713,10 +747,7 @@ const centralityCommand = Command.make(
             metric: metricValue,
             nodes: entries
           }),
-          ndjson:
-            entries.length === 0
-              ? writeText("[]")
-              : writeJsonStream(Stream.fromIterable(entries)),
+          ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
           table: writeText(renderCentralityTable(entries))
         }
       );
@@ -740,7 +771,7 @@ const communitiesCommand = Command.make(
     until: untilOption,
     filter: filterOption,
     filterJson: filterJsonOption,
-    limit: limitOption,
+    limit: storeLimitOption,
     scanLimit: scanLimitOption,
     iterations: communityIterationsOption,
     weighted: weightedOption,
@@ -775,7 +806,7 @@ const communitiesCommand = Command.make(
       });
       const topValue = Option.getOrUndefined(top);
       const trimmed = topValue ? communities.slice(0, topValue) : communities;
-      const payload = trimmed.map((community, index) => ({
+      const payload = trimmed.map((community) => ({
         id: community.id,
         size: community.members.length,
         members: community.members.map((member) => ({
@@ -783,16 +814,26 @@ const communitiesCommand = Command.make(
           ...(member.label ? { handle: member.label } : {})
         }))
       }));
-      const tableRows = trimmed.map((community, index) => {
+      const tableRows = trimmed.map((community) => {
         const handles = community.members
           .slice(0, 5)
           .map((member) => member.label ?? String(member.id));
         return {
-          community: index + 1,
+          community: community.id,
           size: community.members.length,
           members: handles.join(", ")
         };
       });
+      const ndjsonItems = [
+        snapshotMeta(snapshot, {
+          store: storeRef.name,
+          iterations: communityIterations,
+          weighted,
+          minSize: minSizeValue,
+          totalCommunities: communities.length
+        }),
+        ...payload.map((community) => ({ kind: "community", ...community }))
+      ];
 
       yield* emitWithFormat(
         format,
@@ -801,10 +842,7 @@ const communitiesCommand = Command.make(
         "json",
         {
           json: writeJson({ communities: payload }),
-          ndjson:
-            payload.length === 0
-              ? writeText("[]")
-              : writeJsonStream(Stream.fromIterable(payload)),
+          ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
           table: writeText(renderCommunitiesTable(tableRows))
         }
       );
@@ -845,8 +883,13 @@ const storesCommand = Command.make(
         return edge.derivedAt ? { ...base, derivedAt: edge.derivedAt } : base;
       });
       const payload = { roots: data.roots, nodes, edges };
-
       const ndjsonItems = [
+        {
+          kind: "meta" as const,
+          roots: data.roots,
+          nodeCount: nodes.length,
+          edgeCount: edges.length
+        },
         ...nodes.map((node) => ({ kind: "node", ...node })),
         ...edges.map((edge) => ({ kind: "edge", ...edge }))
       ];
@@ -858,10 +901,7 @@ const storesCommand = Command.make(
         "json",
         {
           json: writeJson(payload),
-          ndjson:
-            ndjsonItems.length === 0
-              ? writeText("[]")
-              : writeJsonStream(Stream.fromIterable(ndjsonItems)),
+          ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
           table: writeText(renderStoreTopologyTable(nodes, edges))
         }
       );
@@ -951,10 +991,7 @@ const blocksCommand = Command.make(
         "json",
         {
           json: writeJson(payload),
-          ndjson:
-            blocks.length === 0
-              ? writeText("[]")
-              : writeJsonStream(blocksStream),
+          ndjson: writeJsonStream(blocksStream),
           table: writeText(renderProfileTable(result.blocks, result.cursor))
         }
       );
@@ -996,10 +1033,7 @@ const mutesCommand = Command.make(
         "json",
         {
           json: writeJson(payload),
-          ndjson:
-            mutes.length === 0
-              ? writeText("[]")
-              : writeJsonStream(mutesStream),
+          ndjson: writeJsonStream(mutesStream),
           table: writeText(renderProfileTable(result.mutes, result.cursor))
         }
       );
