@@ -30,7 +30,8 @@ import { parseOptionalFilterExpr } from "./filter-input.js";
 import { filterOption, filterJsonOption } from "./shared-options.js";
 import { storeOptions } from "./store.js";
 import { StoreQuery } from "../domain/events.js";
-import { PositiveInt } from "./option-schemas.js";
+import { PositiveInt, boundedInt } from "./option-schemas.js";
+import { degreeCentrality, graphFromSnapshot, pageRankCentrality } from "../graph/centrality.js";
 
 const listUriArg = Args.text({ name: "uri" }).pipe(
   Args.withSchema(AtUri),
@@ -90,6 +91,32 @@ const untilOption = Options.text("until").pipe(
 const scanLimitOption = Options.integer("scan-limit").pipe(
   Options.withSchema(PositiveInt),
   Options.withDescription("Maximum rows to scan before filtering (advanced)"),
+  Options.optional
+);
+
+const metricOption = Options.choice("metric", ["degree", "pagerank"]).pipe(
+  Options.withDescription("Centrality metric (default: degree)"),
+  Options.optional
+);
+
+const directionOption = Options.choice("direction", ["in", "out", "both"]).pipe(
+  Options.withDescription("Degree direction (default: both)"),
+  Options.optional
+);
+
+const weightedOption = Options.boolean("weighted").pipe(
+  Options.withDescription("Use edge weights in centrality computation")
+);
+
+const iterationsOption = Options.integer("iterations").pipe(
+  Options.withSchema(boundedInt(1, 500)),
+  Options.withDescription("Pagerank iterations (default: 20)"),
+  Options.optional
+);
+
+const topOption = Options.integer("top").pipe(
+  Options.withSchema(PositiveInt),
+  Options.withDescription("Limit number of ranked nodes in output"),
   Options.optional
 );
 
@@ -165,6 +192,21 @@ const renderInteractionTable = (snapshot: GraphSnapshot) => {
     ["FROM", "FROM_HANDLE", "TO", "TO_HANDLE", "TYPE", "WEIGHT"],
     rows
   );
+};
+
+const renderCentralityTable = (entries: ReadonlyArray<{
+  readonly rank: number;
+  readonly did: string;
+  readonly handle?: string;
+  readonly score: number;
+}>) => {
+  const rows = entries.map((entry) => [
+    String(entry.rank),
+    entry.did,
+    entry.handle ?? "",
+    entry.score.toString()
+  ]);
+  return renderTableLegacy(["RANK", "DID", "HANDLE", "SCORE"], rows);
 };
 
 const renderListItemsTable = (items: ReadonlyArray<ListItemView>, cursor: string | undefined) => {
@@ -550,6 +592,92 @@ const interactionsCommand = Command.make(
   )
 );
 
+const centralityCommand = Command.make(
+  "centrality",
+  {
+    store: storeOption,
+    range: rangeOption,
+    since: sinceOption,
+    until: untilOption,
+    filter: filterOption,
+    filterJson: filterJsonOption,
+    limit: limitOption,
+    scanLimit: scanLimitOption,
+    metric: metricOption,
+    direction: directionOption,
+    weighted: weightedOption,
+    iterations: iterationsOption,
+    top: topOption,
+    format: formatOption
+  },
+  ({ store, range, since, until, filter, filterJson, limit, scanLimit, metric, direction, weighted, iterations, top, format }) =>
+    Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
+      yield* ensureSupportedFormat(format, appConfig.outputFormat);
+      const builder = yield* GraphBuilder;
+      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const parsedRange = yield* parseRangeOptions(range, since, until);
+      const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
+      const query = StoreQuery.make({
+        range: Option.getOrUndefined(parsedRange),
+        filter: Option.getOrUndefined(parsedFilter),
+        scanLimit: Option.getOrUndefined(scanLimit)
+      });
+      const limitValue = Option.getOrUndefined(limit);
+      const snapshot = yield* builder.buildInteractionNetwork(
+        storeRef,
+        limitValue === undefined ? { query } : { query, limit: limitValue }
+      );
+      const { graph } = graphFromSnapshot(snapshot);
+
+      const metricValue = Option.getOrElse(metric, () => "degree" as const);
+      const directionValue = Option.getOrElse(direction, () => "both" as const);
+      const iterationsValue = Option.getOrElse(iterations, () => 20);
+      const scores = metricValue === "pagerank"
+        ? pageRankCentrality(graph, { iterations: iterationsValue, weighted })
+        : degreeCentrality(graph, { direction: directionValue, weighted });
+
+      const topValue = Option.getOrUndefined(top);
+      const trimmed = topValue ? scores.slice(0, topValue) : scores;
+      const entries = trimmed.map((entry, index) => {
+        const base = {
+          rank: index + 1,
+          did: String(entry.node.id),
+          score: entry.score
+        };
+        return entry.node.label
+          ? { ...base, handle: entry.node.label }
+          : base;
+      });
+
+      yield* emitWithFormat(
+        format,
+        appConfig.outputFormat,
+        jsonNdjsonTableFormats,
+        "json",
+        {
+          json: writeJson({
+            metric: metricValue,
+            nodes: entries
+          }),
+          ndjson:
+            entries.length === 0
+              ? writeText("[]")
+              : writeJsonStream(Stream.fromIterable(entries)),
+          table: writeText(renderCentralityTable(entries))
+        }
+      );
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Rank actors by interaction centrality", [
+      "skygent graph centrality --store my-store --metric degree --top 50",
+      "skygent graph centrality --store my-store --metric degree --direction in --weighted",
+      "skygent graph centrality --store my-store --metric pagerank --iterations 50 --top 25"
+    ])
+  )
+);
+
 const listCommand = Command.make(
   "list",
   { uri: listUriArg, limit: limitOption, cursor: cursorOption, format: formatOption },
@@ -694,6 +822,7 @@ export const graphCommand = Command.make("graph", {}).pipe(
     knownFollowersCommand,
     relationshipsCommand,
     interactionsCommand,
+    centralityCommand,
     listsCommand,
     listCommand,
     blocksCommand,
