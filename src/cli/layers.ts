@@ -42,6 +42,7 @@ import { FilterSettings } from "../services/filter-settings.js";
 import { OutputManager } from "../services/output-manager.js";
 import { FilterLibrary } from "../services/filter-library.js";
 import { StoreStats } from "../services/store-stats.js";
+import { StoreAnalytics } from "../services/store-analytics.js";
 import { ProfileResolver } from "../services/profile-resolver.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 
@@ -203,6 +204,9 @@ const storeStatsLayer = StoreStats.layer.pipe(
   Layer.provideMerge(eventLogLayer),
   Layer.provideMerge(checkpointLayer)
 );
+const storeAnalyticsLayer = StoreAnalytics.layer.pipe(
+  Layer.provideMerge(storeDbLayer)
+);
 
 export const CliLive = Layer.mergeAll(
   appConfigLayer,
@@ -226,6 +230,7 @@ export const CliLive = Layer.mergeAll(
   lineageLayer,
   outputManagerLayer,
   storeStatsLayer,
+  storeAnalyticsLayer,
   compilerLayer,
   postParserLayer,
   filterLibraryLayer,
