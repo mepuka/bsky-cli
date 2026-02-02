@@ -138,25 +138,18 @@ const DEFAULT_FILTER_SCAN_LIMIT = 5000;
 
 const resolveSort = (
   value: SortValue | undefined
-): { sortBy: StoreQuerySort; order: StoreQueryOrder } => {
-  switch (value) {
-    case "desc":
-      return { sortBy: "createdAt", order: "desc" };
-    case "by-likes":
-      return { sortBy: "likeCount", order: "desc" };
-    case "by-reposts":
-      return { sortBy: "repostCount", order: "desc" };
-    case "by-replies":
-      return { sortBy: "replyCount", order: "desc" };
-    case "by-quotes":
-      return { sortBy: "quoteCount", order: "desc" };
-    case "by-engagement":
-      return { sortBy: "engagement", order: "desc" };
-    case "asc":
-    default:
-      return { sortBy: "createdAt", order: "asc" };
-  }
-};
+): { sortBy: StoreQuerySort; order: StoreQueryOrder } =>
+  Match.value(value).pipe(
+    Match.withReturnType<{ sortBy: StoreQuerySort; order: StoreQueryOrder }>(),
+    Match.when("desc", () => ({ sortBy: "createdAt", order: "desc" })),
+    Match.when("by-likes", () => ({ sortBy: "likeCount", order: "desc" })),
+    Match.when("by-reposts", () => ({ sortBy: "repostCount", order: "desc" })),
+    Match.when("by-replies", () => ({ sortBy: "replyCount", order: "desc" })),
+    Match.when("by-quotes", () => ({ sortBy: "quoteCount", order: "desc" })),
+    Match.when("by-engagement", () => ({ sortBy: "engagement", order: "desc" })),
+    Match.when("asc", () => ({ sortBy: "createdAt", order: "asc" })),
+    Match.orElse(() => ({ sortBy: "createdAt", order: "asc" }))
+  );
 
 type StorePost = {
   readonly store: StoreRef;
@@ -615,20 +608,17 @@ export const queryCommand = Command.make(
         const repostCount = metrics?.repostCount ?? 0;
         const replyCount = metrics?.replyCount ?? 0;
         const quoteCount = metrics?.quoteCount ?? 0;
-        switch (sortBy) {
-          case "likeCount":
-            return likeCount;
-          case "repostCount":
-            return repostCount;
-          case "replyCount":
-            return replyCount;
-          case "quoteCount":
-            return quoteCount;
-          case "engagement":
-            return likeCount + (repostCount * 2) + (replyCount * 3) + (quoteCount * 2);
-          default:
-            return 0;
-        }
+        return Match.value(sortBy).pipe(
+          Match.withReturnType<number>(),
+          Match.when("likeCount", () => likeCount),
+          Match.when("repostCount", () => repostCount),
+          Match.when("replyCount", () => replyCount),
+          Match.when("quoteCount", () => quoteCount),
+          Match.when("engagement", () =>
+            likeCount + (repostCount * 2) + (replyCount * 3) + (quoteCount * 2)
+          ),
+          Match.orElse(() => 0)
+        );
       };
 
       const metricStorePostOrder = Order.mapInput(
