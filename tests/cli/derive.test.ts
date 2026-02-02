@@ -5,7 +5,7 @@ import { deriveCommand } from "../../src/cli/derive.js";
 import { CliOutput, type CliOutputService } from "../../src/cli/output.js";
 import { DerivationResult } from "../../src/domain/derivation.js";
 import { defaultStoreConfig } from "../../src/domain/defaults.js";
-import { StoreName } from "../../src/domain/primitives.js";
+import { Did, Handle, StoreName } from "../../src/domain/primitives.js";
 import { OutputManager } from "../../src/services/output-manager.js";
 import { DerivationEngine } from "../../src/services/derivation-engine.js";
 import { StoreManager } from "../../src/services/store-manager.js";
@@ -16,6 +16,8 @@ import { CliPreferences } from "../../src/cli/preferences.js";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { BunContext } from "@effect/platform-bun";
 import { FileSystem } from "@effect/platform";
+import { IdentityResolver } from "../../src/services/identity-resolver.js";
+import { IdentityInfo } from "../../src/domain/bsky.js";
 
 const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
 
@@ -130,6 +132,22 @@ describe("CLI derive command", () => {
         validateAll: () => Effect.succeed([])
       })
     );
+    const stubDid = Schema.decodeUnknownSync(Did)("did:plc:example");
+    const stubHandle = Schema.decodeUnknownSync(Handle)("example.bsky");
+    const identityLayer = Layer.succeed(
+      IdentityResolver,
+      IdentityResolver.of({
+        lookupDid: () => Effect.succeed(Option.none()),
+        lookupHandle: () => Effect.succeed(Option.none()),
+        resolveDid: () => Effect.succeed(stubDid),
+        resolveHandle: () => Effect.succeed(stubHandle),
+        resolveIdentity: () =>
+          Effect.succeed(
+            IdentityInfo.make({ did: stubDid, handle: stubHandle, didDoc: {} })
+          ),
+        cacheProfile: () => Effect.void
+      })
+    );
     const preferencesLayer = Layer.succeed(CliPreferences, { compact: false });
     const appLayer = Layer.mergeAll(
       outputLayer,
@@ -138,6 +156,7 @@ describe("CLI derive command", () => {
       checkpointsLayer,
       outputManagerLayer,
       filterLibraryLayer,
+      identityLayer,
       preferencesLayer,
       appConfigLayer
     ).pipe(Layer.provideMerge(BunContext.layer));

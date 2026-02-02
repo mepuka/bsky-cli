@@ -357,6 +357,30 @@ describe("StoreIndex", () => {
     }
   });
 
+  test("getByAuthor returns post URIs for a handle", async () => {
+    const upsert1 = PostUpsert.make({ post: samplePost, meta: sampleMeta });
+    const upsert2 = PostUpsert.make({ post: samplePostLater, meta: sampleMeta });
+    const program = Effect.gen(function* () {
+      const writer = yield* StoreWriter;
+      const storeIndex = yield* StoreIndex;
+
+      yield* writer.append(sampleStore, upsert1);
+      yield* writer.append(sampleStore, upsert2);
+      yield* storeIndex.rebuild(sampleStore);
+
+      return yield* storeIndex.getByAuthor(sampleStore, samplePost.author);
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+      expect(result).toEqual([samplePost.uri]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
   test("query skips OR pushdown when a clause is not SQL-pushdownable", async () => {
     const upsert1 = PostUpsert.make({ post: samplePost, meta: sampleMeta });
     const upsert2 = PostUpsert.make({ post: samplePostEmoji, meta: sampleMeta });

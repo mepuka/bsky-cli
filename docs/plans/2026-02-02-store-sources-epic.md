@@ -2,7 +2,7 @@
 
 Goal: make stores remember and manage their **sources** (authors, feeds, lists, timeline, jetstream) so `sync <store>` / `watch <store>` operate on stored source config rather than ad‑hoc CLI args.
 
-Status: draft (greenfield; no backfill).
+Status: Phase 1–3 implemented; Phase 4+ pending (no backfill).
 
 Decision: **CLI shape A** — `sync <store>` and `watch <store>` become the primary commands that use stored sources. Existing `sync <source>` / `watch <source>` subcommands remain as explicit one‑offs.
 
@@ -13,7 +13,7 @@ Decision: **CLI shape A** — `sync <store>` and `watch <store>` become the prim
 3) Clean, Effect‑native layering and typed errors.
 4) No backfill: existing stores start with empty source lists.
 
-## Non‑goals
+## Non-goals
 
 - Backfilling sources from historical events.
 - Feed/list pruning (requires source attribution on posts).
@@ -153,6 +153,23 @@ Behavior:
 
 Existing `sync timeline|author|feed|list` commands remain for one‑off operations.
 
+## Implementation status (2026-02-02)
+
+Implemented:
+- `StoreSources` domain + service + migration.
+- CLI `store sources`, `store add-source`, `store remove-source`.
+- `store remove-source --prune` for author sources.
+- `store authors` + `store remove-author`.
+- `derive` supports `--include-author` / `--exclude-author`.
+- `sync <store>` + `watch <store>` read from store source registry.
+- Per-source concurrency + `lastSyncedAt` updates on success.
+- List expansion (`expandMembers`) fan-out with aggregation.
+
+Known gaps (next steps):
+- **JetstreamSource watch**: store watch skips Jetstream sources (use `watch jetstream` for streaming).
+- **Source validation boundary**: validation/normalization is in CLI today; decide whether to move into `StoreSources` service for reuse.
+- **Per-source watch intervals** + Jetstream DID auto-derivation (Phase 5).
+
 ## Concurrency + Batch Patterns (Effect‑native)
 
 Current approach:
@@ -167,7 +184,7 @@ If external batching becomes necessary, use `RequestResolver.makeBatched` with
 
 ## Pruning
 
-Phase 2: `store remove-author <store> <did|handle> [--yes]`
+Phase 2: `store remove-author <store> <did|handle> [--yes]` (done)
 - Safe because `posts.author` exists.
 - Feed/List prune deferred (needs per‑source attribution).
 
@@ -184,20 +201,24 @@ Applied automatically by `StoreDb` migrator.
 
 ## Phased Implementation
 
-**Phase 1**
+**Phase 1 (done)**
 - Domain types + migration + `StoreSources` service.
 - CLI: `store sources`, `store add-source`, `store remove-source`.
 
-**Phase 2**
+**Phase 2 (done)**
 - `sync <store>` and `watch <store>` read from `StoreSources` (serial).
-- Author prune.
 
-**Phase 3**
+**Phase 3 (in progress)**
 - Concurrent fetch + serialized write coordinator.
 - Per‑source `lastSyncedAt` updates.
 
-**Phase 4**
-- List expansion (`expandMembers`) and membership reconciliation. (Implemented fan‑out + aggregation.)
+**Phase 3b (next)**
+- Route `JetstreamSource` via `JetstreamSyncEngine` in store sync.
+- Skip Jetstream sources in store watch with explicit warning.
+
+**Phase 4 (partial)**
+- List expansion (`expandMembers`) fan‑out + aggregation (done).
+- Membership reconciliation on re-sync (pending).
 
 ## Open Questions
 

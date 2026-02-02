@@ -544,6 +544,66 @@ const syncStoreCommand = Command.make(
         const id = storeSourceId(source);
         return Effect.gen(function* () {
           const expr = yield* storeSourceFilterExpr(source, id);
+          if (source._tag === "JetstreamSource") {
+            if (limitValue === undefined) {
+              return yield* CliInputError.make({
+                message:
+                  "Jetstream sources require --limit when syncing a store. Use sync jetstream for continuous streaming.",
+                cause: { source: id }
+              });
+            }
+            const filterHash = filterExprSignature(expr);
+            const selection = yield* buildJetstreamSelection(
+              {
+                endpoint: Option.none(),
+                collections: Option.none(),
+                dids: Option.none(),
+                cursor: Option.none(),
+                compress: false,
+                maxMessageSize: Option.none()
+              },
+              storeRef,
+              filterHash
+            );
+            const engineLayer = JetstreamSyncEngine.layer.pipe(
+              Layer.provideMerge(Jetstream.live(selection.config))
+            );
+
+            yield* logInfo("Starting sync", {
+              source: id,
+              type: source._tag,
+              store: storeRef.name
+            });
+
+            const syncResult = yield* Effect.gen(function* () {
+              const engine = yield* JetstreamSyncEngine;
+              return yield* engine.sync({
+                source: selection.source,
+                store: storeRef,
+                filter: expr,
+                command: "sync jetstream",
+                limit: limitValue,
+                ...(selection.cursor !== undefined
+                  ? { cursor: selection.cursor }
+                  : {})
+              });
+            }).pipe(
+              Effect.provide(engineLayer),
+              Effect.provideService(SyncReporter, reporter)
+            );
+
+            if (syncResult.errors.length === 0) {
+              yield* storeSources.markSynced(storeRef, id, new Date());
+            } else {
+              yield* logWarn("Sync completed with errors; lastSyncedAt not updated", {
+                store: storeRef.name,
+                source: id,
+                type: source._tag,
+                errors: syncResult.errors.length
+              });
+            }
+            return { id, type: source._tag, result: syncResult };
+          }
           if (source._tag === "ListSource" && source.expandMembers) {
             const client = yield* BskyClient;
             const members = yield* loadListMembers(

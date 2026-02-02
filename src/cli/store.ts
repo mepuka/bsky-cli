@@ -1,10 +1,10 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Effect, Option, Schema } from "effect";
+import { Chunk, Clock, Effect, Option, Schema } from "effect";
 import { StoreManager } from "../services/store-manager.js";
 import { AppConfigService } from "../services/app-config.js";
 import { Terminal } from "@effect/platform";
 import { StoreNotFound } from "../domain/errors.js";
-import { ActorId, AtUri, Did, StoreName, Timestamp } from "../domain/primitives.js";
+import { ActorId, AtUri, Did, Handle, StoreName, Timestamp } from "../domain/primitives.js";
 import {
   AuthorSource,
   FeedSource,
@@ -13,6 +13,7 @@ import {
   TimelineSource,
   storeSourceId
 } from "../domain/store-sources.js";
+import { EventMeta, PostDelete } from "../domain/events.js";
 import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
 import type { StoreLineage } from "../domain/derivation.js";
 import { defaultStoreConfig } from "../domain/defaults.js";
@@ -31,6 +32,8 @@ import { resolveOutputFormat, treeTableJsonFormats } from "./output-format.js";
 import { StoreRenamer } from "../services/store-renamer.js";
 import { PositiveInt } from "./option-schemas.js";
 import { StoreSources } from "../services/store-sources.js";
+import { StoreIndex } from "../services/store-index.js";
+import { StoreCommitter } from "../services/store-commit.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import { BskyClient } from "../services/bsky-client.js";
 import {
@@ -39,6 +42,7 @@ import {
   postFilterJsonOption as sourcePostFilterJsonOption,
   postFilterOption as sourcePostFilterOption
 } from "./shared-options.js";
+import { actorArg } from "./shared-options.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
 import {
   cacheStatusForStore,
@@ -70,6 +74,9 @@ const storeRenameToArg = Args.text({ name: "to" }).pipe(
 );
 const storeSourceIdArg = Args.text({ name: "id" }).pipe(
   Args.withDescription("Source id (AuthorSource:did:..., FeedSource:at://..., ListSource:at://..., TimelineSource:timeline, JetstreamSource:jetstream)")
+);
+const pruneSourceOption = Options.boolean("prune").pipe(
+  Options.withDescription("Remove existing posts for this author source")
 );
 const storeNameOption = Options.text("store").pipe(
   Options.withSchema(StoreName),
@@ -115,6 +122,63 @@ const cacheTtlForceOption = Options.boolean("force").pipe(
   Options.withAlias("f"),
   Options.withDescription("Delete expired cache files (default: dry-run)")
 );
+const authorSortOption = Options.choice("sort", [
+  "by-posts",
+  "by-engagement",
+  "by-last-active"
+]).pipe(
+  Options.withDescription("Sort authors (default: by-posts)"),
+  Options.optional
+);
+const authorLimitOption = Options.integer("limit").pipe(
+  Options.withSchema(PositiveInt),
+  Options.withDescription("Maximum number of authors to return"),
+  Options.optional
+);
+const confirmYesOption = Options.boolean("yes").pipe(
+  Options.withAlias("y"),
+  Options.withDescription("Confirm destructive action without prompting")
+);
+
+const resolveAuthorHandle = (identifier: string) =>
+  Effect.gen(function* () {
+    const identities = yield* IdentityResolver;
+    const info = yield* identities.resolveIdentity(identifier).pipe(
+      Effect.mapError((error) =>
+        CliInputError.make({
+          message: `Failed to resolve author: ${error.message}`,
+          cause: error
+        })
+      )
+    );
+    return info.handle;
+  });
+
+const pruneAuthorPosts = (storeRef: StoreRef, handle: Handle, command: string) =>
+  Effect.gen(function* () {
+    const index = yield* StoreIndex;
+    const committer = yield* StoreCommitter;
+    const uris = yield* index.getByAuthor(storeRef, handle);
+    if (uris.length === 0) {
+      return 0;
+    }
+    const createdAt = yield* Clock.currentTimeMillis.pipe(
+      Effect.flatMap((now) =>
+        Schema.decodeUnknown(Timestamp)(new Date(now).toISOString())
+      )
+    );
+    const meta = EventMeta.make({
+      source: "author",
+      command,
+      createdAt
+    });
+    yield* Effect.forEach(
+      uris,
+      (uri) => committer.appendDelete(storeRef, PostDelete.make({ uri, meta })),
+      { discard: true }
+    );
+    return uris.length;
+  });
 
 const sourceAuthorOption = Options.text("author").pipe(
   Options.withSchema(ActorId),
@@ -602,8 +666,8 @@ export const storeAddSource = Command.make(
 
 export const storeRemoveSource = Command.make(
   "remove-source",
-  { name: storeNameArg, id: storeSourceIdArg },
-  ({ name, id }) =>
+  { name: storeNameArg, id: storeSourceIdArg, prune: pruneSourceOption },
+  ({ name, id, prune }) =>
     Effect.gen(function* () {
       const storeRef = yield* loadStoreRef(name);
       const sources = yield* StoreSources;
@@ -614,14 +678,107 @@ export const storeRemoveSource = Command.make(
           cause: { id }
         });
       }
+      let pruned = 0;
+      if (prune) {
+        const source = existing.value;
+        if (source._tag !== "AuthorSource") {
+          return yield* CliInputError.make({
+            message: "--prune is only supported for author sources.",
+            cause: { id, type: source._tag }
+          });
+        }
+        const handle = source.display ?? (yield* resolveAuthorHandle(source.actor));
+        pruned = yield* pruneAuthorPosts(
+          storeRef,
+          handle,
+          "store remove-source --prune"
+        );
+      }
       yield* sources.remove(storeRef, id);
-      yield* writeJson({ store: storeRef.name, removed: id });
+      yield* writeJson({
+        store: storeRef.name,
+        removed: id,
+        ...(prune ? { pruned } : {})
+      });
     })
 ).pipe(
   Command.withDescription(
     withExamples("Remove a configured source from a store", [
       "skygent store remove-source my-store AuthorSource:did:plc:example",
+      "skygent store remove-source my-store AuthorSource:did:plc:example --prune",
       "skygent store remove-source my-store TimelineSource:timeline"
+    ])
+  )
+);
+
+export const storeAuthors = Command.make(
+  "authors",
+  { name: storeNameArg, sort: authorSortOption, limit: authorLimitOption },
+  ({ name, sort, limit }) =>
+    Effect.gen(function* () {
+      const stats = yield* StoreStats;
+      const storeRef = yield* loadStoreRef(name);
+      const sortValue = Option.getOrUndefined(sort);
+      const limitValue = Option.getOrUndefined(limit);
+      const sortKey =
+        sortValue === "by-engagement"
+          ? "engagement"
+          : sortValue === "by-last-active"
+            ? "lastActive"
+            : "posts";
+      const authors = yield* stats.authors(storeRef, {
+        sort: sortKey,
+        ...(limitValue !== undefined ? { limit: limitValue } : {})
+      });
+      yield* writeJson({ store: storeRef.name, authors });
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("List authors for a store with stats", [
+      "skygent store authors my-store",
+      "skygent store authors my-store --sort by-engagement --limit 25"
+    ])
+  )
+);
+
+export const storeRemoveAuthor = Command.make(
+  "remove-author",
+  { name: storeNameArg, actor: actorArg, yes: confirmYesOption },
+  ({ name, actor, yes }) =>
+    Effect.gen(function* () {
+      const storeRef = yield* loadStoreRef(name);
+      if (!yes) {
+        const terminal = yield* Terminal.Terminal;
+        const isTTY = yield* terminal.isTTY.pipe(Effect.orElseSucceed(() => false));
+        if (!isTTY) {
+          return yield* CliInputError.make({
+            message: "--yes is required to remove an author without a TTY.",
+            cause: { name, actor }
+          });
+        }
+        yield* terminal.display(
+          `Remove all posts by "${actor}" from store "${storeRef.name}"? [y/N] `
+        );
+        const response = yield* terminal.readLine.pipe(
+          Effect.catchAll(() => Effect.succeed(""))
+        );
+        const normalized = response.trim().toLowerCase();
+        const confirmed = normalized === "y" || normalized === "yes";
+        if (!confirmed) {
+          yield* writeJson({ store: storeRef.name, removed: 0, cancelled: true });
+          return;
+        }
+      }
+
+      const handle = yield* resolveAuthorHandle(actor);
+      const removed = yield* pruneAuthorPosts(storeRef, handle, "store remove-author");
+      yield* writeJson({ store: storeRef.name, author: handle, removed });
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Remove an author's posts from a store", [
+      "skygent store remove-author my-store alice.bsky.social --yes",
+      "skygent store remove-author my-store did:plc:example"
     ])
   )
 );
@@ -939,6 +1096,8 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeSources,
     storeAddSource,
     storeRemoveSource,
+    storeAuthors,
+    storeRemoveAuthor,
     storeRename,
     storeDelete,
     storeMaterialize,
