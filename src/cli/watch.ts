@@ -2,7 +2,7 @@ import { Command, Options } from "@effect/cli";
 import { Effect, Layer, Option, Schedule, Stream } from "effect";
 import { Jetstream } from "effect-jetstream";
 import { filterExprSignature } from "../domain/filter.js";
-import { DataSource, SyncResult, SyncResultMonoid } from "../domain/sync.js";
+import { DataSource, SyncError, SyncResult, SyncResultMonoid } from "../domain/sync.js";
 import { SyncReporter } from "../services/sync-reporter.js";
 import { JetstreamSyncEngine } from "../services/jetstream-sync.js";
 import { SyncEngine } from "../services/sync-engine.js";
@@ -524,11 +524,15 @@ const watchStoreCommand = Command.make(
       const storeSources = yield* StoreSources;
       const storeRef = yield* storeOptions.loadStoreRef(store);
       const storeConfig = yield* storeOptions.loadStoreConfig(store);
-      const sources = yield* storeSources
-        .list(storeRef)
-        .pipe(Effect.flatMap((list) =>
-          resolveStoreSources(list, { authorsOnly, feedsOnly, listsOnly })
-        ));
+      const loadSources = () =>
+        storeSources
+          .list(storeRef)
+          .pipe(
+            Effect.flatMap((list) =>
+              resolveStoreSources(list, { authorsOnly, feedsOnly, listsOnly })
+            )
+          );
+      const initialSources = yield* loadSources();
       const basePolicy = storeConfig.syncPolicy ?? "dedupe";
       const policy = refresh ? "refresh" : basePolicy;
       const parsedInterval = parseInterval(interval);
@@ -539,7 +543,7 @@ const watchStoreCommand = Command.make(
       yield* logInfo("Starting watch", {
         source: "store",
         store: storeRef.name,
-        sources: sources.length
+        sources: initialSources.length
       });
 
       if (policy === "refresh") {
@@ -574,6 +578,7 @@ const watchStoreCommand = Command.make(
       }
 
       const runCycle = Effect.gen(function* () {
+        const sources = yield* loadSources();
         let combined = SyncResultMonoid.empty;
         const sourceResults: Array<{
           readonly id: string;
@@ -583,22 +588,43 @@ const watchStoreCommand = Command.make(
 
         for (const source of sources) {
           const id = storeSourceId(source);
-          const expr = yield* storeSourceFilterExpr(source);
-          const dataSource = storeSourceDataSource(source);
+          const result = yield* Effect.gen(function* () {
+            const expr = yield* storeSourceFilterExpr(source, id);
+            const dataSource = storeSourceDataSource(source);
 
-          yield* logInfo("Starting sync", {
-            source: id,
-            type: source._tag,
-            store: storeRef.name
-          });
+            yield* logInfo("Starting sync", {
+              source: id,
+              type: source._tag,
+              store: storeRef.name
+            });
 
-          const result = yield* sync
-            .sync(dataSource, storeRef, expr, { policy })
-            .pipe(Effect.provideService(SyncReporter, reporter));
+            const syncResult = yield* sync
+              .sync(dataSource, storeRef, expr, { policy })
+              .pipe(Effect.provideService(SyncReporter, reporter));
+
+            yield* storeSources.markSynced(storeRef, id, new Date());
+            return syncResult;
+          }).pipe(
+            Effect.catchAll((error) => {
+              const message = error instanceof Error ? error.message : String(error);
+              const syncError = SyncError.make({ stage: "source", message, cause: error });
+              const failure = SyncResult.make({
+                postsAdded: 0,
+                postsDeleted: 0,
+                postsSkipped: 0,
+                errors: [syncError]
+              });
+              return logWarn("Source sync failed", {
+                store: storeRef.name,
+                source: id,
+                type: source._tag,
+                error: message
+              }).pipe(Effect.orElseSucceed(() => undefined), Effect.as(failure));
+            })
+          );
 
           combined = SyncResultMonoid.combine(combined, result);
           sourceResults.push({ id, type: source._tag, result });
-          yield* storeSources.markSynced(storeRef, id, new Date());
         }
 
         return {
@@ -606,7 +632,33 @@ const watchStoreCommand = Command.make(
           sources: sourceResults,
           ...(combined as SyncResult)
         };
-      });
+      }).pipe(
+        Effect.catchAll((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          const syncError = SyncError.make({ stage: "source", message, cause: error });
+          const failure = SyncResult.make({
+            postsAdded: 0,
+            postsDeleted: 0,
+            postsSkipped: 0,
+            errors: [syncError]
+          });
+          return logWarn("Source registry sync failed", {
+            store: storeRef.name,
+            error: message
+          }).pipe(
+            Effect.orElseSucceed(() => undefined),
+            Effect.as({
+              store: storeRef.name,
+              sources: [] as ReadonlyArray<{
+                readonly id: string;
+                readonly type: string;
+                readonly result: SyncResult;
+              }>,
+              ...(failure as SyncResult)
+            })
+          );
+        })
+      );
 
       const baseStream = Stream.repeatEffectWithSchedule(
         runCycle,

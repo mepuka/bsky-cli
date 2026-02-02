@@ -134,6 +134,8 @@ skygent store remove-source <store> <id> [--prune]   # prune only for author
 
 Output via `writeJson` / `writeText` consistent with existing CLI conventions.
 
+Note: `--expand-members` is reserved for Phase 4. It is persisted but has no runtime effect yet.
+
 ### Sync/watch (primary path)
 
 ```
@@ -143,7 +145,10 @@ skygent watch <store> [--interval ...]
 
 Behavior:
 - Read active sources from `StoreSources`.
-- For Phase 1, run **serial** sync for correctness.
+- Run **serial** sync for correctness (Phase 2).
+- Per-source errors are captured in the output and do **not** stop other sources.
+- `lastSyncedAt` is updated only after a source sync completes successfully.
+- Watch reloads the store source registry each cycle so edits are picked up automatically.
 - Later optimization: concurrent fetch + serialized writes (see Phase 3).
 
 Existing `sync timeline|author|feed|list` commands remain for one‑off operations.
@@ -154,8 +159,10 @@ For Phase 3 (bulk sync):
 - Introduce a `SyncCoordinator` that:
   - builds per‑source sync effects
   - fetches concurrently (`Effect.forEach` with `concurrency` or `Stream.mapEffect`)
-  - serializes writes using existing `StoreDb` semaphore or explicit `Semaphore`
-- If batching external calls is needed, use `RequestResolver.makeBatched` with `Request.TaggedClass` (per Effect patterns in `.reference/effect`).
+  - serializes writes using an explicit per‑store `Semaphore` (pattern: `StoreDb` client cache)
+  - checkpoints only after successful batch writes
+- If batching external calls is needed, use `RequestResolver.makeBatched` with `Request.TaggedClass`,
+  combine with `RequestResolver.batchN`, and optionally `RequestResolver.dataLoader` (micro‑batching).
 
 ## Pruning
 
@@ -193,5 +200,4 @@ Applied automatically by `StoreDb` migrator.
 
 ## Open Questions
 
-- Keep `StoreSource` in store DB vs. a separate config file? (proposal: store DB for atomicity + existing migration infra)
-- Should `sync <store>` be strict when no sources configured? (proposal: fail fast with `CliInputError` + hint)
+- None currently. Remaining Phase 3/4 decisions will be tracked here.

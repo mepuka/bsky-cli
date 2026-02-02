@@ -208,7 +208,9 @@ export class StoreSources extends Context.Tag("@skygent/StoreSources")<
       const markSynced = Effect.fn("StoreSources.markSynced")(
         (store: StoreRef, id: string, at: Date) =>
           Schema.decodeUnknown(Timestamp)(at).pipe(
-            Effect.orDie,
+            Effect.mapError(
+              toStoreSourcesError("StoreSources.markSynced failed", "storeSourcesMarkSynced")
+            ),
             Effect.flatMap((timestamp) =>
               updateSource(store, id, (source) => ({
                 ...source,

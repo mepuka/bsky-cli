@@ -2,7 +2,7 @@ import { Effect, Option } from "effect";
 import { DataSource } from "../domain/sync.js";
 import type { StoreSource } from "../domain/store-sources.js";
 import { parseFilterExpr } from "./filter-input.js";
-import { CliInputError } from "./errors.js";
+import { CliInputError, CliJsonError } from "./errors.js";
 
 export type StoreSourceSelection = {
   readonly authorsOnly: boolean;
@@ -82,21 +82,30 @@ export const storeSourceDataSource = (source: StoreSource): DataSource => {
   }
 };
 
-export const storeSourceFilterExpr = (source: StoreSource) => {
+const wrapFilterError =
+  (source: StoreSource, sourceId: string) => (error: CliInputError | CliJsonError) =>
+  CliInputError.make({
+    message: `Invalid filter configuration for source ${sourceId} (${source._tag}).`,
+    cause: error
+  });
+
+export const storeSourceFilterExpr = (source: StoreSource, sourceId: string) => {
   switch (source._tag) {
     case "AuthorSource":
       return parseFilterExpr(
         Option.fromNullable(source.postFilter),
         Option.fromNullable(source.postFilterJson)
-      );
+      ).pipe(Effect.mapError(wrapFilterError(source, sourceId)));
     case "FeedSource":
     case "ListSource":
       return parseFilterExpr(
         Option.fromNullable(source.filter),
         Option.fromNullable(source.filterJson)
-      );
+      ).pipe(Effect.mapError(wrapFilterError(source, sourceId)));
     case "TimelineSource":
     case "JetstreamSource":
-      return parseFilterExpr(Option.none(), Option.none());
+      return parseFilterExpr(Option.none(), Option.none()).pipe(
+        Effect.mapError(wrapFilterError(source, sourceId))
+      );
   }
 };

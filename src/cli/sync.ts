@@ -2,7 +2,7 @@ import { Command, Options } from "@effect/cli";
 import { Effect, Layer, Option } from "effect";
 import { Jetstream } from "effect-jetstream";
 import { filterExprSignature } from "../domain/filter.js";
-import { DataSource, SyncResult, SyncResultMonoid } from "../domain/sync.js";
+import { DataSource, SyncError, SyncResult, SyncResultMonoid } from "../domain/sync.js";
 import { JetstreamSyncEngine } from "../services/jetstream-sync.js";
 import { storeOptions } from "./store.js";
 import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
@@ -530,25 +530,46 @@ const syncStoreCommand = Command.make(
 
       for (const source of sources) {
         const id = storeSourceId(source);
-        const expr = yield* storeSourceFilterExpr(source);
-        const dataSource = storeSourceDataSource(source);
+        const result = yield* Effect.gen(function* () {
+          const expr = yield* storeSourceFilterExpr(source, id);
+          const dataSource = storeSourceDataSource(source);
 
-        yield* logInfo("Starting sync", {
-          source: id,
-          type: source._tag,
-          store: storeRef.name
-        });
+          yield* logInfo("Starting sync", {
+            source: id,
+            type: source._tag,
+            store: storeRef.name
+          });
 
-        const result = yield* sync
-          .sync(dataSource, storeRef, expr, {
-            policy,
-            ...(limitValue !== undefined ? { limit: limitValue } : {})
+          const syncResult = yield* sync
+            .sync(dataSource, storeRef, expr, {
+              policy,
+              ...(limitValue !== undefined ? { limit: limitValue } : {})
+            })
+            .pipe(Effect.provideService(SyncReporter, reporter));
+
+          yield* storeSources.markSynced(storeRef, id, new Date());
+          return syncResult;
+        }).pipe(
+          Effect.catchAll((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            const syncError = SyncError.make({ stage: "source", message, cause: error });
+            const failure = SyncResult.make({
+              postsAdded: 0,
+              postsDeleted: 0,
+              postsSkipped: 0,
+              errors: [syncError]
+            });
+            return logWarn("Source sync failed", {
+              store: storeRef.name,
+              source: id,
+              type: source._tag,
+              error: message
+            }).pipe(Effect.orElseSucceed(() => undefined), Effect.as(failure));
           })
-          .pipe(Effect.provideService(SyncReporter, reporter));
+        );
 
         combined = SyncResultMonoid.combine(combined, result);
         sourceResults.push({ id, type: source._tag, result });
-        yield* storeSources.markSynced(storeRef, id, new Date());
       }
 
       const materialized = yield* outputManager.materializeStore(storeRef);
