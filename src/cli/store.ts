@@ -1,10 +1,18 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Effect, Option } from "effect";
+import { Chunk, Effect, Option, Schema } from "effect";
 import { StoreManager } from "../services/store-manager.js";
 import { AppConfigService } from "../services/app-config.js";
 import { Terminal } from "@effect/platform";
 import { StoreNotFound } from "../domain/errors.js";
-import { StoreName } from "../domain/primitives.js";
+import { ActorId, AtUri, Did, StoreName, Timestamp } from "../domain/primitives.js";
+import {
+  AuthorSource,
+  FeedSource,
+  JetstreamSource,
+  ListSource,
+  TimelineSource,
+  storeSourceId
+} from "../domain/store-sources.js";
 import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
 import type { StoreLineage } from "../domain/derivation.js";
 import { defaultStoreConfig } from "../domain/defaults.js";
@@ -22,6 +30,16 @@ import { withExamples } from "./help.js";
 import { resolveOutputFormat, treeTableJsonFormats } from "./output-format.js";
 import { StoreRenamer } from "../services/store-renamer.js";
 import { PositiveInt } from "./option-schemas.js";
+import { StoreSources } from "../services/store-sources.js";
+import { IdentityResolver } from "../services/identity-resolver.js";
+import { BskyClient } from "../services/bsky-client.js";
+import {
+  authorFeedFilterValues,
+  filterJsonOption as sourceFilterJsonOption,
+  postFilterJsonOption as sourcePostFilterJsonOption,
+  postFilterOption as sourcePostFilterOption
+} from "./shared-options.js";
+import { parseOptionalFilterExpr } from "./filter-input.js";
 import {
   cacheStatusForStore,
   cacheStoreImages,
@@ -49,6 +67,9 @@ const storeRenameFromArg = Args.text({ name: "from" }).pipe(
 const storeRenameToArg = Args.text({ name: "to" }).pipe(
   Args.withSchema(StoreName),
   Args.withDescription("New store name")
+);
+const storeSourceIdArg = Args.text({ name: "id" }).pipe(
+  Args.withDescription("Source id (AuthorSource:did:..., FeedSource:at://..., ListSource:at://..., TimelineSource:timeline, JetstreamSource:jetstream)")
 );
 const storeNameOption = Options.text("store").pipe(
   Options.withSchema(StoreName),
@@ -93,6 +114,37 @@ const cacheSweepForceOption = Options.boolean("force").pipe(
 const cacheTtlForceOption = Options.boolean("force").pipe(
   Options.withAlias("f"),
   Options.withDescription("Delete expired cache files (default: dry-run)")
+);
+
+const sourceAuthorOption = Options.text("author").pipe(
+  Options.withSchema(ActorId),
+  Options.withDescription("Author handle or DID"),
+  Options.optional
+);
+const sourceFeedOption = Options.text("feed").pipe(
+  Options.withSchema(AtUri),
+  Options.withDescription("Bluesky feed URI (at://...)"),
+  Options.optional
+);
+const sourceListOption = Options.text("list").pipe(
+  Options.withSchema(AtUri),
+  Options.withDescription("Bluesky list URI (at://...)"),
+  Options.optional
+);
+const sourceTimelineOption = Options.boolean("timeline").pipe(
+  Options.withDescription("Use the authenticated timeline source")
+);
+const sourceJetstreamOption = Options.boolean("jetstream").pipe(
+  Options.withDescription("Use the Jetstream firehose source")
+);
+const sourceFilterOption = Options.text("filter").pipe(
+  Options.withDescription(
+    "Source filter (author: posts_no_replies, posts_with_replies, posts_with_media, posts_and_author_threads; feed/list: filter DSL)"
+  ),
+  Options.optional
+);
+const sourceExpandMembersOption = Options.boolean("expand-members").pipe(
+  Options.withDescription("Expand list members into author sources (when supported)")
 );
 
 const configJsonOption = Options.text("config-json").pipe(
@@ -163,6 +215,69 @@ const compactLineage = (store: StoreRef, lineage: StoreLineage | undefined) => {
   }
   return { ...base, sources };
 };
+
+type SourceSelection =
+  | { _tag: "author"; actor: ActorId }
+  | { _tag: "feed"; uri: AtUri }
+  | { _tag: "list"; uri: AtUri }
+  | { _tag: "timeline" }
+  | { _tag: "jetstream" };
+
+const selectSource = (
+  author: Option.Option<ActorId>,
+  feed: Option.Option<AtUri>,
+  list: Option.Option<AtUri>,
+  timeline: boolean,
+  jetstream: boolean
+) => {
+  const selected: Array<SourceSelection> = [];
+  if (Option.isSome(author)) {
+    selected.push({ _tag: "author", actor: author.value });
+  }
+  if (Option.isSome(feed)) {
+    selected.push({ _tag: "feed", uri: feed.value });
+  }
+  if (Option.isSome(list)) {
+    selected.push({ _tag: "list", uri: list.value });
+  }
+  if (timeline) {
+    selected.push({ _tag: "timeline" });
+  }
+  if (jetstream) {
+    selected.push({ _tag: "jetstream" });
+  }
+
+  const selectionSummary = {
+    author: Option.isSome(author),
+    feed: Option.isSome(feed),
+    list: Option.isSome(list),
+    timeline,
+    jetstream
+  };
+
+  if (selected.length === 0) {
+    return Effect.fail(
+      CliInputError.make({
+        message: "Provide one of --author, --feed, --list, --timeline, or --jetstream.",
+        cause: selectionSummary
+      })
+    );
+  }
+  if (selected.length > 1) {
+    return Effect.fail(
+      CliInputError.make({
+        message: "Use only one of --author, --feed, --list, --timeline, or --jetstream.",
+        cause: selectionSummary
+      })
+    );
+  }
+  return Effect.succeed(selected[0]!);
+};
+
+const validateDslFilters = (
+  filter: Option.Option<string>,
+  filterJson: Option.Option<string>
+) => parseOptionalFilterExpr(filter, filterJson).pipe(Effect.asVoid);
 
 export const storeCreate = Command.make(
   "create",
@@ -239,6 +354,269 @@ export const storeShow = Command.make(
     withExamples("Show store config and metadata", [
       "skygent store show my-store",
       "skygent store show my-store --compact"
+    ])
+  )
+);
+
+export const storeSources = Command.make(
+  "sources",
+  { name: storeNameArg },
+  ({ name }) =>
+    Effect.gen(function* () {
+      const sources = yield* StoreSources;
+      const preferences = yield* CliPreferences;
+      const storeRef = yield* loadStoreRef(name);
+      const entries = yield* sources.list(storeRef);
+
+      if (preferences.compact) {
+        const ids = entries.map((source) => storeSourceId(source));
+        yield* writeJson(ids);
+        return;
+      }
+
+      const output = entries.map((source) => ({
+        id: storeSourceId(source),
+        source
+      }));
+      yield* writeJson(output);
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("List configured sources for a store", [
+      "skygent store sources my-store"
+    ])
+  )
+);
+
+export const storeAddSource = Command.make(
+  "add-source",
+  {
+    name: storeNameArg,
+    author: sourceAuthorOption,
+    feed: sourceFeedOption,
+    list: sourceListOption,
+    timeline: sourceTimelineOption,
+    jetstream: sourceJetstreamOption,
+    filter: sourceFilterOption,
+    filterJson: sourceFilterJsonOption,
+    postFilter: sourcePostFilterOption,
+    postFilterJson: sourcePostFilterJsonOption,
+    expandMembers: sourceExpandMembersOption
+  },
+  ({ name, author, feed, list, timeline, jetstream, filter, filterJson, postFilter, postFilterJson, expandMembers }) =>
+    Effect.gen(function* () {
+      const storeRef = yield* loadStoreRef(name);
+      const storeSources = yield* StoreSources;
+      const selection = yield* selectSource(author, feed, list, timeline, jetstream);
+      const hasFilter = Option.isSome(filter) || Option.isSome(filterJson);
+      const hasPostFilter = Option.isSome(postFilter) || Option.isSome(postFilterJson);
+
+      if (selection._tag !== "list" && expandMembers) {
+        return yield* CliInputError.make({
+          message: "--expand-members is only supported for list sources.",
+          cause: { expandMembers }
+        });
+      }
+
+      if (selection._tag !== "author" && hasPostFilter) {
+        return yield* CliInputError.make({
+          message: "--post-filter and --post-filter-json are only supported for author sources.",
+          cause: { postFilter: Option.isSome(postFilter), postFilterJson: Option.isSome(postFilterJson) }
+        });
+      }
+
+      if ((selection._tag === "timeline" || selection._tag === "jetstream") && (hasFilter || hasPostFilter || expandMembers)) {
+        return yield* CliInputError.make({
+          message: "Timeline and jetstream sources do not support filters or list options.",
+          cause: {
+            filter: Option.isSome(filter),
+            filterJson: Option.isSome(filterJson),
+            postFilter: Option.isSome(postFilter),
+            postFilterJson: Option.isSome(postFilterJson),
+            expandMembers
+          }
+        });
+      }
+
+      const now = new Date();
+      const addedAt = yield* Schema.decodeUnknown(Timestamp)(now).pipe(Effect.orDie);
+
+      switch (selection._tag) {
+        case "author": {
+          if (Option.isSome(filterJson)) {
+            return yield* CliInputError.make({
+              message: "--filter-json is not supported for author sources.",
+              cause: { filterJson: filterJson.value }
+            });
+          }
+          const apiFilter = Option.getOrUndefined(filter);
+          if (
+            apiFilter !== undefined &&
+            !authorFeedFilterValues.includes(apiFilter as (typeof authorFeedFilterValues)[number])
+          ) {
+            return yield* CliInputError.make({
+              message: `Invalid author filter: ${apiFilter}`,
+              cause: { filter: apiFilter, validTags: authorFeedFilterValues }
+            });
+          }
+
+          yield* validateDslFilters(postFilter, postFilterJson);
+
+          const identities = yield* IdentityResolver;
+          const actorInput = selection.actor;
+          const resolved = actorInput.startsWith("did:")
+            ? {
+                did: yield* Schema.decodeUnknown(Did)(actorInput).pipe(Effect.orDie),
+                handle: undefined
+              }
+            : yield* identities.resolveIdentity(actorInput).pipe(
+                Effect.mapError((error) =>
+                  CliInputError.make({
+                    message: `Failed to resolve author: ${error.message}`,
+                    cause: error
+                  })
+                )
+              );
+
+          const source = AuthorSource.make({
+            actor: resolved.did,
+            ...(resolved.handle ? { display: resolved.handle } : {}),
+            ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
+            ...(Option.isSome(postFilter) ? { postFilter: postFilter.value } : {}),
+            ...(Option.isSome(postFilterJson) ? { postFilterJson: postFilterJson.value } : {}),
+            addedAt,
+            enabled: true
+          });
+
+          const stored = yield* storeSources.add(storeRef, source);
+          yield* writeJson({
+            store: storeRef.name,
+            id: storeSourceId(stored),
+            source: stored
+          });
+          return;
+        }
+        case "feed": {
+          if (expandMembers) {
+            return yield* CliInputError.make({
+              message: "--expand-members is only supported for list sources.",
+              cause: { expandMembers }
+            });
+          }
+
+          yield* validateDslFilters(filter, filterJson);
+
+          const client = yield* BskyClient;
+          const warning = yield* client.getFeedGenerator(selection.uri).pipe(
+            Effect.as(Option.none<string>()),
+            Effect.catchTag("BskyError", (error) => Effect.succeed(Option.some(error.message)))
+          );
+
+          const source = FeedSource.make({
+            uri: selection.uri,
+            ...(Option.isSome(filter) ? { filter: filter.value } : {}),
+            ...(Option.isSome(filterJson) ? { filterJson: filterJson.value } : {}),
+            addedAt,
+            enabled: true
+          });
+
+          const stored = yield* storeSources.add(storeRef, source);
+          yield* writeJson({
+            store: storeRef.name,
+            id: storeSourceId(stored),
+            source: stored,
+            ...(Option.isSome(warning) ? { warning: warning.value } : {})
+          });
+          return;
+        }
+        case "list": {
+          yield* validateDslFilters(filter, filterJson);
+
+          const client = yield* BskyClient;
+          const warning = yield* client.getList(selection.uri).pipe(
+            Effect.as(Option.none<string>()),
+            Effect.catchTag("BskyError", (error) => Effect.succeed(Option.some(error.message)))
+          );
+
+          const source = ListSource.make({
+            uri: selection.uri,
+            expandMembers,
+            ...(Option.isSome(filter) ? { filter: filter.value } : {}),
+            ...(Option.isSome(filterJson) ? { filterJson: filterJson.value } : {}),
+            addedAt,
+            enabled: true
+          });
+
+          const stored = yield* storeSources.add(storeRef, source);
+          yield* writeJson({
+            store: storeRef.name,
+            id: storeSourceId(stored),
+            source: stored,
+            ...(Option.isSome(warning) ? { warning: warning.value } : {})
+          });
+          return;
+        }
+        case "timeline": {
+          const source = TimelineSource.make({
+            addedAt,
+            enabled: true
+          });
+          const stored = yield* storeSources.add(storeRef, source);
+          yield* writeJson({
+            store: storeRef.name,
+            id: storeSourceId(stored),
+            source: stored
+          });
+          return;
+        }
+        case "jetstream": {
+          const source = JetstreamSource.make({
+            addedAt,
+            enabled: true
+          });
+          const stored = yield* storeSources.add(storeRef, source);
+          yield* writeJson({
+            store: storeRef.name,
+            id: storeSourceId(stored),
+            source: stored
+          });
+          return;
+        }
+      }
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Add a source to a store", [
+      "skygent store add-source my-store --author alice.bsky.social",
+      "skygent store add-source my-store --feed at://did:plc:example/app.bsky.feed.generator/xyz",
+      "skygent store add-source my-store --list at://did:plc:example/app.bsky.graph.list/abc",
+      "skygent store add-source my-store --timeline"
+    ])
+  )
+);
+
+export const storeRemoveSource = Command.make(
+  "remove-source",
+  { name: storeNameArg, id: storeSourceIdArg },
+  ({ name, id }) =>
+    Effect.gen(function* () {
+      const storeRef = yield* loadStoreRef(name);
+      const sources = yield* StoreSources;
+      const existing = yield* sources.get(storeRef, id);
+      if (Option.isNone(existing)) {
+        return yield* CliInputError.make({
+          message: `Unknown source id: ${id}`,
+          cause: { id }
+        });
+      }
+      yield* sources.remove(storeRef, id);
+      yield* writeJson({ store: storeRef.name, removed: id });
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Remove a configured source from a store", [
+      "skygent store remove-source my-store AuthorSource:did:plc:example",
+      "skygent store remove-source my-store TimelineSource:timeline"
     ])
   )
 );
@@ -553,6 +931,9 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeCreate,
     storeList,
     storeShow,
+    storeSources,
+    storeAddSource,
+    storeRemoveSource,
     storeRename,
     storeDelete,
     storeMaterialize,

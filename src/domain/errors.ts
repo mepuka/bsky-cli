@@ -92,6 +92,12 @@ export class StoreIndexError extends Schema.TaggedError<StoreIndexError>()(
   { message: Schema.String, cause: Schema.optional(Schema.Unknown) }
 ) {}
 
+export class StoreSourcesError extends Schema.TaggedError<StoreSourcesError>()(
+  "StoreSourcesError",
+  { message: Schema.String, cause: Schema.optional(Schema.Unknown), operation: Schema.optional(Schema.String) }
+) {}
+export const isStoreSourcesError = Schema.is(StoreSourcesError);
+
 
 export class FilterNotFound extends Schema.TaggedError<FilterNotFound>()(
   "FilterNotFound",

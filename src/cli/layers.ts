@@ -12,6 +12,7 @@ import { StoreEventLog } from "../services/store-event-log.js";
 import { StoreIndex } from "../services/store-index.js";
 import { StoreDb } from "../services/store-db.js";
 import { StoreManager } from "../services/store-manager.js";
+import { StoreSources } from "../services/store-sources.js";
 import { StoreWriter } from "../services/store-writer.js";
 import { StoreCommitter } from "../services/store-commit.js";
 import { SyncEngine } from "../services/sync-engine.js";
@@ -59,6 +60,7 @@ const storageLayer = Layer.unwrapEffect(
   })
 ).pipe(Layer.provide(appConfigLayer));
 const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
+const storeSourcesLayer = StoreSources.layer.pipe(Layer.provideMerge(storeDbLayer));
 const writerLayer = StoreWriter.layer.pipe(Layer.provideMerge(storeDbLayer));
 const committerLayer = StoreCommitter.layer.pipe(
   Layer.provideMerge(storeDbLayer),
@@ -210,6 +212,7 @@ export const CliLive = Layer.mergeAll(
   eventLogLayer,
   cleanerLayer,
   storeRenamerLayer,
+  storeSourcesLayer,
   syncLayer,
   checkpointLayer,
   viewCheckpointLayer,
