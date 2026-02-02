@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Chunk, Clock, Duration, Effect, Option, Schema } from "effect";
+import { Cause, Chunk, Clock, Duration, Effect, Option, Schema } from "effect";
 import { StoreManager } from "../services/store-manager.js";
 import { AppConfigService } from "../services/app-config.js";
 import { Terminal } from "@effect/platform";
@@ -37,6 +37,7 @@ import { StoreIndex } from "../services/store-index.js";
 import { StoreCommitter } from "../services/store-commit.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import { BskyClient } from "../services/bsky-client.js";
+import { messageFromCause } from "../services/shared.js";
 import {
   authorFeedFilterValues,
   filterJsonOption as sourceFilterJsonOption,
@@ -877,7 +878,19 @@ export const storeDelete = Command.make(
         }
       }
       const cleaner = yield* StoreCleaner;
-      const result = yield* cleaner.deleteStore(name);
+      const result = yield* cleaner.deleteStore(name).pipe(
+        Effect.catchAllCause((cause) =>
+          Effect.fail(
+            CliInputError.make({
+              message: messageFromCause(
+                `Failed to delete store "${name}".`,
+                Cause.squash(cause)
+              ),
+              cause
+            })
+          )
+        )
+      );
       if (!result.deleted) {
         if (result.reason === "missing") {
           yield* writeJson(result);

@@ -67,17 +67,21 @@ export const PostFromRaw = Schema.transformOrFail(RawPost, Post, {
       ...extractLinks(raw.record.text),
       ...facetData.links
     ]);
-    const embed =
-      raw.embed ??
-      (raw.record.embed
-        ? EmbedUnknown.make({
-            rawType:
-              typeof (raw.record.embed as { $type?: unknown })?.$type === "string"
-                ? String((raw.record.embed as { $type?: unknown }).$type)
-                : "unknown",
-            data: raw.record.embed
-          })
-        : undefined);
+    const decodeRecordEmbed = () => {
+      if (!raw.record.embed) return undefined;
+      try {
+        return Schema.decodeUnknownSync(PostEmbed)(raw.record.embed);
+      } catch {
+        return EmbedUnknown.make({
+          rawType:
+            typeof (raw.record.embed as { $type?: unknown })?.$type === "string"
+              ? String((raw.record.embed as { $type?: unknown }).$type)
+              : "unknown",
+          data: raw.record.embed
+        });
+      }
+    };
+    const embed = raw.embed ?? decodeRecordEmbed();
     return ParseResult.decodeUnknown(Schema.encodedSchema(Post))({
       uri: raw.uri,
       cid: raw.cid,

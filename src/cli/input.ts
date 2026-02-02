@@ -1,6 +1,7 @@
 import { SystemError, type PlatformError } from "@effect/platform/Error";
 import { Context, Effect, Layer, Stream } from "effect";
 import { createInterface } from "node:readline";
+import { isatty } from "node:tty";
 
 export interface CliInputService {
   readonly lines: Stream.Stream<string, PlatformError>;
@@ -41,7 +42,7 @@ export class CliInput extends Context.Tag("@skygent/CliInput")<
     CliInput,
     CliInput.of({
       lines: makeLines(),
-      isTTY: Boolean(process.stdin.isTTY)
+      isTTY: Boolean(process.stdin.isTTY || isatty(process.stdin.fd ?? 0))
     })
   );
 }
