@@ -22,7 +22,13 @@ import { withExamples } from "./help.js";
 import { resolveOutputFormat, treeTableJsonFormats } from "./output-format.js";
 import { StoreRenamer } from "../services/store-renamer.js";
 import { PositiveInt } from "./option-schemas.js";
-import { cacheStatusForStore, cacheStoreImages, cleanImageCache } from "./image-cache.js";
+import {
+  cacheStatusForStore,
+  cacheStoreImages,
+  cacheSweepForStore,
+  cacheTtlSweep,
+  cleanImageCache
+} from "./image-cache.js";
 import {
   buildStoreTreeData,
   renderStoreTree,
@@ -79,6 +85,14 @@ const cacheThumbnailsOption = Options.boolean("thumbnails").pipe(
 const cacheForceOption = Options.boolean("force").pipe(
   Options.withAlias("f"),
   Options.withDescription("Confirm image cache deletion")
+);
+const cacheSweepForceOption = Options.boolean("force").pipe(
+  Options.withAlias("f"),
+  Options.withDescription("Delete orphaned cache files (default: dry-run)")
+);
+const cacheTtlForceOption = Options.boolean("force").pipe(
+  Options.withAlias("f"),
+  Options.withDescription("Delete expired cache files (default: dry-run)")
 );
 
 const configJsonOption = Options.text("config-json").pipe(
@@ -445,6 +459,56 @@ export const storeCacheClean = Command.make(
   )
 );
 
+export const storeCacheSweep = Command.make(
+  "cache-sweep",
+  { name: storeNameArg, thumbnails: cacheThumbnailsOption, force: cacheSweepForceOption },
+  ({ name, thumbnails, force }) =>
+    Effect.gen(function* () {
+      const storeRef = yield* loadStoreRef(name);
+      const result = yield* cacheSweepForStore(storeRef, {
+        includeThumbnails: thumbnails,
+        remove: force
+      });
+      yield* writeJson(result);
+    })
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Sweep orphaned image cache files",
+      [
+        "skygent store cache-sweep my-store",
+        "skygent store cache-sweep my-store --thumbnails --force"
+      ],
+      ["Tip: omit --force to run a dry sweep first."]
+    )
+  )
+);
+
+export const storeCacheTtlSweep = Command.make(
+  "cache-ttl-sweep",
+  { name: storeNameArg, thumbnails: cacheThumbnailsOption, force: cacheTtlForceOption },
+  ({ name, thumbnails, force }) =>
+    Effect.gen(function* () {
+      const storeRef = yield* loadStoreRef(name);
+      const result = yield* cacheTtlSweep({
+        includeThumbnails: thumbnails,
+        remove: force
+      });
+      yield* writeJson({ store: storeRef.name, ...result });
+    })
+).pipe(
+  Command.withDescription(
+    withExamples(
+      "Sweep expired image cache files (TTL-based)",
+      [
+        "skygent store cache-ttl-sweep my-store",
+        "skygent store cache-ttl-sweep my-store --thumbnails --force"
+      ],
+      ["Tip: omit --force to run a dry sweep first."]
+    )
+  )
+);
+
 export const storeTree = Command.make(
   "tree",
   { format: treeFormatOption, ansi: treeAnsiOption, width: treeWidthOption },
@@ -497,6 +561,8 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeCache,
     storeCacheStatus,
     storeCacheClean,
+    storeCacheSweep,
+    storeCacheTtlSweep,
     storeTree
   ]),
   Command.withDescription(

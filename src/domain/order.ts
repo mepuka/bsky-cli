@@ -3,9 +3,8 @@ import type { Post } from "./post.js";
 import type { StoreRef } from "./store.js";
 
 export const LocaleStringOrder = Order.make<string>((left, right) => {
-  const result = left.localeCompare(right);
-  if (result < 0) return -1;
-  if (result > 0) return 1;
+  if (left < right) return -1;
+  if (left > right) return 1;
   return 0;
 });
 

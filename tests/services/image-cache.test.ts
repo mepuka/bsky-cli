@@ -138,6 +138,89 @@ describe("ImageCache", () => {
       await removeTempDir(tempDir);
     }
   });
+
+  test("invalidate removes cached files", async () => {
+    const fetcherLayer = makeFetcherLayer(() => undefined);
+    const tempDir = await makeTempDir();
+
+    try {
+      const layer = buildLayer(
+        tempDir,
+        [["SKYGENT_IMAGE_CACHE_ENABLED", "true"]],
+        fetcherLayer
+      );
+      const program = Effect.gen(function* () {
+        const cache = yield* ImageCache;
+        const archive = yield* ImageArchive;
+        const fs = yield* FileSystem.FileSystem;
+
+        const cached = yield* cache.get(
+          "https://example.com/image.png",
+          "original"
+        );
+        const filePath = archive.resolvePath(cached);
+        const existsBefore = yield* fs.exists(filePath);
+
+        yield* cache.invalidate("https://example.com/image.png", "original");
+
+        const existsAfter = yield* fs.exists(filePath);
+        const cachedAfter = yield* cache.getCached(
+          "https://example.com/image.png",
+          "original"
+        );
+
+        return { existsBefore, existsAfter, cachedAfter };
+      });
+
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+
+      expect(result.existsBefore).toBe(true);
+      expect(result.existsAfter).toBe(false);
+      expect(Option.isNone(result.cachedAfter)).toBe(true);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("getCached clears metadata when file is missing", async () => {
+    const fetcherLayer = makeFetcherLayer(() => undefined);
+    const tempDir = await makeTempDir();
+
+    try {
+      const layer = buildLayer(
+        tempDir,
+        [["SKYGENT_IMAGE_CACHE_ENABLED", "true"]],
+        fetcherLayer
+      );
+      const program = Effect.gen(function* () {
+        const cache = yield* ImageCache;
+        const archive = yield* ImageArchive;
+        const fs = yield* FileSystem.FileSystem;
+
+        const cached = yield* cache.get(
+          "https://example.com/image.png",
+          "original"
+        );
+        const filePath = archive.resolvePath(cached);
+        yield* fs.remove(filePath);
+
+        const cachedAfter = yield* cache.getCached(
+          "https://example.com/image.png",
+          "original"
+        );
+        const existsAfter = yield* fs.exists(filePath);
+
+        return { cachedAfter, existsAfter };
+      });
+
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+
+      expect(Option.isNone(result.cachedAfter)).toBe(true);
+      expect(result.existsAfter).toBe(false);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
 });
 
 describe("ImagePipeline", () => {

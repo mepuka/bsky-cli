@@ -71,6 +71,8 @@ export class ImageArchive extends Context.Tag("@skygent/ImageArchive")<
   {
     readonly store: (input: ImageArchiveInput) => Effect.Effect<ImageAsset, ImageArchiveError>;
     readonly resolvePath: (asset: ImageAsset) => string;
+    readonly exists: (asset: ImageAsset) => Effect.Effect<boolean, ImageArchiveError>;
+    readonly remove: (asset: ImageAsset) => Effect.Effect<void, ImageArchiveError>;
   }
 >() {
   static readonly layer = Layer.effect(
@@ -130,7 +132,24 @@ export class ImageArchive extends Context.Tag("@skygent/ImageArchive")<
         })
       );
 
-      return ImageArchive.of({ store, resolvePath });
+      const exists = Effect.fn("ImageArchive.exists")((asset: ImageAsset) =>
+        fs
+          .exists(resolvePath(asset))
+          .pipe(Effect.mapError(toArchiveError("Failed to check image cache", asset.path, "imageArchiveExists")))
+      );
+
+      const remove = Effect.fn("ImageArchive.remove")((asset: ImageAsset) =>
+        fs
+          .remove(resolvePath(asset))
+          .pipe(
+            Effect.catchTag("SystemError", (error) =>
+              error.reason === "NotFound" ? Effect.void : Effect.fail(error)
+            ),
+            Effect.mapError(toArchiveError("Failed to remove image cache", asset.path, "imageArchiveRemove"))
+          )
+      );
+
+      return ImageArchive.of({ store, resolvePath, exists, remove });
     })
   );
 }

@@ -122,6 +122,30 @@ const buildLiteralFtsQuery = (query: string) => {
     .join(" AND ");
 };
 
+const buildColumnLiteralFtsQuery = (column: string, query: string) => {
+  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return "";
+  }
+  return tokens
+    .map((token) => `${column}:"${token.replaceAll("\"", "\"\"")}"`)
+    .join(" AND ");
+};
+
+const buildColumnFtsQuery = (column: string, query: string) => {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) {
+    return "";
+  }
+  const columnPrefix = `${column.toLowerCase()}:`;
+  if (trimmed.toLowerCase().startsWith(columnPrefix)) {
+    return trimmed;
+  }
+  return hasFtsSyntax(trimmed)
+    ? `${column}:(${trimmed})`
+    : buildColumnLiteralFtsQuery(column, trimmed);
+};
+
 const decodeEntryRow = (row: typeof postEntryRow.Type) =>
   Schema.decodeUnknown(PostIndexEntry)({
     uri: row.uri,
@@ -390,7 +414,15 @@ const pushdownToSql = (
         if (!isAscii(text)) {
           return undefined;
         }
-        return asFragment(sql`instr(lower(p.alt_text), lower(${text})) > 0`);
+        const ftsQuery = buildColumnFtsQuery("alt_text", text);
+        if (ftsQuery.length === 0) {
+          return undefined;
+        }
+        return asFragment(
+          sql`EXISTS (SELECT 1 FROM posts_fts
+            WHERE posts_fts.rowid = p.rowid
+              AND posts_fts MATCH ${ftsQuery})`
+        );
       },
       HasVideo: () => asFragment(sql`p.has_video = 1`),
       Language: (language) =>

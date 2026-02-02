@@ -2,8 +2,9 @@ import { Effect, Option } from "effect";
 import { CliInputError } from "./errors.js";
 
 type FieldSelector = {
-  readonly path: ReadonlyArray<string>;
-  readonly wildcard: boolean;
+  readonly prefix: ReadonlyArray<string>;
+  readonly suffix: ReadonlyArray<string>;
+  readonly wildcard: "none" | "object" | "array";
   readonly raw: string;
 };
 
@@ -80,12 +81,6 @@ const parseFieldToken = (token: string) =>
       }
     }
     const wildcardIndex = parts.indexOf("*");
-    if (wildcardIndex >= 0 && wildcardIndex !== parts.length - 1) {
-      return yield* CliInputError.make({
-        message: `Wildcard "*" must be the last segment in "${token}".`,
-        cause: token
-      });
-    }
     const wildcardCount = parts.filter((part) => part === "*").length;
     if (wildcardCount > 1) {
       return yield* CliInputError.make({
@@ -93,9 +88,34 @@ const parseFieldToken = (token: string) =>
         cause: token
       });
     }
-    const wildcard = wildcardIndex === parts.length - 1;
-    const path = wildcard ? parts.slice(0, -1) : parts;
-    return { path, wildcard, raw: token } satisfies FieldSelector;
+    if (wildcardIndex === 0) {
+      return yield* CliInputError.make({
+        message: `Wildcard "*" cannot be the first segment in "${token}".`,
+        cause: token
+      });
+    }
+    if (wildcardIndex >= 0) {
+      if (wildcardIndex === parts.length - 1) {
+        return {
+          prefix: parts.slice(0, -1),
+          suffix: [],
+          wildcard: "object",
+          raw: token
+        } satisfies FieldSelector;
+      }
+      return {
+        prefix: parts.slice(0, wildcardIndex),
+        suffix: parts.slice(wildcardIndex + 1),
+        wildcard: "array",
+        raw: token
+      } satisfies FieldSelector;
+    }
+    return {
+      prefix: parts,
+      suffix: [],
+      wildcard: "none",
+      raw: token
+    } satisfies FieldSelector;
   });
 
 const normalizeTokens = (raw: string) =>
@@ -219,32 +239,116 @@ const setPathValue = (
   container[tail] = value;
 };
 
+const mergeObjects = (
+  left: Record<string, unknown>,
+  right: Record<string, unknown>
+): Record<string, unknown> => {
+  const result: Record<string, unknown> = { ...left };
+  for (const [key, value] of Object.entries(right)) {
+    const existing = result[key];
+    if (isObject(existing) && isObject(value)) {
+      result[key] = mergeObjects(existing, value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+};
+
+const mergeArrayValues = (
+  existing: Array<unknown> | undefined,
+  next: Array<unknown>
+) => {
+  if (!existing) return next;
+  const max = Math.max(existing.length, next.length);
+  const merged = new Array<unknown>(max);
+  for (let index = 0; index < max; index += 1) {
+    const left = existing[index];
+    const right = next[index];
+    if (right === undefined) {
+      merged[index] = left;
+    } else if (left === undefined) {
+      merged[index] = right;
+    } else if (isObject(left) && isObject(right)) {
+      merged[index] = mergeObjects(left, right);
+    } else {
+      merged[index] = right;
+    }
+  }
+  return merged;
+};
+
+const setArrayPathValue = (
+  target: Record<string, unknown>,
+  path: ReadonlyArray<string>,
+  value: Array<unknown>
+) => {
+  if (path.length === 0) {
+    return;
+  }
+  const head = path.slice(0, -1);
+  const tail = path[path.length - 1]!;
+  const container = ensureObjectPath(target, head);
+  const existing = container[tail];
+  container[tail] = Array.isArray(existing)
+    ? mergeArrayValues(existing, value)
+    : value;
+};
+
+const projectArraySuffix = (item: unknown, suffix: ReadonlyArray<string>) => {
+  const projected: Record<string, unknown> = {};
+  if (!isObject(item)) {
+    return projected;
+  }
+  const value = getPathValue(item, suffix);
+  if (value === undefined) {
+    return projected;
+  }
+  setPathValue(projected, suffix, value);
+  return projected;
+};
+
 const applySelector = (
   target: Record<string, unknown>,
   source: unknown,
   selector: FieldSelector
 ) => {
-  if (selector.wildcard) {
-    const value = getPathValue(source, selector.path);
-    if (value === undefined) return;
-    if (Array.isArray(value)) {
-      setPathValue(target, selector.path, value);
-      return;
-    }
-    if (!isObject(value)) {
-      return;
-    }
-    for (const [key, child] of Object.entries(value)) {
-      if (child !== undefined) {
-        setPathValue(target, [...selector.path, key], child);
+  switch (selector.wildcard) {
+    case "object": {
+      const value = getPathValue(source, selector.prefix);
+      if (value === undefined) return;
+      if (Array.isArray(value)) {
+        setPathValue(target, selector.prefix, value);
+        return;
       }
+      if (!isObject(value)) {
+        return;
+      }
+      for (const [key, child] of Object.entries(value)) {
+        if (child !== undefined) {
+          setPathValue(target, [...selector.prefix, key], child);
+        }
+      }
+      return;
     }
-    return;
-  }
-
-  const value = getPathValue(source, selector.path);
-  if (value !== undefined) {
-    setPathValue(target, selector.path, value);
+    case "array": {
+      const value = getPathValue(source, selector.prefix);
+      if (!Array.isArray(value)) {
+        return;
+      }
+      const projected = value.map((item) =>
+        projectArraySuffix(item, selector.suffix)
+      );
+      setArrayPathValue(target, selector.prefix, projected);
+      return;
+    }
+    case "none": {
+      const value = getPathValue(source, selector.prefix);
+      if (value !== undefined) {
+        setPathValue(target, selector.prefix, value);
+      }
+      return;
+    }
   }
 };
 

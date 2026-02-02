@@ -151,6 +151,45 @@ export class ImageCache extends Context.Tag("@skygent/ImageCache")<
         });
       });
 
+      const invalidate = Effect.fn("ImageCache.invalidate")(
+        (url: string, variant: ImageVariant = "original") => {
+          const request = new ImageCacheRequest({ url, variant });
+          const key = cacheKey(url, variant);
+          const removeArchive = store
+            .get(request)
+            .pipe(
+              Effect.mapError(toCacheError(key, "imageCacheInvalidate")),
+              Effect.flatMap((cached) =>
+                Option.match(cached, {
+                  onNone: () => Effect.void,
+                  onSome: (exit) =>
+                    Exit.isSuccess(exit)
+                      ? archive
+                          .remove(exit.value)
+                          .pipe(
+                            Effect.mapError(
+                              toCacheError(key, "imageCacheInvalidate")
+                            )
+                          )
+                      : Effect.void
+                })
+              ),
+              Effect.catchAll(() => Effect.void)
+            );
+          const removeStore = store
+            .remove(request)
+            .pipe(Effect.mapError(toCacheError(key, "imageCacheInvalidate")));
+          const removeMemory = Option.match(requestCache, {
+            onNone: () => Effect.void,
+            onSome: (cache) => cache.invalidate(request)
+          });
+          return removeArchive.pipe(
+            Effect.zipRight(removeStore),
+            Effect.zipRight(removeMemory)
+          );
+        }
+      );
+
       const getCached = Effect.fn("ImageCache.getCached")(
         (url: string, variant: ImageVariant = "original") =>
           store
@@ -164,28 +203,22 @@ export class ImageCache extends Context.Tag("@skygent/ImageCache")<
                   onNone: () => Effect.succeed(Option.none<ImageAsset>()),
                   onSome: (exit) =>
                     Exit.isSuccess(exit)
-                      ? Effect.succeed(Option.some(exit.value))
+                      ? archive.exists(exit.value).pipe(
+                          Effect.mapError(
+                            toCacheError(cacheKey(url, variant), "imageCacheGetCached")
+                          ),
+                          Effect.flatMap((exists) =>
+                            exists
+                              ? Effect.succeed(Option.some(exit.value))
+                              : invalidate(url, variant).pipe(
+                                  Effect.as(Option.none<ImageAsset>())
+                                )
+                          )
+                        )
                       : Effect.succeed(Option.none<ImageAsset>())
                 })
               )
             )
-      );
-
-      const invalidate = Effect.fn("ImageCache.invalidate")(
-        (url: string, variant: ImageVariant = "original") => {
-          const request = new ImageCacheRequest({ url, variant });
-          const remove = store
-            .remove(request)
-            .pipe(
-              Effect.mapError(
-                toCacheError(cacheKey(url, variant), "imageCacheInvalidate")
-              )
-            );
-          return Option.match(requestCache, {
-            onNone: () => remove,
-            onSome: (cache) => remove.pipe(Effect.zipRight(cache.invalidate(request)))
-          });
-        }
       );
 
       return ImageCache.of({ get, getCached, invalidate });

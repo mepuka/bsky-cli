@@ -68,7 +68,9 @@ const untilOption = Options.text("until").pipe(
 );
 const limitOption = Options.integer("limit").pipe(
   Options.withSchema(PositiveInt),
-  Options.withDescription("Maximum number of posts to return"),
+  Options.withDescription(
+    "Maximum number of posts to return (or images when --extract-images)"
+  ),
   Options.optional
 );
 const scanLimitOption = Options.integer("scan-limit").pipe(
@@ -100,7 +102,7 @@ const widthOption = Options.integer("width").pipe(
 );
 const fieldsOption = Options.text("fields").pipe(
   Options.withDescription(
-    "Comma-separated fields to include (supports dot notation and presets: @minimal, @social, @images, @embeds, @media, @full). Use author or authorProfile.handle for handles."
+    "Comma-separated fields to include (supports dot notation, `*` for arrays, and presets: @minimal, @social, @images, @embeds, @media, @full). Use author or authorProfile.handle for handles."
   ),
   Options.optional
 );
@@ -137,17 +139,16 @@ type ImageExtract = {
 };
 
 type FieldSelector = {
-  readonly path: ReadonlyArray<string>;
-  readonly wildcard: boolean;
+  readonly prefix: ReadonlyArray<string>;
+  readonly suffix: ReadonlyArray<string>;
+  readonly wildcard: "none" | "object" | "array";
 };
 
 const isAscii = (value: string) => /^[\x00-\x7F]*$/.test(value);
 
 const selectorsIncludeImages = (selectors: ReadonlyArray<FieldSelector>) =>
   selectors.some(
-    (selector) =>
-      selector.path[0] === "images" ||
-      (selector.wildcard && selector.path.length === 0)
+    (selector) => selector.prefix[0] === "images"
   );
 
 const hasUnicodeInsensitiveContains = (expr: FilterExpr): boolean =>

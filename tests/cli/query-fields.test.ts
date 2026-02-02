@@ -42,6 +42,48 @@ describe("query fields", () => {
     });
   });
 
+  test("projects array subfields with wildcard", async () => {
+    const selectorsOption = await Effect.runPromise(
+      parseFieldSelectors("images.*.alt")
+    );
+    expect(Option.isSome(selectorsOption)).toBe(true);
+    if (selectorsOption._tag === "None") return;
+
+    const source = {
+      images: [
+        { alt: "First", fullsizeUrl: "full1" },
+        { alt: "Second", fullsizeUrl: "full2" }
+      ],
+      author: "alice"
+    };
+    const projected = projectFields(source, selectorsOption.value);
+    expect(projected).toEqual({
+      images: [{ alt: "First" }, { alt: "Second" }]
+    });
+  });
+
+  test("merges array wildcard projections", async () => {
+    const selectorsOption = await Effect.runPromise(
+      parseFieldSelectors("images.*.alt,images.*.fullsizeUrl")
+    );
+    expect(Option.isSome(selectorsOption)).toBe(true);
+    if (selectorsOption._tag === "None") return;
+
+    const source = {
+      images: [
+        { alt: "First", fullsizeUrl: "full1" },
+        { alt: "Second", fullsizeUrl: "full2" }
+      ]
+    };
+    const projected = projectFields(source, selectorsOption.value);
+    expect(projected).toEqual({
+      images: [
+        { alt: "First", fullsizeUrl: "full1" },
+        { alt: "Second", fullsizeUrl: "full2" }
+      ]
+    });
+  });
+
   test("returns none for @full", async () => {
     const selectorsOption = await Effect.runPromise(parseFieldSelectors("@full"));
     expect(Option.isNone(selectorsOption)).toBe(true);

@@ -73,6 +73,48 @@ describe("renderPostCard", () => {
     expect(output).toContain("[Images: 1]");
   });
 
+  test("renders image alt text details", () => {
+    const post = makePost({
+      embed: {
+        _tag: "Images",
+        images: [
+          { thumb: "t1", fullsize: "f1", alt: "First image" },
+          { thumb: "t2", fullsize: "f2", alt: "Second image" },
+          { thumb: "t3", fullsize: "f3", alt: "Third image" }
+        ]
+      }
+    });
+    const output = renderPlain(Doc.vsep(renderPostCard(post)));
+    expect(output).toContain("alt: First image");
+    expect(output).toContain("alt: Second image");
+    expect(output).toContain("alt: +1 more");
+  });
+
+  test("renders embed summary for record with media images", () => {
+    const post = makePost({
+      embed: {
+        _tag: "RecordWithMedia",
+        record: {
+          _tag: "RecordView",
+          uri: "at://did:plc:abc/app.bsky.feed.post/456",
+          cid: "bafyrecordcid",
+          author: { did: "did:plc:abc", handle: "bob.test" },
+          value: {},
+          indexedAt: "2024-01-15T12:00:00Z"
+        },
+        media: {
+          _tag: "Images",
+          images: [
+            { thumb: "t1", fullsize: "f1", alt: "" },
+            { thumb: "t2", fullsize: "f2", alt: "" }
+          ]
+        }
+      }
+    });
+    const output = renderPlain(Doc.vsep(renderPostCard(post)));
+    expect(output).toContain("[Quote: @bob.test + 2 images]");
+  });
+
   test("renders embed summary for external link", () => {
     const post = makePost({
       embed: { _tag: "External", uri: "https://example.com", title: "Example", description: "" }
