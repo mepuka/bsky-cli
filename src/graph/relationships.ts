@@ -76,31 +76,49 @@ export const buildRelationshipGraph = (
 ): RelationshipGraphResult => {
   const base = Graph.directed<RelationshipNode, RelationshipEdge>();
   const nodeIndexByKey = new Map<string, Graph.NodeIndex>();
+  const nodeLookup = new Map<string, RelationshipNode>();
+  for (const [key, node] of nodesByKey.entries()) {
+    if (!nodeLookup.has(key)) {
+      nodeLookup.set(key, node);
+    }
+    for (const input of node.inputs) {
+      if (!nodeLookup.has(input)) {
+        nodeLookup.set(input, node);
+      }
+    }
+  }
 
+  let actorIndex: Graph.NodeIndex | undefined;
   const graph = Graph.mutate(base, (mutable) => {
-    const actorNode = nodesByKey.get(actorKey) ?? nodeFromKey(actorKey);
-    const actorIndex = Graph.addNode(mutable, actorNode);
-    nodeIndexByKey.set(actorKey, actorIndex);
-
-    const ensureNode = (key: string, node: RelationshipNode) => {
-      const existing = nodeIndexByKey.get(key);
+    const ensureNode = (key: string) => {
+      const node = nodeLookup.get(key) ?? nodeFromKey(key);
+      const canonicalKey = node.did ?? key;
+      const existing = nodeIndexByKey.get(canonicalKey);
       if (existing !== undefined) {
+        nodeIndexByKey.set(key, existing);
+        for (const input of node.inputs) {
+          nodeIndexByKey.set(input, existing);
+        }
         return existing;
       }
       const index = Graph.addNode(mutable, node);
+      nodeIndexByKey.set(canonicalKey, index);
       nodeIndexByKey.set(key, index);
+      for (const input of node.inputs) {
+        nodeIndexByKey.set(input, index);
+      }
       return index;
     };
 
+    actorIndex = ensureNode(actorKey);
+
     for (const relationship of relationships) {
       const key = "did" in relationship ? relationship.did : relationship.actor;
-      const node = nodesByKey.get(key) ?? nodeFromKey(key);
-      const otherIndex = ensureNode(key, node);
+      const otherIndex = ensureNode(key);
       Graph.addEdge(mutable, actorIndex, otherIndex, edgeFromRelationship(relationship));
     }
   });
 
-  const actorIndex = nodeIndexByKey.get(actorKey);
   if (actorIndex === undefined) {
     throw new Error(`Missing actor node for ${actorKey}`);
   }
