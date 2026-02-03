@@ -431,7 +431,18 @@ const postsCommand = Command.make(
             createdAt
           });
           const events = posts.map((post) => PostUpsert.make({ post, meta }));
-          yield* committer.appendUpsertsIfMissing(storeRef, events);
+          const results = yield* committer.appendUpsertsIfMissing(storeRef, events);
+          const postsAdded = results.filter(Option.isSome).length;
+          const postsSkipped = results.filter(Option.isNone).length;
+          yield* writeJson({
+            store: storeRef.name,
+            query: queryValue,
+            postsAdded,
+            postsSkipped,
+            postsTotal: posts.length,
+            cursor: result.cursor
+          });
+          return;
         }
         yield* emitWithFormat(
           format,
