@@ -1,6 +1,6 @@
 {
   "name": "@mepuka/skygent",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Composable Bluesky data filtering and monitoring CLI built with Effect",
   "module": "index.ts",
   "type": "module",

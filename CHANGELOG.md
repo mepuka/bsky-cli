@@ -1,5 +1,15 @@
 # @mepuka/skygent
 
+## 0.4.4
+
+### Patch Changes
+
+- **Security**: Tighten filesystem permissions on `~/.skygent/` directory (0700) and sensitive files like `credentials.json` (0600). Reject absolute paths in filter outputs to prevent writes outside store root. Add cleanup handling for temp files during store renames.
+
+- **Features**: Add `config show` command to display resolved configuration. Add `config credentials` subcommand group with `status`, `set`, and `clear` commands for managing encrypted credentials.
+
+- **Fixes**: Make credential status detection more robust when checking file and environment sources.
+
 ## 0.4.3
 
 ### Patch Changes
