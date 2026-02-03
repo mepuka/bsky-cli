@@ -28,6 +28,7 @@ import { renderThread } from "./doc/thread.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
 import type { Annotation } from "./doc/annotation.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
+import { looksLikeFilterExpression } from "./filter-dsl.js";
 import { CliOutput, writeJson, writeJsonStream, writeText } from "./output.js";
 import { parseRangeOptions } from "./range-options.js";
 import { CliPreferences } from "./preferences.js";
@@ -134,6 +135,11 @@ const progressOption = Options.boolean("progress").pipe(
 const countOption = Options.boolean("count").pipe(
   Options.withDescription("Only output the count of matching posts")
 );
+const countByValues = ["author", "hashtag", "date", "hour"] as const;
+const countByOption = Options.choice("count-by", countByValues).pipe(
+  Options.withDescription("Count posts grouped by field (sorted by count desc)"),
+  Options.optional
+);
 
 const DEFAULT_FILTER_SCAN_LIMIT = 5000;
 
@@ -205,7 +211,7 @@ const splitStoreNames = (raw: ReadonlyArray<string>) =>
       .filter((entry) => entry.length > 0)
   );
 
-const parseStoreNames = (raw: ReadonlyArray<string>) =>
+const parseStoreNames = (raw: ReadonlyArray<string>, hasExplicitFilter: boolean) =>
   Effect.gen(function* () {
     const names = splitStoreNames(raw);
     if (names.length === 0) {
@@ -214,6 +220,18 @@ const parseStoreNames = (raw: ReadonlyArray<string>) =>
         cause: { stores: raw }
       });
     }
+
+    // Only check for filter-like patterns when no explicit filter provided
+    if (!hasExplicitFilter) {
+      const filterLike = names.find(looksLikeFilterExpression);
+      if (filterLike) {
+        return yield* CliInputError.make({
+          message: `"${filterLike}" looks like a filter expression. Use --filter '${filterLike}' instead.`,
+          cause: { value: filterLike }
+        });
+      }
+    }
+
     return yield* Effect.forEach(
       names,
       (name) =>
@@ -276,16 +294,18 @@ export const queryCommand = Command.make(
     resolveImages: resolveImagesOption,
     cacheImages: cacheImagesOption,
     progress: progressOption,
-    count: countOption
+    count: countOption,
+    countBy: countByOption
   },
-  ({ stores, range, since, until, filter, filterJson, limit, scanLimit, sort, newestFirst, format, includeStore, ansi, width, fields, extractImages, resolveImages, cacheImages, progress, count }) =>
+  ({ stores, range, since, until, filter, filterJson, limit, scanLimit, sort, newestFirst, format, includeStore, ansi, width, fields, extractImages, resolveImages, cacheImages, progress, count, countBy }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
       const runtime = yield* FilterRuntime;
       const output = yield* CliOutput;
       const preferences = yield* CliPreferences;
-      const storeNames = yield* parseStoreNames(stores);
+      const hasExplicitFilter = Option.isSome(filter) || Option.isSome(filterJson);
+      const storeNames = yield* parseStoreNames(stores, hasExplicitFilter);
       const storeRefs = yield* loadStoreRefs(storeNames);
       const multiStore = storeRefs.length > 1;
       const includeStoreLabel = includeStore || multiStore;
@@ -349,6 +369,39 @@ export const queryCommand = Command.make(
           message: "--count cannot be combined with --resolve-images or --cache-images.",
           cause: { count, resolveImages, cacheImages }
         });
+      }
+      if (Option.isSome(countBy)) {
+        const countByValue = countBy.value;
+        if (count) {
+          return yield* CliInputError.make({
+            message: "--count-by cannot be combined with --count.",
+            cause: { countBy: countByValue, count }
+          });
+        }
+        if (Option.isSome(fields)) {
+          return yield* CliInputError.make({
+            message: "--count-by cannot be combined with --fields.",
+            cause: { countBy: countByValue }
+          });
+        }
+        if (extractImages) {
+          return yield* CliInputError.make({
+            message: "--count-by cannot be combined with --extract-images.",
+            cause: { countBy: countByValue }
+          });
+        }
+        if (Option.isSome(sort)) {
+          return yield* CliInputError.make({
+            message: "--count-by always sorts by count descending. Remove --sort.",
+            cause: { countBy: countByValue, sort: sort.value }
+          });
+        }
+        if (!["json", "ndjson", "table"].includes(outputFormat)) {
+          return yield* CliInputError.make({
+            message: `--count-by only supports json, ndjson, or table output (got: ${outputFormat}).`,
+            cause: { countBy: countByValue, format: outputFormat }
+          });
+        }
       }
       const resolveImagesEffective = (resolveImages || cacheImages) && imagesInOutput;
       const fieldImagesSelected = Option.match(selectorsOption, {
@@ -738,6 +791,69 @@ export const queryCommand = Command.make(
       const outputStream = resolveFieldImages
         ? postStream.pipe(Stream.mapEffect(toOutputEffect))
         : postStream.pipe(Stream.map(toOutput));
+
+      if (Option.isSome(countBy)) {
+        const countByValue = countBy.value;
+
+        // Fold over postStreamBase (filtered, but NOT limited)
+        // For hashtag counting, one post can contribute to multiple groups
+        const counts = yield* Stream.runFold(
+          postStreamBase,
+          new Map<string, number>(),
+          (acc, entry) => {
+            const keys: ReadonlyArray<string> = Match.value(countByValue).pipe(
+              Match.when("author", () => [String(entry.post.author)]),
+              Match.when("hashtag", () => {
+                // ALL hashtags - one post contributes to each tag's count
+                // Posts with no hashtags grouped under "<none>" for visibility
+                const tags = entry.post.hashtags ?? [];
+                return tags.length > 0 ? tags.map(String) : ["<none>"];
+              }),
+              Match.when("date", () => {
+                const d = new Date(entry.post.createdAt);
+                return [`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`];
+              }),
+              Match.when("hour", () => {
+                const d = new Date(entry.post.createdAt);
+                return [`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}T${String(d.getUTCHours()).padStart(2, "0")}`];
+              }),
+              Match.exhaustive
+            );
+            for (const key of keys) {
+              acc.set(key, (acc.get(key) ?? 0) + 1);
+            }
+            return acc;
+          }
+        );
+
+        // Sort by count descending, then apply limit to groups
+        const sorted = Array.from(counts.entries())
+          .sort((a, b) => b[1] - a[1]);
+        const limited = Option.match(limit, {
+          onNone: () => sorted,
+          onSome: (n) => sorted.slice(0, n)
+        });
+        const results = limited.map(([key, countValue]) => ({ [countByValue]: key, count: countValue }));
+
+        yield* warnIfScanLimitReached();
+
+        // Output based on format
+        if (outputFormat === "json") {
+          yield* writeJson(results);
+          return;
+        }
+        if (outputFormat === "ndjson") {
+          yield* writeJsonStream(Stream.fromIterable(results));
+          return;
+        }
+        if (outputFormat === "table") {
+          const headers = [countByValue, "count"];
+          const rows = results.map((r) => [r[countByValue] as string, String(r.count)]);
+          yield* writeText(renderTableLegacy(headers, rows));
+          return;
+        }
+        return;
+      }
 
       if (count) {
         if (extractImages) {

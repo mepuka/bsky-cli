@@ -169,7 +169,7 @@ const resolveAuthorHandle = (identifier: string) =>
     const info = yield* identities.resolveIdentity(identifier).pipe(
       Effect.mapError((error) =>
         CliInputError.make({
-          message: `Failed to resolve author: ${error.message}`,
+          message: error.message, // Already user-friendly from identity-resolver
           cause: error
         })
       )
