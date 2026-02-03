@@ -21,6 +21,8 @@ import { defaultStoreConfig } from "../domain/defaults.js";
 import { StorePath, Timestamp } from "../domain/primitives.js";
 import { FilterSettings } from "./filter-settings.js";
 
+const privateDirMode = 0o700;
+
 export interface MaterializedFilterOutput {
   readonly name: string;
   readonly outputPath: string;
@@ -64,12 +66,24 @@ const resolveOutputDir = (
   storeRoot: string,
   store: StoreRef,
   outputPath: string
-) => {
-  if (path.isAbsolute(outputPath)) {
-    return outputPath;
-  }
-  return path.join(storeRoot, store.root, outputPath);
-};
+) =>
+  Effect.suspend(() => {
+    const base = path.resolve(storeRoot, store.root);
+    const resolved = path.isAbsolute(outputPath)
+      ? path.resolve(outputPath)
+      : path.resolve(base, outputPath);
+    const withinBase =
+      resolved === base || resolved.startsWith(`${base}${path.sep}`);
+    if (!withinBase) {
+      return Effect.fail(
+        StoreIoError.make({
+          path: Schema.decodeUnknownSync(StorePath)(resolved),
+          cause: "Output path must be within store root."
+        })
+      );
+    }
+    return Effect.succeed(resolved);
+  });
 
 const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
   (store: StoreRef, spec: FilterSpec) =>
@@ -82,9 +96,9 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
       const index = yield* StoreIndex;
       const filterSettings = yield* FilterSettings;
 
-      const outputDir = resolveOutputDir(path, config.storeRoot, store, spec.output.path);
+      const outputDir = yield* resolveOutputDir(path, config.storeRoot, store, spec.output.path);
       yield* fs
-        .makeDirectory(outputDir, { recursive: true })
+        .makeDirectory(outputDir, { recursive: true, mode: privateDirMode })
         .pipe(Effect.mapError(toStoreIoError(outputDir)));
 
       const expr = yield* compiler.compile(spec);

@@ -51,7 +51,13 @@ const renameDirectory = (
       const tempName = `.rename-${Date.now()}`;
       const tempPath = path.join(path.dirname(toPath), tempName);
       yield* fs.rename(fromPath, tempPath);
-      yield* fs.rename(tempPath, toPath);
+      yield* fs.rename(tempPath, toPath).pipe(
+        Effect.catchAll((error) =>
+          fs
+            .rename(tempPath, fromPath)
+            .pipe(Effect.catchAll(() => Effect.void), Effect.zipRight(Effect.fail(error)))
+        )
+      );
       return;
     }
     yield* fs.rename(fromPath, toPath);

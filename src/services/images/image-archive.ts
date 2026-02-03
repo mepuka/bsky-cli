@@ -6,6 +6,8 @@ import { ImageArchiveError } from "../../domain/errors.js";
 import { messageFromCause } from "../shared.js";
 import { ImageConfig } from "./image-config.js";
 
+const privateDirMode = 0o700;
+
 export type ImageArchiveInput = {
   readonly url: string;
   readonly bytes: Uint8Array;
@@ -88,7 +90,7 @@ export class ImageArchive extends Context.Tag("@skygent/ImageArchive")<
           : path.join(config.cacheRoot, asset.path);
 
       const ensureDir = (dir: string) =>
-        fs.makeDirectory(dir, { recursive: true }).pipe(
+        fs.makeDirectory(dir, { recursive: true, mode: privateDirMode }).pipe(
           Effect.mapError(toArchiveError("Failed to create image cache directory", dir, "imageArchiveMkdir"))
         );
 

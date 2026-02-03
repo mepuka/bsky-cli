@@ -59,6 +59,9 @@ import { AppConfigService } from "./app-config.js";
 import { BskyCredentials } from "../domain/credentials.js";
 import { CredentialError } from "../domain/errors.js";
 
+const privateDirMode = 0o700;
+const privateFileMode = 0o600;
+
 /**
  * Value type for runtime credential overrides.
  * Used to inject credentials for testing or one-off operations.
@@ -369,7 +372,7 @@ export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
           });
           const file = yield* encryptPayload(Redacted.value(envKey.value), payload);
           yield* fs
-            .makeDirectory(config.storeRoot, { recursive: true })
+            .makeDirectory(config.storeRoot, { recursive: true, mode: privateDirMode })
             .pipe(Effect.mapError(toCredentialError("Failed to create credentials directory")));
           const encoded = yield* Schema.encodeUnknown(
             Schema.parseJson(CredentialsFile)
@@ -382,8 +385,11 @@ export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
             )
           );
           yield* fs
-            .writeFileString(credentialsPath, encoded)
+            .writeFileString(credentialsPath, encoded, { mode: privateFileMode })
             .pipe(Effect.mapError(toCredentialError("Failed to write credentials file")));
+          yield* fs
+            .chmod(credentialsPath, privateFileMode)
+            .pipe(Effect.catchAll(() => Effect.void));
         })
       );
 

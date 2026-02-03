@@ -49,6 +49,7 @@ import { AppConfigService } from "./app-config.js";
 
 /** Directory name for storing filter JSON files */
 const filtersDirName = "filters";
+const privateDirMode = 0o700;
 
 /**
  * Ensures a string ends with a newline character.
@@ -276,7 +277,7 @@ export class FilterLibrary extends Context.Tag("@skygent/FilterLibrary")<
           Effect.gen(function* () {
             const filePath = filterPath(path, config.storeRoot, name);
             yield* fs
-              .makeDirectory(rootDir, { recursive: true })
+              .makeDirectory(rootDir, { recursive: true, mode: privateDirMode })
               .pipe(
                 Effect.mapError((error) =>
                   toLibraryError(

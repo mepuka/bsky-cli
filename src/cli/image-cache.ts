@@ -434,6 +434,6 @@ export const cleanImageCache = (force: boolean) =>
         error.reason === "NotFound" ? Effect.void : Effect.fail(error)
       )
     );
-    yield* fs.makeDirectory(config.cacheRoot, { recursive: true });
+    yield* fs.makeDirectory(config.cacheRoot, { recursive: true, mode: 0o700 });
     return { cleared: true, cacheRoot: config.cacheRoot };
   });

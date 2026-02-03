@@ -49,7 +49,7 @@ const configCheckCommand = Command.make("check", { format: checkFormatOption }, 
     const bsky = yield* BskyClient;
     // Store root writable
     const rootCheck = yield* Effect.gen(function* () {
-      yield* fs.makeDirectory(config.storeRoot, { recursive: true });
+      yield* fs.makeDirectory(config.storeRoot, { recursive: true, mode: 0o700 });
       const now = yield* Clock.currentTimeMillis;
       const probePath = path.join(
         config.storeRoot,

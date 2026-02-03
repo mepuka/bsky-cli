@@ -1257,6 +1257,19 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
     BskyClient,
     Effect.gen(function* () {
       const config = yield* AppConfigService;
+      const serviceUrl = yield* Effect.try({
+        try: () => new URL(config.service),
+        catch: (cause) =>
+          BskyError.make({
+            message: `Invalid Bluesky service URL: ${config.service}`,
+            cause
+          })
+      });
+      if (serviceUrl.protocol !== "https:") {
+        return yield* BskyError.make({
+          message: "Bluesky service URL must use https."
+        });
+      }
       const credentials = yield* CredentialStore;
       const agent = new AtpAgent({ service: config.service });
       const publicAgent = new AtpAgent({ service: "https://public.api.bsky.app" });

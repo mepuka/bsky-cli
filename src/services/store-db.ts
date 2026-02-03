@@ -10,6 +10,9 @@ import type { StoreRef } from "../domain/store.js";
 import type { StorePath } from "../domain/primitives.js";
 import { AppConfigService } from "./app-config.js";
 
+const privateDirMode = 0o700;
+const privateFileMode = 0o600;
+
 /**
  * Store Database Connection Management Service
  *
@@ -165,13 +168,16 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
         Effect.gen(function* () {
           const dbPath = path.join(config.storeRoot, store.root, "index.sqlite");
           const dbDir = path.dirname(dbPath);
-          yield* fs.makeDirectory(dbDir, { recursive: true });
+          yield* fs.makeDirectory(dbDir, { recursive: true, mode: privateDirMode });
 
           const clientScope = yield* Scope.make();
           const client = yield* SqliteClient.make({ filename: dbPath }).pipe(
             Effect.provideService(Scope.Scope, clientScope),
             Effect.provideService(Reactivity.Reactivity, reactivity)
           );
+          yield* fs
+            .chmod(dbPath, privateFileMode)
+            .pipe(Effect.catchAll(() => Effect.void));
 
           // Configure SQLite for optimal performance
           yield* client`PRAGMA busy_timeout = 5000`;

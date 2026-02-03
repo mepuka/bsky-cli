@@ -68,6 +68,9 @@ import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
 import { StoreName, StorePath } from "../domain/primitives.js";
 import { AppConfigService } from "./app-config.js";
 
+const privateDirMode = 0o700;
+const privateFileMode = 0o600;
+
 
 const storeRootKey = (name: StoreName) => `stores/${name}`;
 const manifestPath = Schema.decodeUnknownSync(StorePath)("stores");
@@ -222,12 +225,15 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
 
       const dbPath = path.join(appConfig.storeRoot, "catalog.sqlite");
       const dbDir = path.dirname(dbPath);
-      yield* fs.makeDirectory(dbDir, { recursive: true });
+      yield* fs.makeDirectory(dbDir, { recursive: true, mode: privateDirMode });
 
       const client = yield* SqliteClient.make({ filename: dbPath }).pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provideService(Reactivity.Reactivity, reactivity)
       );
+      yield* fs
+        .chmod(dbPath, privateFileMode)
+        .pipe(Effect.catchAll(() => Effect.void));
 
       const migrate = Migrator.make({})({
         loader: Migrator.fromRecord(storeCatalogMigrations)
