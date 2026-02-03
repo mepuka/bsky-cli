@@ -1,5 +1,11 @@
 # @mepuka/skygent
 
+## 0.4.2
+
+### Patch Changes
+
+- Add `--ingest` flag to `search posts --network` for saving search results directly into a store. Fix `--since` and `--until` date-only strings (e.g. `2026-01-31`) returning HTTP 400 by normalizing to full ISO datetimes. Replace readline-based stdin parsing with raw stream reader to fix pipe truncation on long lines. Fix search ingest outputting full post JSON instead of a concise summary.
+
 ## 0.4.1
 
 ### Patch Changes
