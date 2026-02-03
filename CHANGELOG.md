@@ -1,5 +1,11 @@
 # @mepuka/skygent
 
+## 0.4.3
+
+### Patch Changes
+
+- Fix compiled binary failing to run migrations by switching from filesystem-based migration loading to static imports with Migrator.fromRecord. Homebrew and GitHub Release binaries now work correctly.
+
 ## 0.4.2
 
 ### Patch Changes
