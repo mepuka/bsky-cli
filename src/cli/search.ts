@@ -1,12 +1,14 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Effect, Option, Stream } from "effect";
+import { Clock, Effect, Option, Schema, Stream } from "effect";
 import { renderFeedTable, renderProfileTable } from "./doc/table-renderers.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { PostParser } from "../services/post-parser.js";
 import { StoreIndex } from "../services/store-index.js";
 import { renderPostsTable } from "../domain/format.js";
 import { AppConfigService } from "../services/app-config.js";
-import { ActorId, StoreName } from "../domain/primitives.js";
+import { ActorId, StoreName, Timestamp } from "../domain/primitives.js";
+import { EventMeta, PostUpsert } from "../domain/events.js";
+import { StoreCommitter } from "../services/store-commit.js";
 import { storeOptions } from "./store.js";
 import { withExamples } from "./help.js";
 import { CliInputError } from "./errors.js";
@@ -44,6 +46,12 @@ const storeOption = Options.text("store").pipe(
 );
 
 const storeOptionOptional = storeOption.pipe(Options.optional);
+
+const ingestOption = Options.text("ingest").pipe(
+  Options.withSchema(StoreName),
+  Options.withDescription("Ingest network search results into a store"),
+  Options.optional
+);
 
 const networkOption = Options.boolean("network").pipe(
   Options.withDescription("Search the Bluesky network instead of a local store")
@@ -203,6 +211,7 @@ const postsCommand = Command.make(
   {
     query: queryArg,
     store: storeOptionOptional,
+    ingest: ingestOption,
     network: networkOption,
     limit: limitOption,
     cursor: postCursorOption,
@@ -217,7 +226,7 @@ const postsCommand = Command.make(
     tag: tagOption,
     format: formatOption
   },
-  ({ query, store, network, limit, cursor, sort, since, until, mentions, author, lang, domain, url, tag, format }) =>
+  ({ query, store, ingest, network, limit, cursor, sort, since, until, mentions, author, lang, domain, url, tag, format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const queryValue = yield* requireNonEmptyQuery(query);
@@ -226,6 +235,12 @@ const postsCommand = Command.make(
         return yield* CliInputError.make({
           message: "--store cannot be used with --network.",
           cause: { store: store.value }
+        });
+      }
+      if (Option.isSome(ingest) && !network) {
+        return yield* CliInputError.make({
+          message: "--ingest requires --network.",
+          cause: { ingest: ingest.value }
         });
       }
       if (!network && Option.isNone(store)) {
@@ -317,6 +332,22 @@ const postsCommand = Command.make(
             ),
           { concurrency: "unbounded" }
         );
+        if (Option.isSome(ingest)) {
+          const storeRef = yield* storeOptions.loadStoreRef(ingest.value);
+          const committer = yield* StoreCommitter;
+          const createdAt = yield* Clock.currentTimeMillis.pipe(
+            Effect.flatMap((now) =>
+              Schema.decodeUnknown(Timestamp)(new Date(now).toISOString())
+            )
+          );
+          const meta = EventMeta.make({
+            source: "search",
+            command: `search posts --network ${queryValue}`,
+            createdAt
+          });
+          const events = posts.map((post) => PostUpsert.make({ post, meta }));
+          yield* committer.appendUpsertsIfMissing(storeRef, events);
+        }
         yield* emitWithFormat(
           format,
           appConfig.outputFormat,
@@ -408,7 +439,8 @@ const postsCommand = Command.make(
       "skygent search posts \"deep learning\" --store my-store --limit 25",
       "skygent search posts \"bluesky\" --store my-store --format table",
       "skygent search posts \"effect\" --store my-store --sort newest",
-      "skygent search posts \"ai\" --network --sort latest"
+      "skygent search posts \"ai\" --network --sort latest",
+      "skygent search posts \"Arsenal transfers\" --network --ingest my-store"
     ])
   )
 );

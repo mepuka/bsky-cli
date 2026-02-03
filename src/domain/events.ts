@@ -24,7 +24,8 @@ export class EventMeta extends Schema.Class<EventMeta>("EventMeta")({
     "feed",
     "list",
     "author",
-    "thread"
+    "thread",
+    "search"
   ),
   command: Schema.String,
   filterExprHash: Schema.optional(Schema.String),
