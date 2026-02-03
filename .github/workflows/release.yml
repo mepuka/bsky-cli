@@ -65,3 +65,65 @@ jobs:
             skygent-linux-arm64
             skygent-darwin-x64
             skygent-darwin-arm64
+
+      - name: Update Homebrew formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          BASE_URL="https://github.com/mepuka/bsky-cli/releases/download/v${VERSION}"
+
+          SHA_DARWIN_ARM64=$(shasum -a 256 skygent-darwin-arm64 | awk '{print $1}')
+          SHA_DARWIN_X64=$(shasum -a 256 skygent-darwin-x64 | awk '{print $1}')
+          SHA_LINUX_ARM64=$(shasum -a 256 skygent-linux-arm64 | awk '{print $1}')
+          SHA_LINUX_X64=$(shasum -a 256 skygent-linux-x64 | awk '{print $1}')
+
+          cat > /tmp/skygent.rb << FORMULA
+          class Skygent < Formula
+            desc "Effect-based CLI for Bluesky monitoring, querying, and analytics"
+            homepage "https://github.com/mepuka/bsky-cli"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/skygent-darwin-arm64"
+                sha256 "${SHA_DARWIN_ARM64}"
+              else
+                url "${BASE_URL}/skygent-darwin-x64"
+                sha256 "${SHA_DARWIN_X64}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/skygent-linux-arm64"
+                sha256 "${SHA_LINUX_ARM64}"
+              else
+                url "${BASE_URL}/skygent-linux-x64"
+                sha256 "${SHA_LINUX_X64}"
+              end
+            end
+
+            def install
+              binary = Dir["skygent-*"].first || "skygent"
+              bin.install binary => "skygent"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/skygent --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' /tmp/skygent.rb
+
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/mepuka/homebrew-skygent.git /tmp/homebrew-skygent
+          cp /tmp/skygent.rb /tmp/homebrew-skygent/Formula/skygent.rb
+          cd /tmp/homebrew-skygent
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/skygent.rb
+          git commit -m "Update skygent to v${VERSION}"
+          git push
