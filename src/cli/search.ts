@@ -412,18 +412,18 @@ const postsCommand = Command.make(
           );
           const command = buildNetworkSearchCommand({
             query: queryValue,
-            limit: limitValue,
-            cursor: Option.getOrUndefined(cursorValue),
-            sort: sortValue,
-            since: Option.getOrUndefined(normalizedSince),
-            until: Option.getOrUndefined(normalizedUntil),
-            mentions: parsedMentions,
-            author: parsedAuthor,
-            lang: Option.getOrUndefined(lang),
-            domain: Option.getOrUndefined(domain),
-            url: Option.getOrUndefined(url),
-            tags,
-            ingest: ingest.value
+            ...(limitValue !== undefined ? { limit: limitValue } : {}),
+            ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
+            ...(sortValue ? { sort: sortValue } : {}),
+            ...(Option.isSome(normalizedSince) ? { since: normalizedSince.value } : {}),
+            ...(Option.isSome(normalizedUntil) ? { until: normalizedUntil.value } : {}),
+            ...(parsedMentions ? { mentions: parsedMentions } : {}),
+            ...(parsedAuthor ? { author: parsedAuthor } : {}),
+            ...(Option.isSome(lang) ? { lang: lang.value } : {}),
+            ...(Option.isSome(domain) ? { domain: domain.value } : {}),
+            ...(Option.isSome(url) ? { url: url.value } : {}),
+            ...(tags.length > 0 ? { tags } : {}),
+            ...(Option.isSome(ingest) ? { ingest: ingest.value } : {})
           });
           const meta = EventMeta.make({
             source: "search",
