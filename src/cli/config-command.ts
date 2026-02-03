@@ -9,6 +9,7 @@ import { AppConfigService } from "../services/app-config.js";
 import { CredentialStore } from "../services/credential-store.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { jsonTableFormats, resolveOutputFormat } from "./output-format.js";
+import { BskyCredentials } from "../domain/credentials.js";
 
 type CheckStatus = "ok" | "warn" | "error";
 
@@ -132,9 +133,118 @@ const configCheckCommand = Command.make("check", { format: checkFormatOption }, 
   Command.withDescription("Run health checks (store root, credentials, Bluesky auth)")
 );
 
-export const configCommand = Command.make("config", {}).pipe(
-  Command.withSubcommands([configCheckCommand]),
+const configShowCommand = Command.make("show", { format: checkFormatOption }, ({ format }) =>
+  Effect.gen(function* () {
+    const config = yield* AppConfigService;
+    const outputFormat = resolveOutputFormat(
+      format,
+      config.outputFormat,
+      jsonTableFormats,
+      "json"
+    );
+
+    if (outputFormat === "table") {
+      const rows = [
+        ["service", config.service],
+        ["storeRoot", config.storeRoot],
+        ["outputFormat", config.outputFormat],
+        ["identifier", config.identifier ?? "(none)"]
+      ];
+      const table = renderTableLegacy(["KEY", "VALUE"], rows);
+      yield* writeText(table);
+      return;
+    }
+
+    yield* writeJson(config);
+  })
+).pipe(
+  Command.withDescription("Show resolved configuration values")
+);
+
+const credentialStatusCommand = Command.make("status", { format: checkFormatOption }, ({ format }) =>
+  Effect.gen(function* () {
+    const config = yield* AppConfigService;
+    const credentials = yield* CredentialStore;
+    const status = yield* credentials.status();
+    const outputFormat = resolveOutputFormat(
+      format,
+      config.outputFormat,
+      jsonTableFormats,
+      "json"
+    );
+
+    if (outputFormat === "table") {
+      const rows = [
+        ["source", status.source],
+        ["identifierSource", status.identifierSource],
+        ["passwordSource", status.passwordSource],
+        ["hasCredentials", status.hasCredentials ? "yes" : "no"],
+        ["fileExists", status.fileExists ? "yes" : "no"],
+        ["keyPresent", status.keyPresent ? "yes" : "no"]
+      ];
+      const table = renderTableLegacy(["FIELD", "VALUE"], rows);
+      yield* writeText(table);
+      return;
+    }
+
+    yield* writeJson(status);
+  })
+).pipe(
+  Command.withDescription("Show credential resolution status")
+);
+
+const credentialSetCommand = Command.make(
+  "set",
+  {
+    identifier: Options.text("identifier").pipe(
+      Options.withDescription("Bluesky handle or DID")
+    ),
+    password: Options.redacted("password").pipe(
+      Options.withDescription("Bluesky app password (redacted)")
+    )
+  },
+  ({ identifier, password }) =>
+    Effect.gen(function* () {
+      const credentials = yield* CredentialStore;
+      const value = BskyCredentials.make({
+        identifier,
+        password
+      });
+      yield* credentials.save(value);
+      yield* writeJson({ saved: true, identifier });
+    })
+).pipe(
+  Command.withDescription("Save encrypted credentials to disk")
+);
+
+const credentialClearCommand = Command.make("clear", {}, () =>
+  Effect.gen(function* () {
+    const credentials = yield* CredentialStore;
+    yield* credentials.clear();
+    yield* writeJson({ cleared: true });
+  })
+).pipe(
+  Command.withDescription("Remove stored credentials file")
+);
+
+const configCredentialsCommand = Command.make("credentials", {}).pipe(
+  Command.withSubcommands([credentialStatusCommand, credentialSetCommand, credentialClearCommand]),
   Command.withDescription(
-    withExamples("Configuration helpers", ["skygent config check"])
+    withExamples("Manage stored credentials", [
+      "skygent config credentials status",
+      "skygent config credentials set --identifier handle.bsky.social --password app-password",
+      "skygent config credentials clear"
+    ])
+  )
+);
+
+export const configCommand = Command.make("config", {}).pipe(
+  Command.withSubcommands([configCheckCommand, configShowCommand, configCredentialsCommand]),
+  Command.withDescription(
+    withExamples("Configuration helpers", [
+      "skygent config check",
+      "skygent config show",
+      "skygent config credentials status"
+    ])
   )
 );

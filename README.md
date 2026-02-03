@@ -40,6 +40,8 @@ Skygent needs a Bluesky handle and [app password](https://bsky.app/settings/app-
 2. Environment variables: `SKYGENT_IDENTIFIER` and `SKYGENT_PASSWORD`
 3. Encrypted credential file (`~/.skygent/credentials.json`, requires `SKYGENT_CREDENTIALS_KEY`)
 
+Manage the encrypted credential file with `skygent config credentials`.
+
 The simplest setup:
 
 ```bash

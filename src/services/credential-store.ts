@@ -73,6 +73,17 @@ export type CredentialsOverridesValue = {
   readonly password?: Redacted.Redacted<string>;
 };
 
+export type CredentialSource = "overrides" | "env" | "file" | "config" | "mixed" | "none";
+
+export type CredentialStatus = {
+  readonly source: CredentialSource;
+  readonly identifierSource: CredentialSource;
+  readonly passwordSource: CredentialSource;
+  readonly hasCredentials: boolean;
+  readonly fileExists: boolean;
+  readonly keyPresent: boolean;
+};
+
 /**
  * Context tag for runtime credential overrides.
  * Provides a way to inject credentials outside of the normal resolution chain.
@@ -243,6 +254,16 @@ export interface CredentialStoreService {
    * @throws {CredentialError} When encryption fails or env key is missing
    */
   readonly save: (credentials: BskyCredentials) => Effect.Effect<void, CredentialError>;
+
+  /**
+   * Clear stored credentials file, if present.
+   */
+  readonly clear: () => Effect.Effect<void, CredentialError>;
+
+  /**
+   * Report where credentials are resolved from.
+   */
+  readonly status: () => Effect.Effect<CredentialStatus, CredentialError>;
 }
 
 /**
@@ -331,6 +352,25 @@ export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
           Option.map(filePayload, (payload) => Redacted.make(payload.password))
         );
 
+      const resolveIdentifierSource = (
+        filePayload: Option.Option<CredentialsPayload>
+      ): CredentialSource => {
+        if (overrides.identifier) return "overrides";
+        if (Option.isSome(envIdentifier)) return "env";
+        if (Option.isSome(filePayload)) return "file";
+        if (config.identifier) return "config";
+        return "none";
+      };
+
+      const resolvePasswordSource = (
+        filePayload: Option.Option<CredentialsPayload>
+      ): CredentialSource => {
+        if (overrides.password) return "overrides";
+        if (Option.isSome(envPassword)) return "env";
+        if (Option.isSome(filePayload)) return "file";
+        return "none";
+      };
+
       const get = Effect.fn("CredentialStore.get")(() =>
         Effect.gen(function* () {
           const filePayload = yield* loadFromFile;
@@ -393,7 +433,47 @@ export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
         })
       );
 
-      return CredentialStore.of({ get, require, save });
+      const clear = Effect.fn("CredentialStore.clear")(() =>
+        fs
+          .remove(credentialsPath)
+          .pipe(
+            Effect.catchTag("SystemError", (error) =>
+              error.reason === "NotFound" ? Effect.void : Effect.fail(error)
+            ),
+            Effect.mapError(toCredentialError("Failed to remove credentials file"))
+          )
+      );
+
+      const status = Effect.fn("CredentialStore.status")(() =>
+        Effect.gen(function* () {
+          const fileExists = yield* fs.exists(credentialsPath).pipe(
+            Effect.mapError(toCredentialError("Failed to check credentials file"))
+          );
+          const keyPresent = Option.isSome(envKey);
+          const filePayload =
+            fileExists && keyPresent ? yield* loadFromFile : Option.none<CredentialsPayload>();
+          const identifierSource = resolveIdentifierSource(filePayload);
+          const passwordSource = resolvePasswordSource(filePayload);
+          const hasCredentials =
+            identifierSource !== "none" && passwordSource !== "none";
+          const source: CredentialSource =
+            !hasCredentials
+              ? "none"
+              : identifierSource === passwordSource
+                ? passwordSource
+                : "mixed";
+          return {
+            source,
+            identifierSource,
+            passwordSource,
+            hasCredentials,
+            fileExists,
+            keyPresent
+          };
+        })
+      );
+
+      return CredentialStore.of({ get, require, save, clear, status });
     })
   );
 
@@ -408,7 +488,17 @@ export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
       get: () => Effect.succeed(Option.none()),
       require: () =>
         Effect.fail(CredentialError.make({ message: "Missing Bluesky credentials." })),
-      save: () => Effect.void
+      save: () => Effect.void,
+      clear: () => Effect.void,
+      status: () =>
+        Effect.succeed({
+          source: "none",
+          identifierSource: "none",
+          passwordSource: "none",
+          hasCredentials: false,
+          fileExists: false,
+          keyPresent: false
+        })
     })
   );
 }

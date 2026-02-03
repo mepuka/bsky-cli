@@ -243,7 +243,7 @@ const loadStoreRefs = (names: ReadonlyArray<StoreName>) =>
         return yield* StoreNotFound.make({ name: missing[0]! });
       }
       return yield* CliInputError.make({
-        message: `Unknown stores: ${missing.join(", ")}`,
+        message: `Unknown stores: ${missing.join(", ")}. Usage: skygent query <store> [options]`,
         cause: { missing }
       });
     }

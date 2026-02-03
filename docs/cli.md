@@ -170,6 +170,10 @@ Check derived view status and display threads.
 Configuration helpers.
 
 - `config check`
+- `config show`
+- `config credentials status`
+- `config credentials set --identifier <value> --password <value>`
+- `config credentials clear`
 
 Runs a series of health checks and outputs a JSON report with an `ok` boolean and a `checks` array. Each check has a `name`, `status` (`ok`, `warn`, or `error`), and an optional `message`.
 
@@ -184,6 +188,10 @@ Example:
 ```bash
 bun run index.ts config check
 ```
+
+`config show` prints the resolved configuration (defaults + config file + env overrides).
+
+`config credentials` provides basic credential management (status, set, clear).
 
 ### filter
 
