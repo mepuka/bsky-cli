@@ -180,8 +180,12 @@ const credentialStatusCommand = Command.make("status", { format: checkFormatOpti
         ["passwordSource", status.passwordSource],
         ["hasCredentials", status.hasCredentials ? "yes" : "no"],
         ["fileExists", status.fileExists ? "yes" : "no"],
+        ["fileReadable", status.fileReadable ? "yes" : "no"],
         ["keyPresent", status.keyPresent ? "yes" : "no"]
       ];
+      if (status.fileError) {
+        rows.push(["fileError", status.fileError]);
+      }
       const table = renderTableLegacy(["FIELD", "VALUE"], rows);
       yield* writeText(table);
       return;

@@ -81,6 +81,8 @@ export type CredentialStatus = {
   readonly passwordSource: CredentialSource;
   readonly hasCredentials: boolean;
   readonly fileExists: boolean;
+  readonly fileReadable: boolean;
+  readonly fileError?: string;
   readonly keyPresent: boolean;
 };
 
@@ -314,26 +316,29 @@ export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
         Config.option
       );
 
-      const loadFromFile = Effect.gen(function* () {
-        const exists = yield* fs.exists(credentialsPath).pipe(
-          Effect.mapError(toCredentialError("Failed to check credentials file"))
-        );
-        if (!exists) {
-          return Option.none<CredentialsPayload>();
-        }
-        if (Option.isNone(envKey)) {
-          return yield* CredentialError.make({
-            message:
-              "Credentials file exists but SKYGENT_CREDENTIALS_KEY is not set."
-          });
-        }
-        const raw = yield* fs.readFileString(credentialsPath).pipe(
-          Effect.mapError(toCredentialError("Failed to read credentials file"))
-        );
-        const file = yield* decodeCredentialsFile(raw);
-        const payload = yield* decryptPayload(Redacted.value(envKey.value), file);
-        return Option.some(payload);
-      });
+      const loadFromFile = (exists?: boolean) =>
+        Effect.gen(function* () {
+          const hasFile =
+            exists ??
+            (yield* fs.exists(credentialsPath).pipe(
+              Effect.mapError(toCredentialError("Failed to check credentials file"))
+            ));
+          if (!hasFile) {
+            return Option.none<CredentialsPayload>();
+          }
+          if (Option.isNone(envKey)) {
+            return yield* CredentialError.make({
+              message:
+                "Credentials file exists but SKYGENT_CREDENTIALS_KEY is not set."
+            });
+          }
+          const raw = yield* fs.readFileString(credentialsPath).pipe(
+            Effect.mapError(toCredentialError("Failed to read credentials file"))
+          );
+          const file = yield* decodeCredentialsFile(raw);
+          const payload = yield* decryptPayload(Redacted.value(envKey.value), file);
+          return Option.some(payload);
+        });
 
       const resolveIdentifier = (
         filePayload: Option.Option<CredentialsPayload>
@@ -373,7 +378,7 @@ export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
 
       const get = Effect.fn("CredentialStore.get")(() =>
         Effect.gen(function* () {
-          const filePayload = yield* loadFromFile;
+          const filePayload = yield* loadFromFile();
           const identifier = resolveIdentifier(filePayload);
           const password = resolvePassword(filePayload);
           if (!identifier || !password) {
@@ -450,24 +455,46 @@ export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
             Effect.mapError(toCredentialError("Failed to check credentials file"))
           );
           const keyPresent = Option.isSome(envKey);
-          const filePayload =
-            fileExists && keyPresent ? yield* loadFromFile : Option.none<CredentialsPayload>();
-          const identifierSource = resolveIdentifierSource(filePayload);
-          const passwordSource = resolvePasswordSource(filePayload);
-          const hasCredentials =
-            identifierSource !== "none" && passwordSource !== "none";
-          const source: CredentialSource =
-            !hasCredentials
-              ? "none"
-              : identifierSource === passwordSource
-                ? passwordSource
-                : "mixed";
+          const filePayloadResult =
+            fileExists && keyPresent
+              ? yield* loadFromFile(true).pipe(Effect.either)
+              : undefined;
+          const filePayload = filePayloadResult && filePayloadResult._tag === "Right"
+            ? filePayloadResult.right
+            : Option.none<CredentialsPayload>();
+          const fileError = !fileExists
+            ? undefined
+            : !keyPresent
+              ? "Credentials file exists but SKYGENT_CREDENTIALS_KEY is not set."
+              : filePayloadResult && filePayloadResult._tag === "Left"
+                ? filePayloadResult.left.message
+                : undefined;
+          const fileReadable = fileExists && keyPresent
+            ? filePayloadResult ? filePayloadResult._tag === "Right" : false
+            : false;
+
+          const identifier = resolveIdentifier(filePayload);
+          const password = resolvePassword(filePayload);
+          const identifierSource = identifier
+            ? resolveIdentifierSource(filePayload)
+            : "none";
+          const passwordSource = password
+            ? resolvePasswordSource(filePayload)
+            : "none";
+          const hasCredentials = Boolean(identifier) && Boolean(password);
+          const source: CredentialSource = !hasCredentials
+            ? "none"
+            : identifierSource === passwordSource
+              ? identifierSource
+              : "mixed";
           return {
             source,
             identifierSource,
             passwordSource,
             hasCredentials,
             fileExists,
+            fileReadable,
+            ...(fileError ? { fileError } : {}),
             keyPresent
           };
         })
@@ -497,6 +524,7 @@ export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
           passwordSource: "none",
           hasCredentials: false,
           fileExists: false,
+          fileReadable: false,
           keyPresent: false
         })
     })

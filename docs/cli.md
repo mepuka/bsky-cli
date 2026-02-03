@@ -191,7 +191,7 @@ bun run index.ts config check
 
 `config show` prints the resolved configuration (defaults + config file + env overrides).
 
-`config credentials` provides basic credential management (status, set, clear).
+`config credentials` provides basic credential management (status, set, clear). `set` requires `SKYGENT_CREDENTIALS_KEY`.
 
 ### filter
 

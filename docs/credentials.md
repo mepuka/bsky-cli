@@ -20,6 +20,8 @@ You can create or update this file with:
 skygent config credentials set --identifier handle.bsky.social --password app-password
 ```
 
+Requires `SKYGENT_CREDENTIALS_KEY` to be set in the environment.
+
 ## Security model
 
 - **Encrypted at rest:** `credentials.json` (only the identifier + password).
