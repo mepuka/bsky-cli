@@ -17,7 +17,7 @@ import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
-import { normalizeDateOnlyInput } from "./time.js";
+import { parseTimestampInput } from "./time.js";
 
 const queryArg = Args.text({ name: "query" }).pipe(
   Args.withDescription("Search query string")
@@ -67,12 +67,12 @@ const sortOption = Options.text("sort").pipe(
 );
 
 const sinceOption = Options.text("since").pipe(
-  Options.withDescription("Filter network results after datetime (inclusive)"),
+  Options.withDescription("Filter network results after datetime (inclusive); accepts YYYY-MM-DD"),
   Options.optional
 );
 
 const untilOption = Options.text("until").pipe(
-  Options.withDescription("Filter network results before datetime (exclusive)"),
+  Options.withDescription("Filter network results before datetime (exclusive); accepts YYYY-MM-DD"),
   Options.optional
 );
 
@@ -107,6 +107,64 @@ const tagOption = Options.text("tag").pipe(
   Options.withDescription("Comma-separated tags for network search"),
   Options.optional
 );
+
+const formatArg = (value: string | number) =>
+  typeof value === "string" ? JSON.stringify(value) : String(value);
+
+const buildNetworkSearchCommand = (input: {
+  readonly query: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly sort?: "top" | "latest";
+  readonly since?: string;
+  readonly until?: string;
+  readonly mentions?: string;
+  readonly author?: string;
+  readonly lang?: string;
+  readonly domain?: string;
+  readonly url?: string;
+  readonly tags?: ReadonlyArray<string>;
+  readonly ingest?: string;
+}) => {
+  const parts: Array<string> = ["search", "posts", formatArg(input.query), "--network"];
+  if (input.limit !== undefined) {
+    parts.push("--limit", String(input.limit));
+  }
+  if (input.cursor) {
+    parts.push("--cursor", formatArg(input.cursor));
+  }
+  if (input.sort) {
+    parts.push("--sort", input.sort);
+  }
+  if (input.since) {
+    parts.push("--since", formatArg(input.since));
+  }
+  if (input.until) {
+    parts.push("--until", formatArg(input.until));
+  }
+  if (input.mentions) {
+    parts.push("--mentions", formatArg(input.mentions));
+  }
+  if (input.author) {
+    parts.push("--author", formatArg(input.author));
+  }
+  if (input.lang) {
+    parts.push("--lang", formatArg(input.lang));
+  }
+  if (input.domain) {
+    parts.push("--domain", formatArg(input.domain));
+  }
+  if (input.url) {
+    parts.push("--url", formatArg(input.url));
+  }
+  if (input.tags && input.tags.length > 0) {
+    parts.push("--tag", formatArg(input.tags.join(",")));
+  }
+  if (input.ingest) {
+    parts.push("--ingest", formatArg(input.ingest));
+  }
+  return parts.join(" ");
+};
 
 const requireNonEmptyQuery = (raw: string) =>
   Effect.gen(function* () {
@@ -304,8 +362,20 @@ const postsCommand = Command.make(
         });
         const parsedAuthor = Option.getOrUndefined(author);
         const parsedMentions = Option.getOrUndefined(mentions);
-        const normalizedSince = Option.map(since, (value) => normalizeDateOnlyInput(value));
-        const normalizedUntil = Option.map(until, (value) => normalizeDateOnlyInput(value));
+        const normalizedSince = yield* Option.match(since, {
+          onNone: () => Effect.succeed(Option.none<string>()),
+          onSome: (value) =>
+            parseTimestampInput(value, { label: "--since" }).pipe(
+              Effect.map((date) => Option.some(date.toISOString()))
+            )
+        });
+        const normalizedUntil = yield* Option.match(until, {
+          onNone: () => Effect.succeed(Option.none<string>()),
+          onSome: (value) =>
+            parseTimestampInput(value, { label: "--until" }).pipe(
+              Effect.map((date) => Option.some(date.toISOString()))
+            )
+        });
         const result = yield* client.searchPosts(queryValue, {
           ...(limitValue !== undefined ? { limit: limitValue } : {}),
           ...(Option.isSome(cursorValue) ? { cursor: cursorValue.value } : {}),
@@ -340,9 +410,24 @@ const postsCommand = Command.make(
               Schema.decodeUnknown(Timestamp)(new Date(now).toISOString())
             )
           );
+          const command = buildNetworkSearchCommand({
+            query: queryValue,
+            limit: limitValue,
+            cursor: Option.getOrUndefined(cursorValue),
+            sort: sortValue,
+            since: Option.getOrUndefined(normalizedSince),
+            until: Option.getOrUndefined(normalizedUntil),
+            mentions: parsedMentions,
+            author: parsedAuthor,
+            lang: Option.getOrUndefined(lang),
+            domain: Option.getOrUndefined(domain),
+            url: Option.getOrUndefined(url),
+            tags,
+            ingest: ingest.value
+          });
           const meta = EventMeta.make({
             source: "search",
-            command: `search posts --network ${queryValue}`,
+            command,
             createdAt
           });
           const events = posts.map((post) => PostUpsert.make({ post, meta }));

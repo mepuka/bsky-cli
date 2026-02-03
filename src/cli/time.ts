@@ -170,8 +170,43 @@ export const parseTimeInput = (
     );
   });
 
-export const normalizeDateOnlyInput = (raw: string): string => {
-  const trimmed = raw.trim();
-  const dateOnly = parseDateOnly(trimmed);
-  return dateOnly ? dateOnly.toISOString() : trimmed;
-};
+export const parseTimestampInput = (
+  raw: string,
+  options?: TimeParseOptions
+): Effect.Effect<Date, CliInputError> =>
+  Effect.suspend(() => {
+    const onError = makeErrorFactory(options);
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) {
+      return Effect.fail(onError("Time value cannot be empty."));
+    }
+
+    const dateOnly = parseDateOnly(trimmed);
+    if (dateOnly) {
+      return Effect.succeed(dateOnly);
+    }
+
+    if (looksLikeDate(trimmed)) {
+      if (/[Tt]/.test(trimmed) && !hasExplicitTimezone(trimmed)) {
+        return Effect.fail(
+          onError(
+            "Timestamp must include a timezone (e.g. 2026-01-01T00:00:00Z)."
+          )
+        );
+      }
+      return Schema.decodeUnknown(Timestamp)(trimmed).pipe(
+        Effect.mapError((cause) =>
+          onError(
+            `Invalid timestamp "${raw}". Expected ISO 8601 with timezone (e.g. 2026-01-01T00:00:00Z).`,
+            cause
+          )
+        )
+      );
+    }
+
+    return Effect.fail(
+      onError(
+        `Invalid timestamp "${raw}". Expected ISO date (YYYY-MM-DD) or ISO datetime with timezone.`
+      )
+    );
+  });
