@@ -343,6 +343,22 @@ const filterSuggestions: ReadonlyArray<FilterSuggestion> = [
   }
 ];
 
+// Derive from filterSuggestions to avoid drift
+const knownFilterPredicates = new Set(
+  filterSuggestions.flatMap((entry) => entry.keys)
+);
+
+/**
+ * Check if a value looks like a filter expression (e.g., "text:epstein").
+ * Used to detect when users pass filters as store names without --filter.
+ */
+export const looksLikeFilterExpression = (value: string): boolean => {
+  const colonIndex = value.indexOf(":");
+  if (colonIndex === -1) return false;
+  const prefix = value.slice(0, colonIndex).toLowerCase();
+  return knownFilterPredicates.has(prefix);
+};
+
 const defaultFilterExamples = [
   "author:handle",
   "hashtag:#ai",

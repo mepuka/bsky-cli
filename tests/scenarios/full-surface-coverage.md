@@ -252,6 +252,9 @@ skygent search handles "bsky" --limit 5
 skygent search handles "bsky" --limit 5 --format table
 skygent search handles "bsky" --typeahead --limit 5
 
+# users (alias for handles)
+skygent search users "bsky" --limit 5
+
 # feeds
 skygent search feeds "news" --limit 5
 skygent search feeds "news" --limit 5 --format table

@@ -812,7 +812,7 @@ export const syncCommand = syncStoreCommand.pipe(
   ]),
   Command.withDescription(
     withExamples("Sync content into stores", [
-      "skygent sync my-store",
+      "skygent sync --store my-store",
       "skygent sync timeline --store my-store"
     ])
   )

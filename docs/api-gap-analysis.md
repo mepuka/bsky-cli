@@ -21,7 +21,7 @@ The Skygent CLI currently calls **12 Bluesky API endpoints** across 4 namespaces
 | `app.bsky.feed.getPostThread` | `sync thread`, `watch thread`, `view thread` | Thread retrieval with configurable depth |
 | `app.bsky.notification.listNotifications` | `sync notifications`, `watch notifications` | Notification listing |
 | `app.bsky.actor.getProfiles` | Internal (ProfileResolver) | Batch profile resolution (up to 25) |
-| `app.bsky.actor.searchActors` | `search handles` | Profile search |
+| `app.bsky.actor.searchActors` | `search handles` (alias: `search users`) | Profile search |
 | `app.bsky.actor.searchActorsTypeahead` | `search handles --typeahead` | Prefix search for handles |
 | `app.bsky.unspecced.getPopularFeedGenerators` | `search feeds` | Feed discovery search |
 | `app.bsky.unspecced.getTrendingTopics` | `TrendingTopics` service | Powers the `Trending` filter DSL node |

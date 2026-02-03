@@ -426,6 +426,21 @@ const mapAspectRatio = (input: unknown) => {
   return EmbedAspectRatio.make({ width: ratio.width, height: ratio.height });
 };
 
+/**
+ * Coerce API metric count to valid NonNegativeInt or undefined.
+ * Bluesky API returns -1 as sentinel for "unavailable".
+ * Any other invalid value (null, NaN, other negatives) fails loudly via schema.
+ */
+const coerceMetricCount = (value: unknown): number | undefined => {
+  if (value === undefined || value === null) return undefined;
+  if (value === -1) return undefined; // Sentinel: unavailable
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    // Unexpected value - let schema validation catch it downstream
+    return value as number;
+  }
+  return value;
+};
+
 const decodeTimestamp = (value: unknown, message: string) =>
   Schema.decodeUnknown(Timestamp)(value).pipe(
     Effect.mapError(toBskyError(message))
@@ -650,10 +665,10 @@ const mapEmbedRecordTarget = (
             : undefined;
         const metrics = (() => {
           const data = {
-            replyCount: view.replyCount as number | undefined,
-            repostCount: view.repostCount as number | undefined,
-            likeCount: view.likeCount as number | undefined,
-            quoteCount: view.quoteCount as number | undefined
+            replyCount: coerceMetricCount(view.replyCount),
+            repostCount: coerceMetricCount(view.repostCount),
+            likeCount: coerceMetricCount(view.likeCount),
+            quoteCount: coerceMetricCount(view.quoteCount)
           };
           const hasAny = Object.values(data).some((value) => value !== undefined);
           return hasAny ? PostMetrics.make(data) : undefined;
@@ -811,11 +826,11 @@ const mapEmbedView = (
 
 const metricsFromPostView = (post: PostView) => {
   const data = {
-    replyCount: post.replyCount,
-    repostCount: post.repostCount,
-    likeCount: post.likeCount,
-    quoteCount: post.quoteCount,
-    bookmarkCount: post.bookmarkCount
+    replyCount: coerceMetricCount(post.replyCount),
+    repostCount: coerceMetricCount(post.repostCount),
+    likeCount: coerceMetricCount(post.likeCount),
+    quoteCount: coerceMetricCount(post.quoteCount),
+    bookmarkCount: coerceMetricCount(post.bookmarkCount)
   };
   const hasAny = Object.values(data).some((value) => value !== undefined);
   return hasAny ? PostMetrics.make(data) : undefined;

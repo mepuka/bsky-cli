@@ -27,6 +27,7 @@ import {
   Exit,
   Effect,
   Layer,
+  Match,
   Option,
   ParseResult,
   Schema
@@ -47,6 +48,36 @@ const normalizeHandleInput = (value: string) => {
 };
 
 const isHandleInvalid = (handle: Handle) => handle === "handle.invalid";
+
+// Semantic error inference scoped to identity resolution operations
+const inferIdentitySemanticError = (error: BskyError): string | undefined => {
+  if (error.status === 429) return "RateLimited";
+  // Bluesky returns 400 for non-existent handles
+  // Check error.error field (e.g., "Unable to resolve handle")
+  if (error.status === 400) {
+    const errorField = error.error?.toLowerCase() ?? "";
+    if (errorField.includes("unable to resolve") || errorField.includes("not found")) {
+      return "HandleNotFound";
+    }
+  }
+  const cause = error.cause as { code?: string } | undefined;
+  if (cause?.code === "ETIMEDOUT" || cause?.code === "ECONNRESET") return "NetworkTimeout";
+  if (cause?.code === "EAI_AGAIN") return "DnsError";
+  return undefined;
+};
+
+// User-facing message formatter
+const formatHandleResolutionError = (error: BskyError, handle: string): string => {
+  const semantic = inferIdentitySemanticError(error);
+  return Match.value(semantic ?? error.error).pipe(
+    Match.when("HandleNotFound", () => `Handle "${handle}" not found on Bluesky`),
+    Match.when("HandleInvalid", () => `Invalid handle format: "${handle}"`),
+    Match.when("RateLimited", () => `Failed to resolve handle: API rate limited (try again later)`),
+    Match.when("NetworkTimeout", () => `Failed to resolve handle: Network timeout`),
+    Match.when("DnsError", () => `Failed to resolve handle: DNS resolution failed`),
+    Match.orElse(() => error.message)
+  );
+};
 
 const toIdentityError = (message: string, operation?: string) => (cause: unknown) =>
   BskyError.make({
@@ -412,22 +443,33 @@ export class IdentityResolver extends Context.Tag("@skygent/IdentityResolver")<
           }
 
           const did = yield* bsky.resolveHandle(handle).pipe(
-            Effect.catchTag("BskyError", (error) =>
-              Effect.gen(function* () {
-                if (error.error === "HandleNotFound") {
-                  const now = yield* Clock.currentTimeMillis;
-                  const entry = IdentityCacheEntry.make({
-                    handle,
-                    verified: false,
-                    status: "not_found",
-                    source: "resolveHandle",
-                    checkedAt: new Date(now)
-                  });
-                  yield* writeNegativeEntry(entry, "handle", handle);
-                }
-                return yield* error;
-              })
-            )
+            Effect.catchTag("BskyError", (error) => {
+              const semantic = inferIdentitySemanticError(error);
+              const isNotFound = semantic === "HandleNotFound" || error.error === "HandleNotFound";
+              const cacheEffect = isNotFound
+                ? Effect.gen(function* () {
+                    const now = yield* Clock.currentTimeMillis;
+                    const entry = IdentityCacheEntry.make({
+                      handle,
+                      verified: false,
+                      status: "not_found",
+                      source: "resolveHandle",
+                      checkedAt: new Date(now)
+                    });
+                    yield* writeNegativeEntry(entry, "handle", handle);
+                  })
+                : Effect.void;
+              // Create a new error with user-friendly message but preserve all context
+              const newError = BskyError.make({
+                message: formatHandleResolutionError(error, handle),
+                cause: error.cause,
+                operation: error.operation,
+                status: error.status,
+                error: semantic ?? error.error, // Use semantic if inferred
+                detail: error.detail
+              });
+              return cacheEffect.pipe(Effect.zipRight(Effect.fail(newError)));
+            })
           );
 
           const now = yield* Clock.currentTimeMillis;

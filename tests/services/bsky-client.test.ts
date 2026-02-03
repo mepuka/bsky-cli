@@ -11,6 +11,7 @@ import notificationsFixture from "../fixtures/bsky/notifications.json";
 import authorFeedFixture from "../fixtures/bsky/author-feed.json";
 import threadFixture from "../fixtures/bsky/thread.json";
 import threadNotFoundFixture from "../fixtures/bsky/thread-not-found.json";
+import negativeMetricsFixture from "../fixtures/bsky/timeline-negative-metrics.json";
 
 describe("BskyClient", () => {
   test("fetches timeline posts from mock server", async () => {
@@ -208,5 +209,45 @@ describe("BskyClient", () => {
 
     const posts = await Effect.runPromise(program);
     expect(posts.length).toBe(0);
+  });
+
+  test("handles -1 metric sentinel values", async () => {
+    const baseLayer = Layer.mergeAll(
+      BunContext.layer,
+      makeBskyMockLayer({
+        timeline: negativeMetricsFixture,
+        feed: feedFixture,
+        notifications: notificationsFixture,
+        authorFeed: authorFeedFixture,
+        postThread: threadFixture
+      })
+    );
+    const appConfigLayer = AppConfigService.layer.pipe(
+      Layer.provideMerge(baseLayer)
+    );
+    const credentialLayer = CredentialStore.layer.pipe(
+      Layer.provideMerge(appConfigLayer),
+      Layer.provideMerge(baseLayer)
+    );
+    const bskyLayer = BskyClient.layer.pipe(
+      Layer.provideMerge(appConfigLayer),
+      Layer.provideMerge(credentialLayer)
+    );
+    const layer = Layer.mergeAll(baseLayer, appConfigLayer, credentialLayer, bskyLayer);
+
+    const program = Effect.scoped(
+      Effect.gen(function* () {
+        const client = yield* BskyClient;
+        const collected = yield* Stream.runCollect(client.getTimeline());
+        return Chunk.toReadonlyArray(collected);
+      }).pipe(Effect.provide(layer))
+    );
+
+    const posts = await Effect.runPromise(program);
+    expect(posts.length).toBe(1);
+    // -1 values coerced to undefined, valid values preserved
+    expect(posts[0]?.metrics?.quoteCount).toBeUndefined();
+    expect(posts[0]?.metrics?.replyCount).toBe(5);
+    expect(posts[0]?.metrics?.likeCount).toBeUndefined();
   });
 });
