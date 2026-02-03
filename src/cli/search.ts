@@ -182,6 +182,43 @@ const requireNonEmptyQuery = (raw: string) =>
 type LocalSort = "relevance" | "newest" | "oldest";
 
 
+const handlesHandler = ({ query, limit, cursor, typeahead, format }: {
+  query: string;
+  limit: Option.Option<number>;
+  cursor: Option.Option<string>;
+  typeahead: boolean;
+  format: Option.Option<"json" | "ndjson" | "table">;
+}) =>
+  Effect.gen(function* () {
+    const appConfig = yield* AppConfigService;
+    const queryValue = yield* requireNonEmptyQuery(query);
+    if (typeahead && Option.isSome(cursor)) {
+      return yield* CliInputError.make({
+        message: "--cursor is not supported with --typeahead.",
+        cause: { cursor: cursor.value }
+      });
+    }
+    const client = yield* BskyClient;
+    const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
+    const options = {
+      ...(limitValue !== undefined ? { limit: limitValue } : {}),
+      ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
+      ...(typeahead ? { typeahead: true } : {})
+    };
+    const result = yield* client.searchActors(queryValue, options);
+    yield* emitWithFormat(
+      format,
+      appConfig.outputFormat,
+      jsonNdjsonTableFormats,
+      "json",
+      {
+        json: writeJson(result),
+        ndjson: writeJsonStream(Stream.fromIterable(result.actors)),
+        table: writeText(renderProfileTable(result.actors, result.cursor))
+      }
+    );
+  });
+
 const handlesCommand = Command.make(
   "handles",
   {
@@ -191,41 +228,31 @@ const handlesCommand = Command.make(
     typeahead: typeaheadOption,
     format: formatOption
   },
-  ({ query, limit, cursor, typeahead, format }) =>
-    Effect.gen(function* () {
-      const appConfig = yield* AppConfigService;
-      const queryValue = yield* requireNonEmptyQuery(query);
-      if (typeahead && Option.isSome(cursor)) {
-        return yield* CliInputError.make({
-          message: "--cursor is not supported with --typeahead.",
-          cause: { cursor: cursor.value }
-        });
-      }
-      const client = yield* BskyClient;
-      const { limit: limitValue, cursor: cursorValue } = parsePagination(limit, cursor);
-      const options = {
-        ...(limitValue !== undefined ? { limit: limitValue } : {}),
-        ...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
-        ...(typeahead ? { typeahead: true } : {})
-      };
-      const result = yield* client.searchActors(queryValue, options);
-      yield* emitWithFormat(
-        format,
-        appConfig.outputFormat,
-        jsonNdjsonTableFormats,
-        "json",
-        {
-          json: writeJson(result),
-          ndjson: writeJsonStream(Stream.fromIterable(result.actors)),
-          table: writeText(renderProfileTable(result.actors, result.cursor))
-        }
-      );
-    })
+  handlesHandler
 ).pipe(
   Command.withDescription(
     withExamples("Search for handles (profiles) on Bluesky", [
       "skygent search handles \"dan\" --limit 10",
       "skygent search handles \"alice\" --typeahead"
+    ])
+  )
+);
+
+const usersCommand = Command.make(
+  "users",
+  {
+    query: queryArg,
+    limit: limitOption,
+    cursor: cursorOption,
+    typeahead: typeaheadOption,
+    format: formatOption
+  },
+  handlesHandler
+).pipe(
+  Command.withDescription(
+    withExamples("Search for users on Bluesky (alias for 'handles')", [
+      "skygent search users \"dan\" --limit 10",
+      "skygent search users \"alice\" --typeahead"
     ])
   )
 );
@@ -542,10 +569,11 @@ const postsCommand = Command.make(
 );
 
 export const searchCommand = Command.make("search", {}).pipe(
-  Command.withSubcommands([handlesCommand, feedsCommand, postsCommand]),
+  Command.withSubcommands([handlesCommand, usersCommand, feedsCommand, postsCommand]),
   Command.withDescription(
     withExamples("Search for handles, feeds, or posts", [
       "skygent search handles \"alice\"",
+      "skygent search users \"alice\"",
       "skygent search feeds \"news\"",
       "skygent search posts \"ai\" --store my-store"
     ])

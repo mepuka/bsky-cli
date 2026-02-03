@@ -1,0 +1,20 @@
+{
+  "feed": [
+    {
+      "post": {
+        "uri": "at://did:plc:test/app.bsky.feed.post/negative",
+        "cid": "bafkreigks6arfsq3xxfpvqrrwonchxcnu6do76auprhhfomao6c273sixm",
+        "author": { "did": "did:plc:test", "handle": "test.bsky" },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "text": "Post with -1 metrics",
+          "createdAt": "2026-01-01T00:00:00.000Z"
+        },
+        "indexedAt": "2026-01-01T00:00:01.000Z",
+        "quoteCount": -1,
+        "replyCount": 5,
+        "likeCount": -1
+      }
+    }
+  ]
+}

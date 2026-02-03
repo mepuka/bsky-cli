@@ -187,7 +187,7 @@ All analysis commands work with correct DSL:
 **Status: PASS**
 
 All search commands work:
-- `search handles` (JSON, table, typeahead)
+- `search handles` / `search users` (JSON, table, typeahead)
 - `search feeds` (JSON, table)
 - `search posts --network` (all sort options, `--lang`, `--author`)
 - `search posts --store` (local FTS with relevance/newest sort)
