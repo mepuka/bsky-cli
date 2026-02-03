@@ -2,7 +2,7 @@ import { FileSystem, Path } from "@effect/platform";
 import { Context, Effect, Exit, Layer, Ref, Scope } from "effect";
 import * as Reactivity from "@effect/experimental/Reactivity";
 import * as Migrator from "@effect/sql/Migrator";
-import * as MigratorFileSystem from "@effect/sql/Migrator/FileSystem";
+import { storeIndexMigrations } from "../db/migrations/store-index/index.js";
 import * as SqlClient from "@effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-bun";
 import { StoreIoError } from "../domain/errors.js";
@@ -49,9 +49,6 @@ import { AppConfigService } from "./app-config.js";
  * @module services/store-db
  */
 
-const migrationsDir = decodeURIComponent(
-  new URL("../db/migrations/store-index", import.meta.url).pathname
-);
 
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
   StoreIoError.make({ path, cause });
@@ -140,7 +137,7 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
       const clientLock = yield* Effect.makeSemaphore(1);
 
       const migrate = Migrator.make({})({
-        loader: MigratorFileSystem.fromFileSystem(migrationsDir)
+        loader: Migrator.fromRecord(storeIndexMigrations)
       });
 
       const optimizeClient = (client: SqlClient.SqlClient) =>
@@ -186,8 +183,7 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
           yield* client`PRAGMA optimize=0x10002`;
           yield* client`PRAGMA foreign_keys = ON`;
           yield* migrate.pipe(
-            Effect.provideService(SqlClient.SqlClient, client),
-            Effect.provideService(FileSystem.FileSystem, fs)
+            Effect.provideService(SqlClient.SqlClient, client)
           );
 
           return { client, scope: clientScope };

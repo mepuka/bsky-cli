@@ -59,7 +59,7 @@ import { FileSystem, Path } from "@effect/platform";
 import { Chunk, Clock, Context, Effect, Exit, Layer, Option, Schema, Scope } from "effect";
 import * as Reactivity from "@effect/experimental/Reactivity";
 import * as Migrator from "@effect/sql/Migrator";
-import * as MigratorFileSystem from "@effect/sql/Migrator/FileSystem";
+import { storeCatalogMigrations } from "../db/migrations/store-catalog/index.js";
 import * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import { SqliteClient } from "@effect/sql-sqlite-bun";
@@ -68,9 +68,6 @@ import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
 import { StoreName, StorePath } from "../domain/primitives.js";
 import { AppConfigService } from "./app-config.js";
 
-const migrationsDir = decodeURIComponent(
-  new URL("../db/migrations/store-catalog", import.meta.url).pathname
-);
 
 const storeRootKey = (name: StoreName) => `stores/${name}`;
 const manifestPath = Schema.decodeUnknownSync(StorePath)("stores");
@@ -233,11 +230,10 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
       );
 
       const migrate = Migrator.make({})({
-        loader: MigratorFileSystem.fromFileSystem(migrationsDir)
+        loader: Migrator.fromRecord(storeCatalogMigrations)
       });
       yield* migrate.pipe(
-        Effect.provideService(SqlClient.SqlClient, client),
-        Effect.provideService(FileSystem.FileSystem, fs)
+        Effect.provideService(SqlClient.SqlClient, client)
       );
 
       const decodeMetadataRow = (row: typeof storeRow.Type) =>
