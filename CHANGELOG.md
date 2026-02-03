@@ -1,5 +1,22 @@
 # @mepuka/skygent
 
+## 0.5.0
+
+### Minor Changes
+
+- ### New Features
+
+  - **`--count-by` option**: Group and count posts by `author`, `hashtag`, `date`, or `hour`
+    ```bash
+    skygent query my-store --count-by author --limit 10
+    skygent query my-store --count-by hashtag --since 7d
+    ```
+
+  ### Improvements
+
+  - **Filter detection in store names**: When passing a filter expression like `text:epstein` as a store name, the CLI now suggests using `--filter` instead
+  - **User-friendly handle errors**: Handle resolution errors now show clear messages like `Handle "bbc.com" not found on Bluesky` instead of raw API errors
+
 ## 0.4.4
 
 ### Patch Changes
