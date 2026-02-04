@@ -38,9 +38,15 @@ Skygent needs a Bluesky handle and [app password](https://bsky.app/settings/app-
 
 1. CLI flags: `--identifier` and `--password`
 2. Environment variables: `SKYGENT_IDENTIFIER` and `SKYGENT_PASSWORD`
-3. Encrypted credential file (`~/.skygent/credentials.json`, requires `SKYGENT_CREDENTIALS_KEY`)
+3. Encrypted credential file (`~/.skygent/credentials.json`, requires a credentials key)
+
+Credentials key resolution order:
+
+1. Environment: `SKYGENT_CREDENTIALS_KEY`
+2. Keyfile: `~/.skygent/credentials.key`
 
 Manage the encrypted credential file with `skygent config credentials`.
+Manage the credentials key with `skygent config credentials key set|status|clear`.
 
 The simplest setup:
 
@@ -256,7 +262,7 @@ Operators: `AND` / `&&`, `OR` / `||`, `NOT` / `!`, parentheses for grouping.
 |---|---|---|
 | `SKYGENT_IDENTIFIER` | -- | Bluesky handle or DID |
 | `SKYGENT_PASSWORD` | -- | App password |
-| `SKYGENT_CREDENTIALS_KEY` | -- | Master key for encrypted credential storage |
+| `SKYGENT_CREDENTIALS_KEY` | -- | Master key for encrypted credential storage (overrides `~/.skygent/credentials.key`) |
 | `SKYGENT_SERVICE` | `https://bsky.social` | Bluesky service URL |
 | `SKYGENT_STORE_ROOT` | `~/.skygent` | Root storage directory |
 | `SKYGENT_OUTPUT_FORMAT` | `ndjson` | Default output format |

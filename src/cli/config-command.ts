@@ -35,7 +35,7 @@ const checkError = (name: string, message: string): CheckResult => ({
 });
 
 const checkFormatOption = Options.choice("format", jsonTableFormats).pipe(
-  Options.withDescription("Output format (default: json)"),
+  Options.withDescription("Output format (default: config output format)"),
   Options.optional
 );
 
@@ -181,10 +181,16 @@ const credentialStatusCommand = Command.make("status", { format: checkFormatOpti
         ["hasCredentials", status.hasCredentials ? "yes" : "no"],
         ["fileExists", status.fileExists ? "yes" : "no"],
         ["fileReadable", status.fileReadable ? "yes" : "no"],
-        ["keyPresent", status.keyPresent ? "yes" : "no"]
+        ["keyPresent", status.keyPresent ? "yes" : "no"],
+        ["keySource", status.keySource],
+        ["keyFileExists", status.keyFileExists ? "yes" : "no"],
+        ["keyFileReadable", status.keyFileReadable ? "yes" : "no"]
       ];
       if (status.fileError) {
         rows.push(["fileError", status.fileError]);
+      }
+      if (status.keyFileError) {
+        rows.push(["keyFileError", status.keyFileError]);
       }
       const table = renderTableLegacy(["FIELD", "VALUE"], rows);
       yield* writeText(table);
@@ -195,6 +201,98 @@ const credentialStatusCommand = Command.make("status", { format: checkFormatOpti
   })
 ).pipe(
   Command.withDescription("Show credential resolution status")
+);
+
+const credentialKeyStatusCommand = Command.make(
+  "status",
+  { format: checkFormatOption },
+  ({ format }) =>
+    Effect.gen(function* () {
+      const config = yield* AppConfigService;
+      const credentials = yield* CredentialStore;
+      const status = yield* credentials.status();
+      const outputFormat = resolveOutputFormat(
+        format,
+        config.outputFormat,
+        jsonTableFormats,
+        "json"
+      );
+
+      if (outputFormat === "table") {
+        const rows = [
+          ["keyPresent", status.keyPresent ? "yes" : "no"],
+          ["keySource", status.keySource],
+          ["keyFileExists", status.keyFileExists ? "yes" : "no"],
+          ["keyFileReadable", status.keyFileReadable ? "yes" : "no"]
+        ];
+        if (status.keyFileError) {
+          rows.push(["keyFileError", status.keyFileError]);
+        }
+        const table = renderTableLegacy(["FIELD", "VALUE"], rows);
+        yield* writeText(table);
+        return;
+      }
+
+      yield* writeJson({
+        keyPresent: status.keyPresent,
+        keySource: status.keySource,
+        keyFileExists: status.keyFileExists,
+        keyFileReadable: status.keyFileReadable,
+        ...(status.keyFileError ? { keyFileError: status.keyFileError } : {})
+      });
+    })
+).pipe(
+  Command.withDescription("Show credential key status")
+);
+
+const credentialKeySetCommand = Command.make(
+  "set",
+  {
+    value: Options.text("value").pipe(
+      Options.withDescription("Base64 credentials key (optional)"),
+      Options.optional
+    ),
+    force: Options.boolean("force").pipe(
+      Options.withAlias("f"),
+      Options.withDescription("Overwrite existing key file")
+    )
+  },
+  ({ value, force }) =>
+    Effect.gen(function* () {
+      const credentials = yield* CredentialStore;
+      const result = yield* credentials.setKey({
+        ...(Option.isSome(value) ? { value: value.value } : {}),
+        overwrite: force
+      });
+      yield* writeJson({ saved: true, overwritten: result.overwritten });
+    })
+).pipe(
+  Command.withDescription("Save credentials key to disk")
+);
+
+const credentialKeyClearCommand = Command.make("clear", {}, () =>
+  Effect.gen(function* () {
+    const credentials = yield* CredentialStore;
+    yield* credentials.clearKey();
+    yield* writeJson({ cleared: true });
+  })
+).pipe(
+  Command.withDescription("Remove stored credentials key file")
+);
+
+const configCredentialsKeyCommand = Command.make("key", {}).pipe(
+  Command.withSubcommands([
+    credentialKeyStatusCommand,
+    credentialKeySetCommand,
+    credentialKeyClearCommand
+  ]),
+  Command.withDescription(
+    withExamples("Manage credentials key", [
+      "skygent config credentials key status",
+      "skygent config credentials key set",
+      "skygent config credentials key clear"
+    ])
+  )
 );
 
 const credentialSetCommand = Command.make(
@@ -232,12 +330,18 @@ const credentialClearCommand = Command.make("clear", {}, () =>
 );
 
 const configCredentialsCommand = Command.make("credentials", {}).pipe(
-  Command.withSubcommands([credentialStatusCommand, credentialSetCommand, credentialClearCommand]),
+  Command.withSubcommands([
+    credentialStatusCommand,
+    credentialSetCommand,
+    credentialClearCommand,
+    configCredentialsKeyCommand
+  ]),
   Command.withDescription(
     withExamples("Manage stored credentials", [
       "skygent config credentials status",
       "skygent config credentials set --identifier handle.bsky.social --password app-password",
-      "skygent config credentials clear"
+      "skygent config credentials clear",
+      "skygent config credentials key set"
     ])
   )
 );

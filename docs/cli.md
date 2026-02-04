@@ -174,6 +174,9 @@ Configuration helpers.
 - `config credentials status`
 - `config credentials set --identifier <value> --password <value>`
 - `config credentials clear`
+- `config credentials key status`
+- `config credentials key set [--value <base64>] [--force]`
+- `config credentials key clear`
 
 Runs a series of health checks and outputs a JSON report with an `ok` boolean and a `checks` array. Each check has a `name`, `status` (`ok`, `warn`, or `error`), and an optional `message`.
 
@@ -191,7 +194,7 @@ bun run index.ts config check
 
 `config show` prints the resolved configuration (defaults + config file + env overrides).
 
-`config credentials` provides basic credential management (status, set, clear). `set` requires `SKYGENT_CREDENTIALS_KEY`.
+`config credentials` provides credential management (status, set, clear) and keyfile management (`key status|set|clear`).
 
 ### filter
 
