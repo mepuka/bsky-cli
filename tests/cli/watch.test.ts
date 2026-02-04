@@ -86,9 +86,11 @@ const storeManagerLayer = Layer.succeed(
     createStore: () => Effect.succeed(sampleStore),
     getStore: () => Effect.succeed(Option.some(sampleStore)),
     listStores: () => Effect.succeed(Chunk.empty()),
+    getMetadata: () => Effect.succeed(Option.none()),
     getConfig: () => Effect.succeed(Option.some(defaultStoreConfig)),
     deleteStore: () => Effect.void,
-    renameStore: () => Effect.succeed(sampleStore)
+    renameStore: () => Effect.succeed(sampleStore),
+    updateDescription: () => Effect.die("unused")
   })
 );
 

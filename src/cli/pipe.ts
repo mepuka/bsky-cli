@@ -7,12 +7,13 @@ import { PostParser } from "../services/post-parser.js";
 import { CliInput } from "./input.js";
 import { CliInputError, CliJsonError } from "./errors.js";
 import { parseFilterExpr } from "./filter-input.js";
+import { filterHelpText } from "./filter-help.js";
 import { decodeJson } from "./parse.js";
 import { PipeInput, isRawPostInput, isStorePostInput } from "./pipe-input.js";
 import { withExamples } from "./help.js";
-import { filterOption, filterJsonOption } from "./shared-options.js";
+import { filterHelpOption, filterOption, filterJsonOption } from "./shared-options.js";
 import { formatSchemaError } from "./shared.js";
-import { writeJsonStream } from "./output.js";
+import { writeJsonStream, writeText } from "./output.js";
 import { filterByFlags } from "../typeclass/chunk.js";
 import { logErrorEvent, logWarn } from "./logging.js";
 import { PositiveInt } from "./option-schemas.js";
@@ -62,9 +63,13 @@ const formatPipeError = (error: unknown) => {
 
 export const pipeCommand = Command.make(
   "pipe",
-  { filter: filterOption, filterJson: filterJsonOption, onError: onErrorOption, batchSize: batchSizeOption },
-  ({ filter, filterJson, onError, batchSize }) =>
+  { filter: filterOption, filterJson: filterJsonOption, filterHelp: filterHelpOption, onError: onErrorOption, batchSize: batchSizeOption },
+  ({ filter, filterJson, filterHelp, onError, batchSize }) =>
     Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
       const input = yield* CliInput;
       if (input.isTTY) {
         return yield* CliInputError.make({

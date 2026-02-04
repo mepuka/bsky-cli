@@ -8,16 +8,16 @@ import { StoreManager } from "../services/store-manager.js";
 import { IdentityResolver } from "../services/identity-resolver.js";
 import { ViewCheckpointStore } from "../services/view-checkpoint-store.js";
 import { OutputManager } from "../services/output-manager.js";
-import { filterJsonDescription } from "./filter-help.js";
+import { filterHelpText, filterJsonDescription } from "./filter-help.js";
 import { parseFilterExpr } from "./filter-input.js";
-import { writeJson } from "./output.js";
+import { writeJson, writeText } from "./output.js";
 import { storeOptions } from "./store.js";
 import { CliInputError } from "./errors.js";
 import { logInfo } from "./logging.js";
 import type { FilterEvaluationMode } from "../domain/derivation.js";
 import { CliPreferences } from "./preferences.js";
 import { withExamples } from "./help.js";
-import { filterOption } from "./shared-options.js";
+import { dryRunOption, filterHelpOption, filterOption } from "./shared-options.js";
 
 const sourceArg = Args.text({ name: "source" }).pipe(
   Args.withSchema(StoreName),
@@ -76,14 +76,20 @@ export const deriveCommand = Command.make(
     target: targetArg,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     includeAuthor: includeAuthorOption,
     excludeAuthor: excludeAuthorOption,
     mode: modeOption,
     reset: resetFlag,
-    yes: yesFlag
+    yes: yesFlag,
+    dryRun: dryRunOption
   },
-  ({ source, target, filter, filterJson, includeAuthor, excludeAuthor, mode, reset, yes }) =>
+  ({ source, target, filter, filterJson, filterHelp, includeAuthor, excludeAuthor, mode, reset, yes, dryRun }) =>
     Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
       const startTime = yield* Clock.currentTimeMillis;
       const engine = yield* DerivationEngine;
       const checkpoints = yield* ViewCheckpointStore;
@@ -150,7 +156,7 @@ export const deriveCommand = Command.make(
       }
 
       // Validation 2: Reset requires --yes confirmation
-      if (reset && !yes) {
+      if (reset && !yes && !dryRun) {
         return yield* CliInputError.make({
           message: "--reset is destructive. Re-run with --yes to confirm.",
           cause: { reset: true, yes: false }
@@ -198,29 +204,47 @@ export const deriveCommand = Command.make(
         }
       }
 
+      if (dryRun) {
+        yield* logInfo("Dry run: no changes will be written", {
+          source,
+          target
+        });
+      }
+
       // Load store references
       const sourceRef = yield* storeOptions.loadStoreRef(source);
       const targetOption = yield* manager.getStore(target);
       const targetRef = yield* Option.match(targetOption, {
         onNone: () =>
-          manager.createStore(target, defaultStoreConfig).pipe(
-            Effect.tap(() => logInfo("Auto-created target store", { target }))
-          ),
+          dryRun
+            ? Effect.fail(
+                CliInputError.make({
+                  message:
+                    "Target store does not exist. Create it first or omit --dry-run.",
+                  cause: { target, dryRun: true }
+                })
+              )
+            : manager.createStore(target, defaultStoreConfig).pipe(
+                Effect.tap(() => logInfo("Auto-created target store", { target }))
+              ),
         onSome: Effect.succeed
       });
 
       // Execute derivation
       const result = yield* engine.derive(sourceRef, targetRef, filterExpr, {
         mode: evaluationMode,
-        reset
+        reset,
+        ...(dryRun ? { dryRun: true } : {})
       });
 
-      const materialized = yield* outputManager.materializeStore(targetRef);
-      if (materialized.filters.length > 0) {
-        yield* logInfo("Materialized filter outputs", {
-          store: targetRef.name,
-          filters: materialized.filters.map((spec) => spec.name)
-        });
+      if (!dryRun) {
+        const materialized = yield* outputManager.materializeStore(targetRef);
+        if (materialized.filters.length > 0) {
+          yield* logInfo("Materialized filter outputs", {
+            store: targetRef.name,
+            filters: materialized.filters.map((spec) => spec.name)
+          });
+        }
       }
 
       // Calculate duration and percentage
@@ -241,7 +265,8 @@ export const deriveCommand = Command.make(
           source: sourceRef.name,
           target: targetRef.name,
           mode: evaluationMode,
-          ...result
+          ...result,
+          ...(dryRun ? { dryRun: true } : {})
         });
         return;
       }
@@ -250,7 +275,8 @@ export const deriveCommand = Command.make(
         source: sourceRef.name,
         target: targetRef.name,
         mode: evaluationMode,
-        result
+        result,
+        ...(dryRun ? { dryRun: true } : {})
       });
     })
 ).pipe(

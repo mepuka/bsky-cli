@@ -36,7 +36,9 @@ export class StoreMetadata extends Schema.Class<StoreMetadata>("StoreMetadata")(
   /** ISO timestamp when the store was first created */
   createdAt: Timestamp,
   /** ISO timestamp when the store was last modified */
-  updatedAt: Timestamp
+  updatedAt: Timestamp,
+  /** Optional human-readable description */
+  description: Schema.optional(Schema.String)
 }) {}
 
 /**

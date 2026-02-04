@@ -8,6 +8,7 @@ import { BskyClient } from "../services/bsky-client.js";
 import { PostParser } from "../services/post-parser.js";
 import { StoreIndex } from "../services/store-index.js";
 import { SyncEngine } from "../services/sync-engine.js";
+import { AppConfigService } from "../services/app-config.js";
 import { renderThread } from "./doc/thread.js";
 import { renderPlain, renderAnsi } from "./doc/render.js";
 import { writeJson, writeText } from "./output.js";
@@ -19,7 +20,7 @@ import {
   parentHeightOption as threadParentHeightOption,
   parseThreadDepth
 } from "./thread-options.js";
-import { textJsonFormats } from "./output-format.js";
+import { resolveOutputFormat, textJsonFormats } from "./output-format.js";
 import { PositiveInt } from "./option-schemas.js";
 
 const uriArg = Args.text({ name: "uri" }).pipe(
@@ -48,7 +49,7 @@ const widthOption = Options.integer("width").pipe(
 );
 
 const formatOption = Options.choice("format", textJsonFormats).pipe(
-  Options.withDescription("Output format (default: text)"),
+  Options.withDescription("Output format (default: config output format)"),
   Options.optional
 );
 
@@ -71,7 +72,13 @@ export const threadCommand = Command.make(
   },
   ({ uri, store, compact, ansi, width, format, depth, parentHeight }) =>
     Effect.gen(function* () {
-      const outputFormat = Option.getOrElse(format, () => "text" as const);
+      const appConfig = yield* AppConfigService;
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        textJsonFormats,
+        "text"
+      );
       const w = Option.getOrUndefined(width);
       const { depth: depthValue, parentHeight: parentHeightValue } =
         parseThreadDepth(depth, parentHeight);

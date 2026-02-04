@@ -1,6 +1,6 @@
 import { Chunk, Clock, Context, Effect, Layer, Schema, Stream } from "effect";
 import { FilterCompileError, FilterEvalError, StoreIndexError } from "../domain/errors.js";
-import { GraphEdge, GraphNode, GraphSnapshot } from "../domain/graph.js";
+import { GraphEdge, GraphNode, GraphSnapshot, GraphSummary } from "../domain/graph.js";
 import { filterExprSignature } from "../domain/filter.js";
 import type { StoreQuery } from "../domain/events.js";
 import type { StoreRef } from "../domain/store.js";
@@ -100,6 +100,12 @@ export class GraphBuilder extends Context.Tag("@skygent/GraphBuilder")<
 
             const nodes = new Map<Did, GraphNode>();
             const edges = new Map<string, GraphEdge>();
+            const interactionCounts: Record<string, number> = {
+              reply: 0,
+              quote: 0,
+              mention: 0,
+              repost: 0
+            };
 
             const ensureNode = (did: Did, label?: string) => {
               const existing = nodes.get(did);
@@ -114,6 +120,7 @@ export class GraphBuilder extends Context.Tag("@skygent/GraphBuilder")<
 
             const addEdge = (from: Did, to: Did, type: GraphEdge["type"]) => {
               if (from === to) return;
+              interactionCounts[type] = (interactionCounts[type] ?? 0) + 1;
               const key = `${from}|${to}|${type}`;
               const existing = edges.get(key);
               if (!existing) {
@@ -175,6 +182,19 @@ export class GraphBuilder extends Context.Tag("@skygent/GraphBuilder")<
             );
 
             const filterHash = expr ? filterExprSignature(expr) : undefined;
+            const nodeCount = nodes.size;
+            const edgeCount = edges.size;
+            const density =
+              nodeCount <= 1
+                ? 0
+                : edgeCount / (nodeCount * (nodeCount - 1));
+            const summary = GraphSummary.make({
+              postsScanned: posts.length,
+              interactionsByType: interactionCounts,
+              uniqueActors: nodeCount,
+              edgeCount,
+              density
+            });
 
             return GraphSnapshot.make({
               nodes: Array.from(nodes.values()),
@@ -183,7 +203,8 @@ export class GraphBuilder extends Context.Tag("@skygent/GraphBuilder")<
               builtAt,
               sources: [`store:${store.name}`],
               window: query.range ? { start: query.range.start, end: query.range.end } : undefined,
-              filters: filterHash ? { filterHash } : undefined
+              filters: filterHash ? { filterHash } : undefined,
+              summary
             });
           })
       );

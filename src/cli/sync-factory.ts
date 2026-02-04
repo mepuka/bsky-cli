@@ -25,6 +25,7 @@ export interface CommonCommandInput {
   readonly cacheImagesMode: Option.Option<CacheImagesMode>;
   readonly cacheImagesLimit: Option.Option<number>;
   readonly noCacheImagesThumbnails: boolean;
+  readonly dryRun?: boolean;
   readonly limit?: Option.Option<number>;
 }
 
@@ -67,6 +68,13 @@ export const makeSyncCommandBody = (
       const expr = yield* parseFilterExpr(input.filter, input.filterJson);
       const basePolicy = storeConfig.syncPolicy ?? "dedupe";
       const policy = input.refresh ? "refresh" : basePolicy;
+      const dryRun = input.dryRun ?? false;
+      if (dryRun) {
+        yield* logInfo("Dry run: no changes will be written", {
+          source: sourceName,
+          store: storeRef.name
+        });
+      }
       yield* logInfo("Starting sync", { source: sourceName, store: storeRef.name, ...extraLogFields });
       if (policy === "refresh") {
         yield* logWarn("Refresh mode updates existing posts and may grow the event log.", {
@@ -78,20 +86,23 @@ export const makeSyncCommandBody = (
       const result = yield* sync
         .sync(makeDataSource(), storeRef, expr, {
           policy,
-          ...(limitValue !== undefined ? { limit: limitValue } : {})
+          ...(limitValue !== undefined ? { limit: limitValue } : {}),
+          ...(dryRun ? { dryRun: true } : {})
         })
         .pipe(
           Effect.provideService(SyncReporter, makeSyncReporter(input.quiet, monitor, output))
         );
-      const materialized = yield* outputManager.materializeStore(storeRef);
-      if (materialized.filters.length > 0) {
-        yield* logInfo("Materialized filter outputs", {
-          store: storeRef.name,
-          filters: materialized.filters.map((spec) => spec.name)
-        });
+      if (!dryRun) {
+        const materialized = yield* outputManager.materializeStore(storeRef);
+        if (materialized.filters.length > 0) {
+          yield* logInfo("Materialized filter outputs", {
+            store: storeRef.name,
+            filters: materialized.filters.map((spec) => spec.name)
+          });
+        }
       }
       const totalPosts = yield* index.count(storeRef);
-      if (input.cacheImages) {
+      if (input.cacheImages && !dryRun) {
         const mode = resolveCacheMode(input.cacheImagesMode);
         const cacheLimit = resolveCacheLimit(mode, result.postsAdded, input.cacheImagesLimit);
         const shouldRun = mode === "full" || result.postsAdded > 0;
@@ -124,8 +135,17 @@ export const makeSyncCommandBody = (
           );
         }
       }
-      yield* logInfo("Sync complete", { source: sourceName, store: storeRef.name, ...extraLogFields });
-      yield* writeJson({ ...(result as SyncResult), totalPosts });
+      yield* logInfo("Sync complete", {
+        source: sourceName,
+        store: storeRef.name,
+        ...extraLogFields,
+        ...(dryRun ? { dryRun: true } : {})
+      });
+      yield* writeJson({
+        ...(result as SyncResult),
+        totalPosts,
+        ...(dryRun ? { dryRun: true } : {})
+      });
     });
 
 /** Common options for watch API-based commands */

@@ -128,6 +128,12 @@ const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError
         NoAltText: () => Effect.void,
         HasVideo: () => Effect.void,
         HasLinks: () => Effect.void,
+        LinkContains: (link) =>
+          link.text.trim().length === 0
+            ? invalid("LinkContains text must be non-empty")
+            : Effect.void,
+        LinkRegex: (linkRegex) =>
+          validateRegex([linkRegex.pattern], linkRegex.flags),
         HasMedia: () => Effect.void,
         HasEmbed: () => Effect.void,
         MinImages: (minImages) =>
@@ -181,7 +187,7 @@ const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError
  * **Supported Filter Types:**
  * - Basic: All, None, Author, Hashtag, Contains, IsReply, IsQuote, IsRepost
  * - Collections: AuthorIn, HashtagIn (require non-empty arrays)
- * - Media: HasImages, MinImages, HasAltText, NoAltText, AltText, AltTextRegex, HasVideo, HasLinks, HasMedia, HasEmbed
+ * - Media: HasImages, MinImages, HasAltText, NoAltText, AltText, AltTextRegex, HasVideo, HasLinks, LinkContains, LinkRegex, HasMedia, HasEmbed
  * - Metadata: Language (requires langs array), Engagement (requires at least one threshold)
  * - Time: DateRange (start must be before end)
  * - Text: Regex (validates pattern syntax)

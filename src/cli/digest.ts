@@ -37,7 +37,7 @@ const untilOption = Options.text("until").pipe(
 );
 
 const formatOption = Options.choice("format", digestFormats).pipe(
-  Options.withDescription("Output format (default: json)"),
+  Options.withDescription("Output format (default: config output format)"),
   Options.optional
 );
 

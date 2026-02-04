@@ -242,17 +242,20 @@ const filterKeyHints = new Map<string, string>([
   ["minimages", "min-images:2"],
   ["alt-text", "alt-text:accessibility"],
   ["alttext", "alt-text:accessibility"],
+  ["links", "links:/example.com/"],
+  ["link-contains", "link-contains:substack.com"],
+  ["linkcontains", "link-contains:substack.com"],
   ["since", "since:24h"],
   ["until", "until:2026-01-01T00:00:00Z"],
   ["age", "age:<24h"]
 ]);
 
-type FilterSuggestion = {
+export type FilterSuggestion = {
   readonly keys: ReadonlyArray<string>;
   readonly suggestions: ReadonlyArray<string>;
 };
 
-const filterSuggestions: ReadonlyArray<FilterSuggestion> = [
+export const filterSuggestions: ReadonlyArray<FilterSuggestion> = [
   {
     keys: ["author", "from"],
     suggestions: ["author:handle"]
@@ -282,8 +285,16 @@ const filterSuggestions: ReadonlyArray<FilterSuggestion> = [
     suggestions: ["has:video"]
   },
   {
-    keys: ["haslinks", "links", "link"],
+    keys: ["haslinks"],
     suggestions: ["has:links"]
+  },
+  {
+    keys: ["links"],
+    suggestions: ["links:/example.com/"]
+  },
+  {
+    keys: ["link-contains", "linkcontains"],
+    suggestions: ["link-contains:substack.com"]
   },
   {
     keys: ["hasmedia", "media"],
@@ -1161,7 +1172,7 @@ class Parser {
         return { _tag: "Language", langs: items };
       }
 
-      const optionMode = key === "regex" ? "regex" : "default";
+      const optionMode = key === "regex" || key === "links" ? "regex" : "default";
       const { value: baseValueRaw, valuePosition: basePosition, options } =
         yield* parseValueOptions(self.input, rawValue, valuePosition, optionMode);
       const baseValue = stripQuotes(baseValueRaw);
@@ -1209,6 +1220,29 @@ class Parser {
           return caseSensitive !== undefined
             ? { _tag: "Contains", text: baseValue, caseSensitive }
             : { _tag: "Contains", text: baseValue };
+        }
+        case "link-contains":
+        case "linkcontains": {
+          if (baseValue.length === 0) {
+            return yield* self.fail("Link-contains filter requires text.", token.position);
+          }
+          const caseSensitiveOption = yield* takeOption(
+            options,
+            ["caseSensitive", "case", "cs"],
+            "caseSensitive",
+            self.input
+          );
+          const caseSensitive = caseSensitiveOption
+            ? yield* parseBooleanOption(
+                caseSensitiveOption,
+                self.input,
+                "caseSensitive"
+              )
+            : undefined;
+          yield* ensureNoUnknownOptions(options, self.input);
+          return caseSensitive !== undefined
+            ? { _tag: "LinkContains", text: baseValue, caseSensitive }
+            : { _tag: "LinkContains", text: baseValue };
         }
         case "is":
         case "type": {
@@ -1502,31 +1536,92 @@ class Parser {
         case "links":
         case "validlinks":
         case "hasvalidlinks": {
+          let resolvedRaw = baseValueRaw;
           let resolvedValue = baseValue;
           let resolvedOptions = options;
-          if (rawValue.length > 0 && looksLikeOptionSegment(rawValue)) {
+          if (rawValue.length > 0 && !rawValue.includes(",") && looksLikeOptionSegment(rawValue)) {
             const reparsed = yield* parseValueOptions(
               self.input,
               `,${rawValue}`,
-              Math.max(0, valuePosition - 1)
+              Math.max(0, valuePosition - 1),
+              "regex"
             );
+            resolvedRaw = reparsed.value;
             resolvedValue = stripQuotes(reparsed.value);
             resolvedOptions = reparsed.options;
           }
-          if (resolvedValue.length > 0) {
-            return yield* self.fail(
-              "HasValidLinks does not take a value.",
+
+          const isValidLinksKey = key === "validlinks" || key === "hasvalidlinks";
+          if (isValidLinksKey || resolvedValue.length === 0) {
+            if (resolvedValue.length > 0) {
+              return yield* self.fail(
+                "HasValidLinks does not take a value.",
+                token.position
+              );
+            }
+            const policy = yield* parsePolicy(
+              resolvedOptions,
+              defaultLinksPolicy(),
+              self.input,
               token.position
             );
+            yield* ensureNoUnknownOptions(resolvedOptions, self.input);
+            return { _tag: "HasValidLinks", onError: policy };
           }
-          const policy = yield* parsePolicy(
+
+          const flagsOption = yield* takeOption(
             resolvedOptions,
-            defaultLinksPolicy(),
-            self.input,
-            token.position
+            ["flags"],
+            "flags",
+            self.input
           );
+          const caseSensitiveOption = yield* takeOption(
+            resolvedOptions,
+            ["caseSensitive", "case", "cs"],
+            "caseSensitive",
+            self.input
+          );
+          const trimmed = stripQuotes(resolvedRaw);
+          const isRegex = trimmed.startsWith("/") && trimmed.lastIndexOf("/") > 0;
+          if (isRegex || flagsOption) {
+            if (caseSensitiveOption) {
+              return yield* self.fail(
+                "caseSensitive is not supported for link regex filters.",
+                caseSensitiveOption.position
+              );
+            }
+            const { pattern, flags } = parseRegexValue(resolvedRaw);
+            if (pattern.length === 0) {
+              return yield* self.fail("Link regex pattern cannot be empty.", token.position);
+            }
+            if (flags && flagsOption) {
+              return yield* self.fail("Link regex flags specified twice.", flagsOption.position);
+            }
+            const optionFlags = flagsOption ? stripQuotes(flagsOption.value) : undefined;
+            if (flagsOption && optionFlags !== undefined && optionFlags.length === 0) {
+              return yield* self.fail("Link regex flags cannot be empty.", flagsOption.position);
+            }
+            yield* ensureNoUnknownOptions(resolvedOptions, self.input);
+            const resolvedFlags = optionFlags ?? flags;
+            return resolvedFlags
+              ? { _tag: "LinkRegex", pattern, flags: resolvedFlags }
+              : { _tag: "LinkRegex", pattern };
+          }
+
+          if (resolvedValue.length === 0) {
+            return yield* self.fail("Link-contains filter requires text.", token.position);
+          }
+          const caseSensitive = caseSensitiveOption
+            ? yield* parseBooleanOption(
+                caseSensitiveOption,
+                self.input,
+                "caseSensitive"
+              )
+            : undefined;
           yield* ensureNoUnknownOptions(resolvedOptions, self.input);
-          return { _tag: "HasValidLinks", onError: policy };
+          return caseSensitive !== undefined
+            ? { _tag: "LinkContains", text: resolvedValue, caseSensitive }
+            : { _tag: "LinkContains", text: resolvedValue };
         }
         case "trending":
         case "trend": {

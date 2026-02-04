@@ -28,6 +28,8 @@ const conditionLine = (condition: FilterCondition): string => {
     case "AltTextRegex":  return `${prefix}include alt text matching regex: ${condition.value}`;
     case "HasVideo":      return `${prefix}include video`;
     case "HasLinks":      return `${prefix}include links`;
+    case "LinkContains":  return `${prefix}include links containing: ${condition.value}`;
+    case "LinkRegex":     return `${prefix}include links matching regex: ${condition.value}`;
     case "HasMedia":      return `${prefix}include media`;
     case "HasEmbed":      return `${prefix}include embeds`;
     case "Language":      return `${prefix}be in: ${condition.value}`;

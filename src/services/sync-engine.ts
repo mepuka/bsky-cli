@@ -65,6 +65,7 @@ import type { BskyError } from "../domain/errors.js";
 import { FilterRuntime } from "./filter-runtime.js";
 import { PostParser } from "./post-parser.js";
 import { StoreCommitter } from "./store-commit.js";
+import { StoreIndex } from "./store-index.js";
 import { BskyClient } from "./bsky-client.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { filterExprSignature } from "../domain/filter.js";
@@ -77,6 +78,7 @@ import type { StoreRef, SyncUpsertPolicy } from "../domain/store.js";
 import {
   DataSource,
   SyncCheckpoint,
+  dataSourceKey,
   SyncError,
   SyncEvent,
   SyncProgress,
@@ -167,7 +169,11 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
       source: DataSource,
       target: StoreRef,
       filter: FilterExpr,
-      options?: { readonly policy?: SyncUpsertPolicy; readonly limit?: number }
+      options?: {
+        readonly policy?: SyncUpsertPolicy;
+        readonly limit?: number;
+        readonly dryRun?: boolean;
+      }
     ) => Effect.Effect<SyncResult, SyncError>;
     readonly watch: (config: WatchConfig) => Stream.Stream<SyncEvent, SyncError>;
   }
@@ -179,6 +185,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
       const parser = yield* PostParser;
       const runtime = yield* FilterRuntime;
       const committer = yield* StoreCommitter;
+      const index = yield* StoreIndex;
       const checkpoints = yield* SyncCheckpointStore;
       const reporter = yield* SyncReporter;
       const settings = yield* SyncSettings;
@@ -191,6 +198,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
           readonly policy?: SyncUpsertPolicy;
           readonly limit?: number;
           readonly concurrency?: number;
+          readonly dryRun?: boolean;
         }
       ): Stream.Stream<SyncResult, SyncError> =>
         Stream.unwrapScoped(
@@ -205,6 +213,24 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
 
               const filterHash = filterExprSignature(filter);
               const policy = options?.policy ?? "dedupe";
+              const dryRun = options?.dryRun ?? false;
+              const totalLimit = options?.limit;
+              const sourceKey = dataSourceKey(source);
+              const seenRef =
+                dryRun && policy === "dedupe"
+                  ? yield* Ref.make(new Set<string>())
+                  : undefined;
+
+              const estimateEtaMs = (processed: number, rate: number) => {
+                if (totalLimit === undefined || rate <= 0) {
+                  return undefined;
+                }
+                const remaining = Math.max(0, totalLimit - processed);
+                if (remaining <= 0) {
+                  return 0;
+                }
+                return Math.round((remaining / rate) * 1000);
+              };
 
               const makeMeta = () =>
                 Clock.currentTimeMillis.pipe(
@@ -268,33 +294,86 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
               const applyPreparedBatch = (
                 preparedBatch: ReadonlyArray<PreparedOutcome>
               ): Effect.Effect<ReadonlyArray<SyncOutcome>, SyncError> =>
-                Effect.gen(function* () {
-                  const storeItems = preparedBatch.filter(
-                    (item): item is Extract<PreparedOutcome, { _tag: "Store" }> =>
-                      Predicate.isTagged(item, "Store")
-                  );
-                  const events = yield* Effect.forEach(storeItems, (item) =>
-                    buildUpsert(item.post)
-                  );
-                  const storedEntries = yield* commitStoreEvents(events);
-                  let storeIndex = 0;
-                  return preparedBatch.map((prepared) =>
-                    Match.type<PreparedOutcome>().pipe(
-                      Match.tagsExhaustive({
-                        Skip: () => skippedOutcome,
-                        Error: (error) => ({ _tag: "Error", error: error.error } as const),
-                        Store: () => {
-                          const entry = storedEntries[storeIndex++] ?? Option.none();
-                          return Option.match(entry, {
-                            onNone: () => skippedOutcome,
-                            onSome: (record) =>
-                              ({ _tag: "Stored", eventSeq: record.seq } as const)
-                          });
+                dryRun
+                  ? Effect.gen(function* () {
+                      const storeItems = preparedBatch.filter(
+                        (item): item is Extract<PreparedOutcome, { _tag: "Store" }> =>
+                          Predicate.isTagged(item, "Store")
+                      );
+                      const events = yield* Effect.forEach(storeItems, (item) =>
+                        buildUpsert(item.post)
+                      );
+                      let storeIndex = 0;
+                      const outcomes: Array<SyncOutcome> = [];
+                      for (const prepared of preparedBatch) {
+                        if (Predicate.isTagged(prepared, "Skip")) {
+                          outcomes.push(skippedOutcome);
+                          continue;
                         }
-                      })
-                    )(prepared)
-                  );
-                });
+                        if (Predicate.isTagged(prepared, "Error")) {
+                          outcomes.push({ _tag: "Error", error: prepared.error } as const);
+                          continue;
+                        }
+                        const event = events[storeIndex++];
+                        if (!event) {
+                          outcomes.push(skippedOutcome);
+                          continue;
+                        }
+                        if (policy === "refresh" || !seenRef) {
+                          outcomes.push({ _tag: "Stored", eventSeq: 0 as EventSeq } as const);
+                          continue;
+                        }
+                        const uri = event.post.uri;
+                        const seen = yield* Ref.get(seenRef);
+                        if (seen.has(uri)) {
+                          outcomes.push(skippedOutcome);
+                          continue;
+                        }
+                        const exists = yield* index
+                          .hasUri(target, uri)
+                          .pipe(
+                            Effect.mapError(
+                              toSyncError("store", "Failed to check existing post")
+                            )
+                          );
+                        if (exists) {
+                          outcomes.push(skippedOutcome);
+                          continue;
+                        }
+                        const next = new Set(seen);
+                        next.add(uri);
+                        yield* Ref.set(seenRef, next);
+                        outcomes.push({ _tag: "Stored", eventSeq: 0 as EventSeq } as const);
+                      }
+                      return outcomes;
+                    })
+                  : Effect.gen(function* () {
+                      const storeItems = preparedBatch.filter(
+                        (item): item is Extract<PreparedOutcome, { _tag: "Store" }> =>
+                          Predicate.isTagged(item, "Store")
+                      );
+                      const events = yield* Effect.forEach(storeItems, (item) =>
+                        buildUpsert(item.post)
+                      );
+                      const storedEntries = yield* commitStoreEvents(events);
+                      let storeIndex = 0;
+                      return preparedBatch.map((prepared) =>
+                        Match.type<PreparedOutcome>().pipe(
+                          Match.tagsExhaustive({
+                            Skip: () => skippedOutcome,
+                            Error: (error) => ({ _tag: "Error", error: error.error } as const),
+                            Store: () => {
+                              const entry = storedEntries[storeIndex++] ?? Option.none();
+                              return Option.match(entry, {
+                                onNone: () => skippedOutcome,
+                                onSome: (record) =>
+                                  ({ _tag: "Stored", eventSeq: record.seq } as const)
+                              });
+                            }
+                          })
+                        )(prepared)
+                      );
+                    });
 
               const previousCheckpoint = yield* checkpoints.load(target, source).pipe(
                 Effect.mapError(toSyncError("store", "Failed to load sync checkpoint"))
@@ -408,6 +487,9 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                 });
 
               const saveCheckpoint = (state: SyncState, now: number) => {
+                if (dryRun) {
+                  return Effect.void;
+                }
                 const lastEventSeq = resolveLastEventSeq(state.lastEventSeq);
                 const shouldSave =
                   Option.isSome(lastEventSeq) ||
@@ -463,14 +545,20 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                   }
                   const elapsedMs = now - startTime;
                   const rate = elapsedMs > 0 ? state.processed / (elapsedMs / 1000) : 0;
+                  const etaMs = estimateEtaMs(state.processed, rate);
                   yield* reporter.report(
                     SyncProgress.make({
                       processed: state.processed,
                       stored: state.stored,
                       skipped: state.skipped,
+                      deleted: 0,
                       errors: state.errors,
                       elapsedMs,
-                      rate
+                      rate,
+                      ...(totalLimit !== undefined ? { total: totalLimit } : {}),
+                      ...(etaMs !== undefined ? { etaMs } : {}),
+                      store: target.name,
+                      source: sourceKey
                     })
                   );
                   yield* Ref.update(stateRef, (current) => ({
@@ -511,7 +599,9 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       Match.tagsExhaustive({
                         Stored: (stored) => {
                           storedDelta += 1;
-                          lastStoredSeq = Option.some(stored.eventSeq);
+                          if (!dryRun) {
+                            lastStoredSeq = Option.some(stored.eventSeq);
+                          }
                         },
                         Skipped: () => {
                           skippedDelta += 1;
@@ -542,14 +632,20 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                     const elapsedMs = now - startTime;
                     const rate =
                       elapsedMs > 0 ? processed / (elapsedMs / 1000) : 0;
+                    const etaMs = estimateEtaMs(processed, rate);
                     yield* reporter.report(
                       SyncProgress.make({
                         processed,
                         stored,
                         skipped,
+                        deleted: 0,
                         errors,
                         elapsedMs,
-                        rate
+                        rate,
+                        ...(totalLimit !== undefined ? { total: totalLimit } : {}),
+                        ...(etaMs !== undefined ? { etaMs } : {}),
+                        store: target.name,
+                        source: sourceKey
                       })
                     );
                   }
@@ -561,8 +657,9 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                         : cursor,
                     state.latestCursor
                   );
-                  const nextLastEventSeq =
-                    Option.isSome(lastStoredSeq)
+                  const nextLastEventSeq = dryRun
+                    ? state.lastEventSeq
+                    : Option.isSome(lastStoredSeq)
                       ? lastStoredSeq
                       : state.lastEventSeq;
 
@@ -583,7 +680,7 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
                       (settings.checkpointIntervalMs > 0 &&
                         now - state.lastCheckpointAt >=
                           settings.checkpointIntervalMs));
-                  if (shouldCheckpoint) {
+                  if (shouldCheckpoint && !dryRun) {
                     yield* saveCheckpoint(nextState, now);
                     const updated = { ...nextState, lastCheckpointAt: now };
                     yield* Ref.set(stateRef, updated);
@@ -612,7 +709,11 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
           source: DataSource,
           target: StoreRef,
           filter: FilterExpr,
-          options?: { readonly policy?: SyncUpsertPolicy; readonly limit?: number }
+          options?: {
+            readonly policy?: SyncUpsertPolicy;
+            readonly limit?: number;
+            readonly dryRun?: boolean;
+          }
         ) =>
           stream(source, target, filter, options).pipe(
             Stream.runFold(SyncResultMonoid.empty, (acc, delta) =>

@@ -24,6 +24,11 @@ export const queryOutputFormats = [
 ] as const;
 export type QueryOutputFormat = typeof queryOutputFormats[number];
 
+const normalizeEnvFormat = (value: string | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed.toLowerCase() : undefined;
+};
+
 export const resolveOutputFormat = <T extends string>(
   format: Option.Option<T>,
   configFormat: OutputFormat,
@@ -32,6 +37,10 @@ export const resolveOutputFormat = <T extends string>(
 ) => {
   if (Option.isSome(format)) {
     return format.value;
+  }
+  const envFormat = normalizeEnvFormat(process.env.SKYGENT_OUTPUT_FORMAT);
+  if (envFormat && supported.includes(envFormat as T)) {
+    return envFormat as T;
   }
   return supported.includes(configFormat as T) ? (configFormat as T) : fallback;
 };

@@ -26,6 +26,8 @@ const validFilterTags = [
   "AltTextRegex",
   "HasVideo",
   "HasLinks",
+  "LinkContains",
+  "LinkRegex",
   "HasMedia",
   "HasEmbed",
   "Language",

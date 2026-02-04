@@ -25,7 +25,20 @@ const formatHuman = (level: LogLevel, payload: Record<string, unknown>) => {
     const rate = Number.isFinite(progress.rate)
       ? progress.rate.toFixed(2)
       : String(progress.rate);
-    return `[PROGRESS] processed=${progress.processed} stored=${progress.stored} skipped=${progress.skipped} errors=${progress.errors} rate=${rate}/s elapsedMs=${progress.elapsedMs}`;
+    const parts = [
+      progress.store ? `store=${progress.store}` : undefined,
+      progress.source ? `source=${progress.source}` : undefined,
+      `processed=${progress.processed}`,
+      `stored=${progress.stored}`,
+      progress.deleted !== undefined ? `deleted=${progress.deleted}` : undefined,
+      `skipped=${progress.skipped}`,
+      `errors=${progress.errors}`,
+      progress.total !== undefined ? `total=${progress.total}` : undefined,
+      progress.etaMs !== undefined ? `etaMs=${progress.etaMs}` : undefined,
+      `rate=${rate}/s`,
+      `elapsedMs=${progress.elapsedMs}`
+    ].filter((part): part is string => Boolean(part));
+    return `[PROGRESS] ${parts.join(" ")}`;
   }
 
   const message =

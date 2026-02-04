@@ -10,11 +10,12 @@ import { SyncEngine } from "../services/sync-engine.js";
 import { SyncSettings } from "../services/sync-settings.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { parseFilterExpr } from "./filter-input.js";
-import { CliOutput, writeJsonStream } from "./output.js";
+import { CliOutput, writeJsonStream, writeText } from "./output.js";
 import { storeOptions } from "./store.js";
 import { logInfo, logWarn, makeSyncReporter } from "./logging.js";
 import { ResourceMonitor } from "../services/resource-monitor.js";
 import { withExamples } from "./help.js";
+import { filterHelpText } from "./filter-help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { CliInputError } from "./errors.js";
 import { makeWatchCommandBody, resolveCacheLimit, resolveCacheMode } from "./sync-factory.js";
@@ -25,9 +26,11 @@ import {
   listUriArg,
   postUriArg,
   actorArg,
+  storeNameArg,
   storeNameOption,
   filterOption,
   filterJsonOption,
+  filterHelpOption,
   postFilterOption,
   postFilterJsonOption,
   authorFilterOption,
@@ -39,7 +42,8 @@ import {
   cacheImagesLimitOption,
   noCacheImagesThumbnailsOption,
   strictOption,
-  maxErrorsOption
+  maxErrorsOption,
+  resolveStoreName
 } from "./shared-options.js";
 import { storeSourceId, type StoreSource } from "../domain/store-sources.js";
 import { StoreSources } from "../services/store-sources.js";
@@ -93,9 +97,11 @@ const listsOnlyOption = Options.boolean("lists-only").pipe(
 const timelineCommand = Command.make(
   "timeline",
   {
+    storeName: storeNameArg,
     store: storeNameOption,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     interval: intervalOption,
     maxCycles: maxCyclesOption,
     until: untilOption,
@@ -106,7 +112,18 @@ const timelineCommand = Command.make(
     cacheImagesLimit: cacheImagesLimitOption,
     noCacheImagesThumbnails: noCacheImagesThumbnailsOption
   },
-  makeWatchCommandBody("timeline", () => DataSource.timeline())
+  ({ store, storeName, filterHelp, ...input }) =>
+    Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
+      const resolvedStore = yield* resolveStoreName(storeName, store);
+      return yield* makeWatchCommandBody("timeline", () => DataSource.timeline())({
+        ...input,
+        store: resolvedStore
+      });
+    })
 ).pipe(
   Command.withDescription(
     withExamples(
@@ -124,9 +141,11 @@ const feedCommand = Command.make(
   "feed",
   {
     uri: feedUriArg,
+    storeName: storeNameArg,
     store: storeNameOption,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     interval: intervalOption,
     maxCycles: maxCyclesOption,
     until: untilOption,
@@ -137,7 +156,18 @@ const feedCommand = Command.make(
     cacheImagesLimit: cacheImagesLimitOption,
     noCacheImagesThumbnails: noCacheImagesThumbnailsOption
   },
-  ({ uri, ...rest }) => makeWatchCommandBody("feed", () => DataSource.feed(uri), { uri })(rest)
+  ({ uri, store, storeName, filterHelp, ...rest }) =>
+    Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
+      const resolvedStore = yield* resolveStoreName(storeName, store);
+      return yield* makeWatchCommandBody("feed", () => DataSource.feed(uri), { uri })({
+        ...rest,
+        store: resolvedStore
+      });
+    })
 ).pipe(
   Command.withDescription(
     withExamples(
@@ -154,9 +184,11 @@ const listCommand = Command.make(
   "list",
   {
     uri: listUriArg,
+    storeName: storeNameArg,
     store: storeNameOption,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     interval: intervalOption,
     maxCycles: maxCyclesOption,
     until: untilOption,
@@ -167,7 +199,18 @@ const listCommand = Command.make(
     cacheImagesLimit: cacheImagesLimitOption,
     noCacheImagesThumbnails: noCacheImagesThumbnailsOption
   },
-  ({ uri, ...rest }) => makeWatchCommandBody("list", () => DataSource.list(uri), { uri })(rest)
+  ({ uri, store, storeName, filterHelp, ...rest }) =>
+    Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
+      const resolvedStore = yield* resolveStoreName(storeName, store);
+      return yield* makeWatchCommandBody("list", () => DataSource.list(uri), { uri })({
+        ...rest,
+        store: resolvedStore
+      });
+    })
 ).pipe(
   Command.withDescription(
     withExamples(
@@ -183,9 +226,11 @@ const listCommand = Command.make(
 const notificationsCommand = Command.make(
   "notifications",
   {
+    storeName: storeNameArg,
     store: storeNameOption,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     interval: intervalOption,
     maxCycles: maxCyclesOption,
     until: untilOption,
@@ -196,7 +241,18 @@ const notificationsCommand = Command.make(
     cacheImagesLimit: cacheImagesLimitOption,
     noCacheImagesThumbnails: noCacheImagesThumbnailsOption
   },
-  makeWatchCommandBody("notifications", () => DataSource.notifications())
+  ({ store, storeName, filterHelp, ...input }) =>
+    Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
+      const resolvedStore = yield* resolveStoreName(storeName, store);
+      return yield* makeWatchCommandBody("notifications", () => DataSource.notifications())({
+        ...input,
+        store: resolvedStore
+      });
+    })
 ).pipe(
   Command.withDescription(
     withExamples(
@@ -211,11 +267,13 @@ const authorCommand = Command.make(
   "author",
   {
     actor: actorArg,
+    storeName: storeNameArg,
     store: storeNameOption,
     filter: authorFilterOption,
     includePins: includePinsOption,
     postFilter: postFilterOption,
     postFilterJson: postFilterJsonOption,
+    filterHelp: filterHelpOption,
     interval: intervalOption,
     maxCycles: maxCyclesOption,
     until: untilOption,
@@ -226,8 +284,13 @@ const authorCommand = Command.make(
     cacheImagesLimit: cacheImagesLimitOption,
     noCacheImagesThumbnails: noCacheImagesThumbnailsOption
   },
-  ({ actor, filter, includePins, postFilter, postFilterJson, interval, maxCycles, until, store, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, noCacheImagesThumbnails }) =>
+  ({ actor, filter, includePins, postFilter, postFilterJson, filterHelp, interval, maxCycles, until, store, storeName, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, noCacheImagesThumbnails }) =>
     Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
+      const resolvedStore = yield* resolveStoreName(storeName, store);
       const apiFilter = Option.getOrUndefined(filter);
       const source = DataSource.author(actor, {
         ...(apiFilter !== undefined ? { filter: apiFilter } : {}),
@@ -239,7 +302,7 @@ const authorCommand = Command.make(
         ...(includePins ? { includePins: true } : {})
       });
       return yield* run({
-        store,
+        store: resolvedStore,
         filter: postFilter,
         filterJson: postFilterJson,
         interval,
@@ -270,11 +333,13 @@ const threadCommand = Command.make(
   "thread",
   {
     uri: postUriArg,
+    storeName: storeNameArg,
     store: storeNameOption,
     depth: depthOption,
     parentHeight: parentHeightOption,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     interval: intervalOption,
     maxCycles: maxCyclesOption,
     until: untilOption,
@@ -285,8 +350,13 @@ const threadCommand = Command.make(
     cacheImagesLimit: cacheImagesLimitOption,
     noCacheImagesThumbnails: noCacheImagesThumbnailsOption
   },
-  ({ uri, depth, parentHeight, filter, filterJson, interval, maxCycles, until, store, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, noCacheImagesThumbnails }) =>
+  ({ uri, depth, parentHeight, filter, filterJson, filterHelp, interval, maxCycles, until, store, storeName, quiet, refresh, cacheImages, cacheImagesMode, cacheImagesLimit, noCacheImagesThumbnails }) =>
     Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
+      const resolvedStore = yield* resolveStoreName(storeName, store);
       const { depth: depthValue, parentHeight: parentHeightValue } =
         parseThreadDepth(depth, parentHeight);
       const source = DataSource.thread(uri, {
@@ -299,7 +369,7 @@ const threadCommand = Command.make(
         ...(parentHeightValue !== undefined ? { parentHeight: parentHeightValue } : {})
       });
       return yield* run({
-        store,
+        store: resolvedStore,
         filter,
         filterJson,
         interval,
@@ -329,9 +399,11 @@ const threadCommand = Command.make(
 const jetstreamCommand = Command.make(
   "jetstream",
   {
+    storeName: storeNameArg,
     store: storeNameOption,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     quiet: quietOption,
     endpoint: jetstreamOptions.endpoint,
     collections: jetstreamOptions.collections,
@@ -350,8 +422,10 @@ const jetstreamCommand = Command.make(
   },
   ({
     store,
+    storeName,
     filter,
     filterJson,
+    filterHelp,
     quiet,
     endpoint,
     collections,
@@ -369,9 +443,14 @@ const jetstreamCommand = Command.make(
     maxErrors
   }) =>
     Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
+      const resolvedStore = yield* resolveStoreName(storeName, store);
       const monitor = yield* ResourceMonitor;
       const output = yield* CliOutput;
-      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const storeRef = yield* storeOptions.loadStoreRef(resolvedStore);
       const expr = yield* parseFilterExpr(filter, filterJson);
       const filterHash = filterExprSignature(expr);
       const selection = yield* buildJetstreamSelection(
@@ -493,6 +572,7 @@ const jetstreamCommand = Command.make(
 const watchStoreCommand = Command.make(
   "watch",
   {
+    storeName: storeNameArg,
     store: storeNameOption,
     authorsOnly: authorsOnlyOption,
     feedsOnly: feedsOnlyOption,
@@ -509,6 +589,7 @@ const watchStoreCommand = Command.make(
   },
   ({
     store,
+    storeName,
     authorsOnly,
     feedsOnly,
     listsOnly,
@@ -528,8 +609,9 @@ const watchStoreCommand = Command.make(
       const output = yield* CliOutput;
       const storeSources = yield* StoreSources;
       const settings = yield* SyncSettings;
-      const storeRef = yield* storeOptions.loadStoreRef(store);
-      const storeConfig = yield* storeOptions.loadStoreConfig(store);
+      const resolvedStore = yield* resolveStoreName(storeName, store);
+      const storeRef = yield* storeOptions.loadStoreRef(resolvedStore);
+      const storeConfig = yield* storeOptions.loadStoreConfig(resolvedStore);
       const warnedJetstreamRef = yield* Ref.make(false);
       const filterJetstreamSources = (sources: ReadonlyArray<StoreSource>) =>
         Effect.gen(function* () {

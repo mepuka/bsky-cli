@@ -2,16 +2,17 @@ import { Args, Command, Options } from "@effect/cli";
 import { Cause, Chunk, Clock, Duration, Effect, Option, Schema } from "effect";
 import { StoreManager } from "../services/store-manager.js";
 import { AppConfigService } from "../services/app-config.js";
-import { Terminal } from "@effect/platform";
-import { StoreNotFound } from "../domain/errors.js";
-import { ActorId, AtUri, Did, Handle, StoreName, Timestamp } from "../domain/primitives.js";
+import { FileSystem, Path, Terminal } from "@effect/platform";
+import { StoreAlreadyExists, StoreNotFound } from "../domain/errors.js";
+import { ActorId, AtUri, Did, Handle, StoreName, StorePath, Timestamp } from "../domain/primitives.js";
 import {
   AuthorSource,
   FeedSource,
   JetstreamSource,
   ListSource,
   TimelineSource,
-  storeSourceId
+  storeSourceId,
+  type StoreSource
 } from "../domain/store-sources.js";
 import { EventMeta, PostDelete } from "../domain/events.js";
 import { StoreConfig, StoreMetadata, StoreRef } from "../domain/store.js";
@@ -25,6 +26,7 @@ import { CliInputError } from "./errors.js";
 import { OutputManager } from "../services/output-manager.js";
 import { formatStoreConfigHelp, formatStoreConfigParseError } from "./store-errors.js";
 import { formatFilterExpr } from "../domain/filter-describe.js";
+import { filterHelpText } from "./filter-help.js";
 import { CliPreferences } from "./preferences.js";
 import { StoreStats } from "../services/store-stats.js";
 import { StoreAnalytics } from "../services/store-analytics.js";
@@ -40,6 +42,8 @@ import { BskyClient } from "../services/bsky-client.js";
 import { messageFromCause } from "../services/shared.js";
 import {
   authorFeedFilterValues,
+  dryRunOption,
+  filterHelpOption,
   filterJsonOption as sourceFilterJsonOption,
   postFilterJsonOption as sourcePostFilterJsonOption,
   postFilterOption as sourcePostFilterOption
@@ -203,10 +207,142 @@ const pruneAuthorPosts = (storeRef: StoreRef, handle: Handle, command: string) =
     return uris.length;
   });
 
+const countAuthorPosts = (storeRef: StoreRef, handle: Handle) =>
+  Effect.gen(function* () {
+    const index = yield* StoreIndex;
+    const uris = yield* index.getByAuthor(storeRef, handle);
+    return uris.length;
+  });
+
+type SourceAction = "created" | "updated" | "unchanged";
+
+const mergeStoreSource = (
+  existing: StoreSource | undefined,
+  incoming: StoreSource
+): StoreSource => {
+  if (!existing || existing._tag !== incoming._tag) {
+    return incoming;
+  }
+  switch (incoming._tag) {
+    case "AuthorSource": {
+      const previous = existing as AuthorSource;
+      return AuthorSource.make({
+        actor: incoming.actor,
+        display: incoming.display ?? previous.display,
+        filter: incoming.filter ?? previous.filter,
+        postFilter: incoming.postFilter ?? previous.postFilter,
+        postFilterJson: incoming.postFilterJson ?? previous.postFilterJson,
+        addedAt: previous.addedAt,
+        lastSyncedAt: previous.lastSyncedAt,
+        enabled: previous.enabled
+      });
+    }
+    case "FeedSource": {
+      const previous = existing as FeedSource;
+      return FeedSource.make({
+        uri: incoming.uri,
+        filter: incoming.filter ?? previous.filter,
+        filterJson: incoming.filterJson ?? previous.filterJson,
+        addedAt: previous.addedAt,
+        lastSyncedAt: previous.lastSyncedAt,
+        enabled: previous.enabled
+      });
+    }
+    case "ListSource": {
+      const previous = existing as ListSource;
+      return ListSource.make({
+        uri: incoming.uri,
+        expandMembers: incoming.expandMembers,
+        filter: incoming.filter ?? previous.filter,
+        filterJson: incoming.filterJson ?? previous.filterJson,
+        addedAt: previous.addedAt,
+        lastSyncedAt: previous.lastSyncedAt,
+        enabled: previous.enabled
+      });
+    }
+    case "TimelineSource": {
+      const previous = existing as TimelineSource;
+      return TimelineSource.make({
+        addedAt: previous.addedAt,
+        lastSyncedAt: previous.lastSyncedAt,
+        enabled: previous.enabled
+      });
+    }
+    case "JetstreamSource": {
+      const previous = existing as JetstreamSource;
+      return JetstreamSource.make({
+        addedAt: previous.addedAt,
+        lastSyncedAt: previous.lastSyncedAt,
+        enabled: previous.enabled
+      });
+    }
+  }
+};
+
+const storeSourceEquals = (left: StoreSource, right: StoreSource): boolean => {
+  if (left._tag !== right._tag) {
+    return false;
+  }
+  switch (left._tag) {
+    case "AuthorSource": {
+      const other = right as AuthorSource;
+      return (
+        left.actor === other.actor &&
+        left.display === other.display &&
+        left.filter === other.filter &&
+        left.postFilter === other.postFilter &&
+        left.postFilterJson === other.postFilterJson &&
+        left.addedAt === other.addedAt &&
+        left.lastSyncedAt === other.lastSyncedAt &&
+        left.enabled === other.enabled
+      );
+    }
+    case "FeedSource": {
+      const other = right as FeedSource;
+      return (
+        left.uri === other.uri &&
+        left.filter === other.filter &&
+        left.filterJson === other.filterJson &&
+        left.addedAt === other.addedAt &&
+        left.lastSyncedAt === other.lastSyncedAt &&
+        left.enabled === other.enabled
+      );
+    }
+    case "ListSource": {
+      const other = right as ListSource;
+      return (
+        left.uri === other.uri &&
+        left.expandMembers === other.expandMembers &&
+        left.filter === other.filter &&
+        left.filterJson === other.filterJson &&
+        left.addedAt === other.addedAt &&
+        left.lastSyncedAt === other.lastSyncedAt &&
+        left.enabled === other.enabled
+      );
+    }
+    case "TimelineSource": {
+      const other = right as TimelineSource;
+      return (
+        left.addedAt === other.addedAt &&
+        left.lastSyncedAt === other.lastSyncedAt &&
+        left.enabled === other.enabled
+      );
+    }
+    case "JetstreamSource": {
+      const other = right as JetstreamSource;
+      return (
+        left.addedAt === other.addedAt &&
+        left.lastSyncedAt === other.lastSyncedAt &&
+        left.enabled === other.enabled
+      );
+    }
+  }
+};
+
 const sourceAuthorOption = Options.text("author").pipe(
-  Options.withSchema(ActorId),
-  Options.withDescription("Author handle or DID"),
-  Options.optional
+  Options.repeated,
+  Options.withSchema(Schema.mutable(Schema.Array(ActorId))),
+  Options.withDescription("Author handle or DID (repeatable)")
 );
 const sourceFeedOption = Options.text("feed").pipe(
   Options.withSchema(AtUri),
@@ -240,6 +376,12 @@ const configJsonOption = Options.text("config-json").pipe(
   ),
   Options.optional
 );
+const descriptionOption = Options.text("description").pipe(
+  Options.withDescription("Store description (max 500 chars, empty clears)"),
+  Options.optional
+);
+
+const maxDescriptionLength = 500;
 
 const parseConfig = (configJson: Option.Option<string>) =>
   Option.match(configJson, {
@@ -248,6 +390,18 @@ const parseConfig = (configJson: Option.Option<string>) =>
       decodeJson(StoreConfig, raw, {
         formatter: formatStoreConfigParseError
       })
+  });
+
+const parseDescription = (raw: string) =>
+  Effect.gen(function* () {
+    const trimmed = raw.trim();
+    if (trimmed.length > maxDescriptionLength) {
+      return yield* CliInputError.make({
+        message: `Description must be ${maxDescriptionLength} characters or fewer.`,
+        cause: { length: trimmed.length, max: maxDescriptionLength }
+      });
+    }
+    return trimmed;
   });
 
 const loadStoreRef = (name: StoreName) =>
@@ -304,22 +458,22 @@ const compactLineage = (store: StoreRef, lineage: StoreLineage | undefined) => {
 };
 
 type SourceSelection =
-  | { _tag: "author"; actor: ActorId }
+  | { _tag: "author"; actors: ReadonlyArray<ActorId> }
   | { _tag: "feed"; uri: AtUri }
   | { _tag: "list"; uri: AtUri }
   | { _tag: "timeline" }
   | { _tag: "jetstream" };
 
 const selectSource = (
-  author: Option.Option<ActorId>,
+  authors: ReadonlyArray<ActorId>,
   feed: Option.Option<AtUri>,
   list: Option.Option<AtUri>,
   timeline: boolean,
   jetstream: boolean
 ) => {
   const selected: Array<SourceSelection> = [];
-  if (Option.isSome(author)) {
-    selected.push({ _tag: "author", actor: author.value });
+  if (authors.length > 0) {
+    selected.push({ _tag: "author", actors: authors });
   }
   if (Option.isSome(feed)) {
     selected.push({ _tag: "feed", uri: feed.value });
@@ -335,7 +489,7 @@ const selectSource = (
   }
 
   const selectionSummary = {
-    author: Option.isSome(author),
+    authors: authors.length,
     feed: Option.isSome(feed),
     list: Option.isSome(list),
     timeline,
@@ -411,19 +565,49 @@ const bucketUnitForRange = (start: Date, end: Date): "hour" | "day" => {
 
 export const storeCreate = Command.make(
   "create",
-  { name: storeNameArg, config: configJsonOption },
-  ({ name, config }) =>
+  { name: storeNameArg, config: configJsonOption, description: descriptionOption, dryRun: dryRunOption },
+  ({ name, config, description, dryRun }) =>
     Effect.gen(function* () {
       const manager = yield* StoreManager;
       const parsed = yield* parseConfig(config);
-      const store = yield* manager.createStore(name, parsed);
-      yield* writeJson(store);
+      const existing = yield* manager.getMetadata(name);
+      if (Option.isSome(existing)) {
+        yield* writeJson({
+          ...existing.value,
+          action: "unchanged",
+          ...(dryRun ? { dryRun: true } : {})
+        });
+        return;
+      }
+      const descriptionValue = Option.isSome(description)
+        ? yield* parseDescription(description.value)
+        : undefined;
+      const normalizedDescription =
+        descriptionValue && descriptionValue.length > 0 ? descriptionValue : undefined;
+      if (dryRun) {
+        const root = yield* Schema.decodeUnknown(StorePath)(`stores/${name}`);
+        const store = StoreRef.make({ name, root });
+        yield* writeJson({
+          ...store,
+          ...(normalizedDescription ? { description: normalizedDescription } : {}),
+          action: "created",
+          dryRun: true
+        });
+        return;
+      }
+      const store = yield* manager.createStore(name, parsed, normalizedDescription);
+      yield* writeJson({
+        ...store,
+        ...(normalizedDescription ? { description: normalizedDescription } : {}),
+        action: "created"
+      });
     })
 ).pipe(
   Command.withDescription(
     withExamples("Create or load a store", [
       "skygent store create my-store",
-      "skygent store create my-store --config-json '{\"filters\":[]}'"
+      "skygent store create my-store --config-json '{\"filters\":[]}'",
+      "skygent store create my-store --description \"AI/ML posts\""
     ])
   )
 );
@@ -457,13 +641,18 @@ export const storeShow = Command.make(
       const manager = yield* StoreManager;
       const lineageStore = yield* LineageStore;
       const preferences = yield* CliPreferences;
-      const store = yield* loadStoreRef(name);
+      const metadataOption = yield* manager.getMetadata(name);
+      const store = yield* Option.match(metadataOption, {
+        onNone: () => Effect.fail(StoreNotFound.make({ name })),
+        onSome: Effect.succeed
+      });
+      const storeRef = StoreRef.make({ name: store.name, root: store.root });
       const config = yield* manager.getConfig(name);
       const lineageOption = yield* lineageStore.get(name);
 
       if (preferences.compact) {
         const lineage = Option.getOrUndefined(lineageOption);
-        yield* writeJson(compactLineage(store, lineage));
+        yield* writeJson(compactLineage(storeRef, lineage));
         return;
       }
 
@@ -484,6 +673,59 @@ export const storeShow = Command.make(
     withExamples("Show store config and metadata", [
       "skygent store show my-store",
       "skygent store show my-store --compact"
+    ])
+  )
+);
+
+export const storeUpdate = Command.make(
+  "update",
+  { name: storeNameArg, description: descriptionOption, dryRun: dryRunOption },
+  ({ name, description, dryRun }) =>
+    Effect.gen(function* () {
+      const manager = yield* StoreManager;
+      if (Option.isNone(description)) {
+        return yield* CliInputError.make({
+          message: "Store update requires --description.",
+          cause: { name }
+        });
+      }
+      const nextValue = yield* parseDescription(description.value);
+      const nextDescription = nextValue.length === 0 ? null : nextValue;
+      const existingOption = yield* manager.getMetadata(name);
+      if (Option.isNone(existingOption)) {
+        return yield* StoreNotFound.make({ name });
+      }
+      const existing = existingOption.value;
+      const currentDescription = existing.description ?? null;
+      const action = currentDescription === nextDescription ? "unchanged" : "updated";
+
+      if (action === "unchanged") {
+        yield* writeJson({
+          ...existing,
+          action,
+          ...(dryRun ? { dryRun: true } : {})
+        });
+        return;
+      }
+
+      if (dryRun) {
+        yield* writeJson({
+          ...existing,
+          ...(nextDescription ? { description: nextDescription } : {}),
+          action,
+          dryRun: true
+        });
+        return;
+      }
+
+      const updated = yield* manager.updateDescription(name, nextDescription);
+      yield* writeJson({ ...updated, action });
+    })
+).pipe(
+  Command.withDescription(
+    withExamples("Update store metadata", [
+      "skygent store update my-store --description \"AI/ML posts\"",
+      "skygent store update my-store --description \"\""
     ])
   )
 );
@@ -529,17 +771,45 @@ export const storeAddSource = Command.make(
     jetstream: sourceJetstreamOption,
     filter: sourceFilterOption,
     filterJson: sourceFilterJsonOption,
+    filterHelp: filterHelpOption,
     postFilter: sourcePostFilterOption,
     postFilterJson: sourcePostFilterJsonOption,
-    expandMembers: sourceExpandMembersOption
+    expandMembers: sourceExpandMembersOption,
+    dryRun: dryRunOption
   },
-  ({ name, author, feed, list, timeline, jetstream, filter, filterJson, postFilter, postFilterJson, expandMembers }) =>
+  ({ name, author, feed, list, timeline, jetstream, filter, filterJson, filterHelp, postFilter, postFilterJson, expandMembers, dryRun }) =>
     Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
       const storeRef = yield* loadStoreRef(name);
       const storeSources = yield* StoreSources;
       const selection = yield* selectSource(author, feed, list, timeline, jetstream);
       const hasFilter = Option.isSome(filter) || Option.isSome(filterJson);
       const hasPostFilter = Option.isSome(postFilter) || Option.isSome(postFilterJson);
+      const applySource = (source: StoreSource, warning?: string) =>
+        Effect.gen(function* () {
+          const id = storeSourceId(source);
+          const existingOption = yield* storeSources.get(storeRef, id);
+          const existing = Option.getOrUndefined(existingOption);
+          const merged = mergeStoreSource(existing, source);
+          const action: SourceAction = existing
+            ? storeSourceEquals(existing, merged)
+              ? "unchanged"
+              : "updated"
+            : "created";
+          const stored =
+            !dryRun && action !== "unchanged"
+              ? yield* storeSources.add(storeRef, merged)
+              : merged;
+          return {
+            id: storeSourceId(stored),
+            source: stored,
+            action,
+            ...(warning ? { warning } : {})
+          };
+        });
 
       if (selection._tag !== "list" && expandMembers) {
         return yield* CliInputError.make({
@@ -598,36 +868,63 @@ export const storeAddSource = Command.make(
           yield* validateDslFilters(postFilter, postFilterJson);
 
           const identities = yield* IdentityResolver;
-          const actorInput = selection.actor;
-          const resolved = actorInput.startsWith("did:")
-            ? {
-                did: yield* Schema.decodeUnknown(Did)(actorInput).pipe(Effect.orDie),
-                handle: undefined
-              }
-            : yield* identities.resolveIdentity(actorInput).pipe(
-                Effect.mapError((error) =>
-                  CliInputError.make({
-                    message: `Failed to resolve author: ${error.message}`,
-                    cause: error
-                  })
+          const resolveActor = (actorInput: ActorId) =>
+            actorInput.startsWith("did:")
+              ? Schema.decodeUnknown(Did)(actorInput).pipe(
+                  Effect.orDie,
+                  Effect.map((did) => ({ did, handle: undefined as Handle | undefined }))
                 )
-              );
+              : identities.resolveIdentity(actorInput).pipe(
+                Effect.map((info) => ({ did: info.did, handle: info.handle })),
+                  Effect.mapError((error) =>
+                    CliInputError.make({
+                      message: `Failed to resolve author: ${error.message}`,
+                      cause: error
+                    })
+                  )
+                );
 
-          const source = AuthorSource.make({
-            actor: resolved.did,
-            ...(resolved.handle ? { display: resolved.handle } : {}),
-            ...(authorFilter !== undefined ? { filter: authorFilter } : {}),
-            ...(Option.isSome(postFilter) ? { postFilter: postFilter.value } : {}),
-            ...(Option.isSome(postFilterJson) ? { postFilterJson: postFilterJson.value } : {}),
-            addedAt,
-            enabled: true
-          });
+          const resolved = yield* Effect.forEach(
+            selection.actors,
+            resolveActor,
+            { concurrency: "unbounded" }
+          );
+          const uniqueByDid = new Map<string, (typeof resolved)[number]>();
+          for (const entry of resolved) {
+            uniqueByDid.set(String(entry.did), entry);
+          }
+          const sources = Array.from(uniqueByDid.values()).map((entry) =>
+            AuthorSource.make({
+              actor: entry.did,
+              ...(entry.handle ? { display: entry.handle } : {}),
+              ...(authorFilter !== undefined ? { filter: authorFilter } : {}),
+              ...(Option.isSome(postFilter) ? { postFilter: postFilter.value } : {}),
+              ...(Option.isSome(postFilterJson) ? { postFilterJson: postFilterJson.value } : {}),
+              addedAt,
+              enabled: true
+            })
+          );
 
-          const stored = yield* storeSources.add(storeRef, source);
+          const results = yield* Effect.forEach(
+            sources,
+            (source) => applySource(source),
+            { concurrency: "unbounded" }
+          );
+
+          if (results.length === 1) {
+            const entry = results[0]!;
+            yield* writeJson({
+              store: storeRef.name,
+              ...entry,
+              ...(dryRun ? { dryRun: true } : {})
+            });
+            return;
+          }
+
           yield* writeJson({
             store: storeRef.name,
-            id: storeSourceId(stored),
-            source: stored
+            added: results,
+            ...(dryRun ? { dryRun: true } : {})
           });
           return;
         }
@@ -655,12 +952,14 @@ export const storeAddSource = Command.make(
             enabled: true
           });
 
-          const stored = yield* storeSources.add(storeRef, source);
+          const result = yield* applySource(
+            source,
+            Option.isSome(warning) ? warning.value : undefined
+          );
           yield* writeJson({
             store: storeRef.name,
-            id: storeSourceId(stored),
-            source: stored,
-            ...(Option.isSome(warning) ? { warning: warning.value } : {})
+            ...result,
+            ...(dryRun ? { dryRun: true } : {})
           });
           return;
         }
@@ -682,12 +981,14 @@ export const storeAddSource = Command.make(
             enabled: true
           });
 
-          const stored = yield* storeSources.add(storeRef, source);
+          const result = yield* applySource(
+            source,
+            Option.isSome(warning) ? warning.value : undefined
+          );
           yield* writeJson({
             store: storeRef.name,
-            id: storeSourceId(stored),
-            source: stored,
-            ...(Option.isSome(warning) ? { warning: warning.value } : {})
+            ...result,
+            ...(dryRun ? { dryRun: true } : {})
           });
           return;
         }
@@ -696,11 +997,11 @@ export const storeAddSource = Command.make(
             addedAt,
             enabled: true
           });
-          const stored = yield* storeSources.add(storeRef, source);
+          const result = yield* applySource(source);
           yield* writeJson({
             store: storeRef.name,
-            id: storeSourceId(stored),
-            source: stored
+            ...result,
+            ...(dryRun ? { dryRun: true } : {})
           });
           return;
         }
@@ -709,11 +1010,11 @@ export const storeAddSource = Command.make(
             addedAt,
             enabled: true
           });
-          const stored = yield* storeSources.add(storeRef, source);
+          const result = yield* applySource(source);
           yield* writeJson({
             store: storeRef.name,
-            id: storeSourceId(stored),
-            source: stored
+            ...result,
+            ...(dryRun ? { dryRun: true } : {})
           });
           return;
         }
@@ -723,6 +1024,7 @@ export const storeAddSource = Command.make(
   Command.withDescription(
     withExamples("Add a source to a store", [
       "skygent store add-source my-store --author alice.bsky.social",
+      "skygent store add-source my-store --author alice.bsky.social --author bob.bsky.social",
       "skygent store add-source my-store --feed at://did:plc:example/app.bsky.feed.generator/xyz",
       "skygent store add-source my-store --list at://did:plc:example/app.bsky.graph.list/abc",
       "skygent store add-source my-store --timeline"
@@ -732,8 +1034,8 @@ export const storeAddSource = Command.make(
 
 export const storeRemoveSource = Command.make(
   "remove-source",
-  { name: storeNameArg, id: storeSourceIdArg, prune: pruneSourceOption },
-  ({ name, id, prune }) =>
+  { name: storeNameArg, id: storeSourceIdArg, prune: pruneSourceOption, dryRun: dryRunOption },
+  ({ name, id, prune, dryRun }) =>
     Effect.gen(function* () {
       const storeRef = yield* loadStoreRef(name);
       const sources = yield* StoreSources;
@@ -754,17 +1056,23 @@ export const storeRemoveSource = Command.make(
           });
         }
         const handle = source.display ?? (yield* resolveAuthorHandle(source.actor));
-        pruned = yield* pruneAuthorPosts(
-          storeRef,
-          handle,
-          "store remove-source --prune"
-        );
+        pruned = dryRun
+          ? yield* countAuthorPosts(storeRef, handle)
+          : yield* pruneAuthorPosts(
+              storeRef,
+              handle,
+              "store remove-source --prune"
+            );
       }
-      yield* sources.remove(storeRef, id);
+      if (!dryRun) {
+        yield* sources.remove(storeRef, id);
+      }
       yield* writeJson({
         store: storeRef.name,
         removed: id,
-        ...(prune ? { pruned } : {})
+        ...(prune ? { pruned } : {}),
+        action: "deleted",
+        ...(dryRun ? { dryRun: true } : {})
       });
     })
 ).pipe(
@@ -809,11 +1117,11 @@ export const storeAuthors = Command.make(
 
 export const storeRemoveAuthor = Command.make(
   "remove-author",
-  { name: storeNameArg, actor: actorArg, yes: confirmYesOption },
-  ({ name, actor, yes }) =>
+  { name: storeNameArg, actor: actorArg, yes: confirmYesOption, dryRun: dryRunOption },
+  ({ name, actor, yes, dryRun }) =>
     Effect.gen(function* () {
       const storeRef = yield* loadStoreRef(name);
-      if (!yes) {
+      if (!yes && !dryRun) {
         const terminal = yield* Terminal.Terminal;
         const isTTY = yield* terminal.isTTY.pipe(Effect.orElseSucceed(() => false));
         if (!isTTY) {
@@ -831,14 +1139,27 @@ export const storeRemoveAuthor = Command.make(
         const normalized = response.trim().toLowerCase();
         const confirmed = normalized === "y" || normalized === "yes";
         if (!confirmed) {
-          yield* writeJson({ store: storeRef.name, removed: 0, cancelled: true });
+          yield* writeJson({
+            store: storeRef.name,
+            removed: 0,
+            cancelled: true,
+            action: "unchanged"
+          });
           return;
         }
       }
 
       const handle = yield* resolveAuthorHandle(actor);
-      const removed = yield* pruneAuthorPosts(storeRef, handle, "store remove-author");
-      yield* writeJson({ store: storeRef.name, author: handle, removed });
+      const removed = dryRun
+        ? yield* countAuthorPosts(storeRef, handle)
+        : yield* pruneAuthorPosts(storeRef, handle, "store remove-author");
+      yield* writeJson({
+        store: storeRef.name,
+        author: handle,
+        removed,
+        action: "deleted",
+        ...(dryRun ? { dryRun: true } : {})
+      });
     })
 ).pipe(
   Command.withDescription(
@@ -851,10 +1172,10 @@ export const storeRemoveAuthor = Command.make(
 
 export const storeDelete = Command.make(
   "delete",
-  { name: storeNameArg, force: forceOption },
-  ({ name, force }) =>
+  { name: storeNameArg, force: forceOption, dryRun: dryRunOption },
+  ({ name, force, dryRun }) =>
     Effect.gen(function* () {
-      if (!force) {
+      if (!force && !dryRun) {
         const terminal = yield* Terminal.Terminal;
         const isTTY = yield* terminal.isTTY.pipe(Effect.orElseSucceed(() => false));
         if (!isTTY) {
@@ -873,9 +1194,28 @@ export const storeDelete = Command.make(
         const normalized = response.trim().toLowerCase();
         const confirmed = normalized === "y" || normalized === "yes";
         if (!confirmed) {
-          yield* writeJson({ deleted: false, reason: "cancelled" });
+          yield* writeJson({ deleted: false, reason: "cancelled", action: "unchanged" });
           return;
         }
+      }
+      if (dryRun) {
+        const manager = yield* StoreManager;
+        const existing = yield* manager.getStore(name);
+        if (Option.isNone(existing)) {
+          yield* writeJson({
+            deleted: false,
+            reason: "missing",
+            action: "unchanged",
+            dryRun: true
+          });
+          return;
+        }
+        yield* writeJson({
+          deleted: true,
+          action: "deleted",
+          dryRun: true
+        });
+        return;
       }
       const cleaner = yield* StoreCleaner;
       const result = yield* cleaner.deleteStore(name).pipe(
@@ -893,7 +1233,7 @@ export const storeDelete = Command.make(
       );
       if (!result.deleted) {
         if (result.reason === "missing") {
-          yield* writeJson(result);
+          yield* writeJson({ ...result, action: "unchanged" });
           return;
         }
         return yield* CliInputError.make({
@@ -901,7 +1241,7 @@ export const storeDelete = Command.make(
           cause: result
         });
       }
-      yield* writeJson(result);
+      yield* writeJson({ ...result, action: "deleted" });
     })
 ).pipe(
   Command.withDescription(
@@ -913,8 +1253,8 @@ export const storeDelete = Command.make(
 
 export const storeRename = Command.make(
   "rename",
-  { from: storeRenameFromArg, to: storeRenameToArg },
-  ({ from, to }) =>
+  { from: storeRenameFromArg, to: storeRenameToArg, dryRun: dryRunOption },
+  ({ from, to, dryRun }) =>
     Effect.gen(function* () {
       if (from === to) {
         return yield* CliInputError.make({
@@ -922,9 +1262,38 @@ export const storeRename = Command.make(
           cause: { from, to }
         });
       }
+      if (dryRun) {
+        const manager = yield* StoreManager;
+        const fromStore = yield* manager.getStore(from);
+        if (Option.isNone(fromStore)) {
+          return yield* StoreNotFound.make({ name: from });
+        }
+        const toStore = yield* manager.getStore(to);
+        if (Option.isSome(toStore)) {
+          return yield* StoreAlreadyExists.make({ name: to });
+        }
+        const appConfig = yield* AppConfigService;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fromPath = path.join(appConfig.storeRoot, fromStore.value.root);
+        const fromExists = yield* fs
+          .exists(fromPath)
+          .pipe(Effect.orElseSucceed(() => false));
+        yield* writeJson({
+          from,
+          to,
+          moved: true,
+          movedOnDisk: fromExists,
+          lineagesUpdated: 0,
+          checkpointsUpdated: 0,
+          action: "updated",
+          dryRun: true
+        });
+        return;
+      }
       const renamer = yield* StoreRenamer;
       const result = yield* renamer.rename(from, to);
-      yield* writeJson(result);
+      yield* writeJson({ ...result, action: "updated" });
     })
 ).pipe(
   Command.withDescription(
@@ -1205,6 +1574,7 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeCreate,
     storeList,
     storeShow,
+    storeUpdate,
     storeSources,
     storeAddSource,
     storeRemoveSource,

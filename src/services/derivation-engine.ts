@@ -111,6 +111,11 @@ export interface DerivationOptions {
    * Use this when changing filters or recovering from inconsistent state.
    */
   readonly reset: boolean;
+
+  /**
+   * When true, perform a dry-run without writing to the target store.
+   */
+  readonly dryRun?: boolean;
 }
 
 /**
@@ -229,6 +234,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
               });
             }
 
+            const dryRun = options.dryRun ?? false;
             const startTimeMillis = yield* Clock.currentTimeMillis;
 
             // Filter compilation
@@ -241,7 +247,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             const predicate = yield* runtime.evaluate(filterExpr);
 
             // Reset logic: clear target store + checkpoint if requested
-            if (options.reset) {
+            if (options.reset && !dryRun) {
               yield* index.clear(targetRef);
               yield* eventLog.clear(targetRef);
               yield* checkpoints.remove(targetRef.name, sourceRef.name);
@@ -296,23 +302,25 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             };
 
             const saveCheckpointFromState = (state: DerivationState, now: number) =>
-              Schema.decodeUnknown(Timestamp)(new Date(now).toISOString()).pipe(
-                Effect.flatMap((timestamp) => {
-                  const checkpoint = DerivationCheckpoint.make({
-                    viewName: targetRef.name,
-                    sourceStore: sourceRef.name,
-                    targetStore: targetRef.name,
-                    filterHash,
-                    evaluationMode: options.mode,
-                    lastSourceEventSeq: Option.getOrUndefined(state.lastSourceSeq),
-                    eventsProcessed: state.processed,
-                    eventsMatched: state.matched,
-                    deletesPropagated: state.deletes,
-                    updatedAt: timestamp
-                  });
-                  return checkpoints.save(checkpoint);
-                })
-              );
+              dryRun
+                ? Effect.void
+                : Schema.decodeUnknown(Timestamp)(new Date(now).toISOString()).pipe(
+                    Effect.flatMap((timestamp) => {
+                      const checkpoint = DerivationCheckpoint.make({
+                        viewName: targetRef.name,
+                        sourceStore: sourceRef.name,
+                        targetStore: targetRef.name,
+                        filterHash,
+                        evaluationMode: options.mode,
+                        lastSourceEventSeq: Option.getOrUndefined(state.lastSourceSeq),
+                        eventsProcessed: state.processed,
+                        eventsMatched: state.matched,
+                        deletesPropagated: state.deletes,
+                        updatedAt: timestamp
+                      });
+                      return checkpoints.save(checkpoint);
+                    })
+                  );
 
             const shouldCheckpoint = (state: DerivationState, now: number) =>
               state.processed > 0 &&
@@ -330,6 +338,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             };
 
             const stateRef = yield* Ref.make(initialState);
+            const seenRef = dryRun ? yield* Ref.make(new Set<string>()) : undefined;
 
             const finalizeState = (nextState: DerivationState) =>
               Effect.gen(function* () {
@@ -360,12 +369,14 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
 
                 // PostDelete: propagate ALL unfiltered
                 if (isPostDelete(event)) {
-                  const derivedMeta = EventMeta.make({
-                    ...event.meta,
-                    sourceStore: sourceRef.name
-                  });
-                  const derivedEvent = PostDelete.make({ ...event, meta: derivedMeta });
-                  yield* committer.appendDelete(targetRef, derivedEvent);
+                  if (!dryRun) {
+                    const derivedMeta = EventMeta.make({
+                      ...event.meta,
+                      sourceStore: sourceRef.name
+                    });
+                    const derivedEvent = PostDelete.make({ ...event, meta: derivedMeta });
+                    yield* committer.appendDelete(targetRef, derivedEvent);
+                  }
                   return yield* finalizeState({
                     ...baseState,
                     deletes: baseState.deletes + 1
@@ -373,18 +384,40 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
                 }
 
                 // URI deduplication: check if post already exists
-                const exists = yield* index.hasUri(targetRef, event.post.uri);
+                const uri = event.post.uri;
+                const exists = yield* index.hasUri(targetRef, uri);
                 if (exists) {
                   return yield* finalizeState({
                     ...baseState,
                     skipped: baseState.skipped + 1
                   });
                 }
+                if (dryRun && seenRef) {
+                  const seen = yield* Ref.get(seenRef);
+                  if (seen.has(uri)) {
+                    return yield* finalizeState({
+                      ...baseState,
+                      skipped: baseState.skipped + 1
+                    });
+                  }
+                }
 
                 // Filter evaluation: failures propagate to caller
                 const matches = yield* predicate(event.post);
 
                 if (matches) {
+                  if (dryRun) {
+                    if (seenRef) {
+                      const seen = yield* Ref.get(seenRef);
+                      const next = new Set(seen);
+                      next.add(uri);
+                      yield* Ref.set(seenRef, next);
+                    }
+                    return yield* finalizeState({
+                      ...baseState,
+                      matched: baseState.matched + 1
+                    });
+                  }
                   const derivedMeta = EventMeta.make({
                     ...event.meta,
                     sourceStore: sourceRef.name
@@ -454,36 +487,38 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             const lastSourceSeqOption = Option.isSome(result.lastSourceSeq)
               ? result.lastSourceSeq
               : yield* eventLog.getLastEventSeq(sourceRef);
-            const checkpoint = DerivationCheckpoint.make({
-              viewName: targetRef.name,
-              sourceStore: sourceRef.name,
-              targetStore: targetRef.name,
-              filterHash,
-              evaluationMode: options.mode,
-              lastSourceEventSeq: Option.getOrUndefined(lastSourceSeqOption),
-              eventsProcessed: result.processed,
-              eventsMatched: result.matched,
-              deletesPropagated: result.deletes,
-              updatedAt: timestamp
-            });
-            yield* checkpoints.save(checkpoint);
+            if (!dryRun) {
+              const checkpoint = DerivationCheckpoint.make({
+                viewName: targetRef.name,
+                sourceStore: sourceRef.name,
+                targetStore: targetRef.name,
+                filterHash,
+                evaluationMode: options.mode,
+                lastSourceEventSeq: Option.getOrUndefined(lastSourceSeqOption),
+                eventsProcessed: result.processed,
+                eventsMatched: result.matched,
+                deletesPropagated: result.deletes,
+                updatedAt: timestamp
+              });
+              yield* checkpoints.save(checkpoint);
 
-            // Lineage saving: record derivation metadata
-            const lineage = StoreLineage.make({
-              storeName: targetRef.name,
-              isDerived: true,
-              sources: [
-                StoreSource.make({
-                  storeName: sourceRef.name,
-                  filter: filterExpr,
-                  filterHash,
-                  evaluationMode: options.mode,
-                  derivedAt: timestamp
-                })
-              ],
-              updatedAt: timestamp
-            });
-            yield* lineageStore.save(lineage);
+              // Lineage saving: record derivation metadata
+              const lineage = StoreLineage.make({
+                storeName: targetRef.name,
+                isDerived: true,
+                sources: [
+                  StoreSource.make({
+                    storeName: sourceRef.name,
+                    filter: filterExpr,
+                    filterHash,
+                    evaluationMode: options.mode,
+                    derivedAt: timestamp
+                  })
+                ],
+                updatedAt: timestamp
+              });
+              yield* lineageStore.save(lineage);
+            }
 
             // Return DerivationResult
             return DerivationResult.make({

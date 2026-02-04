@@ -354,6 +354,8 @@ const buildPushdown = (expr: FilterExpr | undefined): PushdownExpr => {
       AltTextRegex: () => pushdownTrue,
       HasVideo: () => ({ _tag: "HasVideo" }),
       HasLinks: () => ({ _tag: "HasLinks" }),
+      LinkContains: () => pushdownTrue,
+      LinkRegex: () => pushdownTrue,
       HasMedia: () => ({ _tag: "HasMedia" }),
       HasEmbed: () => ({ _tag: "HasEmbed" }),
       Language: (language) => {

@@ -1,5 +1,5 @@
 import { Args, Options } from "@effect/cli";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { ActorId, AtUri, PostUri, StoreName } from "../domain/primitives.js";
 import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
 import { CliInputError } from "./errors.js";
@@ -9,7 +9,15 @@ import { NonNegativeInt, PositiveInt } from "./option-schemas.js";
 /** --store option with StoreName schema validation */
 export const storeNameOption = Options.text("store").pipe(
   Options.withSchema(StoreName),
-  Options.withDescription("Store name to write into")
+  Options.withDescription("Store name (positional or --store)"),
+  Options.optional
+);
+
+/** Positional store name (optional when --store is provided) */
+export const storeNameArg = Args.text({ name: "store" }).pipe(
+  Args.withSchema(StoreName),
+  Args.withDescription("Store name"),
+  Args.optional
 );
 
 /** --filter DSL option (optional) */
@@ -36,6 +44,11 @@ export const postFilterJsonOption = Options.text("post-filter-json").pipe(
   Options.optional
 );
 
+/** --filter-help flag to show DSL help */
+export const filterHelpOption = Options.boolean("filter-help").pipe(
+  Options.withDescription("Show filter DSL and JSON help")
+);
+
 /** --quiet flag to suppress progress output */
 export const quietOption = Options.boolean("quiet").pipe(
   Options.withDescription("Suppress progress output")
@@ -49,6 +62,11 @@ export const refreshOption = Options.boolean("refresh").pipe(
 /** --cache-images flag to fetch image embeds after sync/watch */
 export const cacheImagesOption = Options.boolean("cache-images").pipe(
   Options.withDescription("Fetch and cache image embeds after sync/watch")
+);
+
+/** --dry-run flag to preview changes without writing */
+export const dryRunOption = Options.boolean("dry-run").pipe(
+  Options.withDescription("Preview changes without writing to disk")
 );
 
 export const cacheImagesModeValues = ["new", "full"] as const;
@@ -143,3 +161,30 @@ export const decodeActor = (actor: string) =>
       })
     )
   );
+
+export const resolveStoreName = (
+  storeArg: Option.Option<StoreName>,
+  storeOption: Option.Option<StoreName>
+) =>
+  Option.match(storeArg, {
+    onNone: () =>
+      Option.match(storeOption, {
+        onNone: () =>
+          Effect.fail(CliInputError.make({
+            message: "Provide a store name as positional <store> or with --store.",
+            cause: { storeArg: null, storeOption: null }
+          })),
+        onSome: (store) => Effect.succeed(store)
+      }),
+    onSome: (argValue) =>
+      Option.match(storeOption, {
+        onNone: () => Effect.succeed(argValue),
+        onSome: (optionValue) =>
+          optionValue === argValue
+            ? Effect.succeed(optionValue)
+            : Effect.fail(CliInputError.make({
+                message: "Use either positional <store> or --store, not both.",
+                cause: { storeArg: argValue, storeOption: optionValue }
+              }))
+      })
+  });

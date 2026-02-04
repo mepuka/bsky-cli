@@ -30,6 +30,7 @@ import type { StoreRef } from "../domain/store.js";
 import {
   DataSource,
   SyncCheckpoint,
+  dataSourceKey,
   SyncError,
   SyncEvent,
   SyncProgress,
@@ -53,6 +54,7 @@ export type JetstreamSyncConfig = {
   readonly cursor?: string;
   readonly strict?: boolean;
   readonly maxErrors?: number;
+  readonly dryRun?: boolean;
 };
 
 type SyncOutcome =
@@ -73,6 +75,7 @@ type PreparedOutcome =
 type SyncProgressState = {
   readonly processed: number;
   readonly stored: number;
+  readonly deleted: number;
   readonly skipped: number;
   readonly errors: number;
   readonly lastReportAt: number;
@@ -218,6 +221,13 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
         ) =>
           Effect.gen(function* () {
             const filterHash = filterExprSignature(config.filter);
+            const dryRun = config.dryRun ?? false;
+            const totalLimit = config.limit;
+            const durationMs =
+              config.duration !== undefined
+                ? Duration.toMillis(config.duration)
+                : undefined;
+            const sourceKey = dataSourceKey(config.source);
             const startTime = yield* Clock.currentTimeMillis;
             const strict = config.strict === true;
             const maxErrors = config.maxErrors;
@@ -233,14 +243,33 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
             const stateRef = yield* Ref.make<SyncProgressState>({
               processed: 0,
               stored: 0,
+              deleted: 0,
               skipped: 0,
               errors: 0,
               lastReportAt: startTime,
               lastEventSeq: initialLastEventSeq,
               lastCursor: initialCursor
             });
+            const seenRef = dryRun ? yield* Ref.make(new Set<string>()) : undefined;
+
+            const estimateEtaMs = (processed: number, rate: number, elapsedMs: number) => {
+              if (typeof totalLimit === "number" && rate > 0) {
+                const remaining = Math.max(0, totalLimit - processed);
+                if (remaining <= 0) {
+                  return 0;
+                }
+                return Math.round((remaining / rate) * 1000);
+              }
+              if (typeof durationMs === "number") {
+                return Math.max(0, Math.round(durationMs - elapsedMs));
+              }
+              return undefined;
+            };
 
             const saveCheckpointFromState = (state: SyncProgressState) => {
+              if (dryRun) {
+                return Effect.void;
+              }
               const cursorValue = Option.getOrUndefined(state.lastCursor);
               const shouldSave =
                 cursorValue !== undefined || Option.isSome(activeCheckpoint);
@@ -363,6 +392,75 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
               );
 
             const applyPrepared = (prepared: PreparedOutcome) => {
+              if (dryRun) {
+                return Match.type<PreparedOutcome>().pipe(
+                  Match.withReturnType<Effect.Effect<SyncOutcome, SyncError>>(),
+                  Match.tagsExhaustive({
+                    Skip: () => Effect.succeed(skippedOutcome),
+                    Error: (error) =>
+                      strict
+                        ? Effect.fail(error.error)
+                        : Effect.succeed({ _tag: "Error", error: error.error } as const),
+                    Delete: (del) =>
+                      index
+                        .hasUri(config.store, del.uri)
+                        .pipe(
+                          Effect.mapError(
+                            toSyncError("store", "Failed to check existing post")
+                          ),
+                          Effect.map((exists) =>
+                            exists
+                              ? ({
+                                  _tag: "Stored",
+                                  eventSeq: 0 as EventSeq,
+                                  kind: "delete"
+                                } as const)
+                              : skippedOutcome
+                          )
+                        ),
+                    Upsert: (upsert) =>
+                      (upsert.checkExists
+                        ? Effect.gen(function* () {
+                            if (!seenRef) {
+                              return {
+                                _tag: "Stored",
+                                eventSeq: 0 as EventSeq,
+                                kind: "upsert"
+                              } as const;
+                            }
+                            const seen = yield* Ref.get(seenRef);
+                            const uri = upsert.post.uri;
+                            if (seen.has(uri)) {
+                              return skippedOutcome;
+                            }
+                            const exists = yield* index
+                              .hasUri(config.store, uri)
+                              .pipe(
+                                Effect.mapError(
+                                  toSyncError("store", "Failed to check existing post")
+                                )
+                              );
+                            if (exists) {
+                              return skippedOutcome;
+                            }
+                            const next = new Set(seen);
+                            next.add(uri);
+                            yield* Ref.set(seenRef, next);
+                            return {
+                              _tag: "Stored",
+                              eventSeq: 0 as EventSeq,
+                              kind: "upsert"
+                            } as const;
+                          })
+                        : Effect.succeed({
+                            _tag: "Stored",
+                            eventSeq: 0 as EventSeq,
+                            kind: "upsert"
+                          } as const))
+                  })
+                )(prepared);
+              }
+
               return Match.type<PreparedOutcome>().pipe(
                 Match.withReturnType<Effect.Effect<SyncOutcome, SyncError>>(),
                 Match.tagsExhaustive({
@@ -464,7 +562,9 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                         } else {
                           added += 1;
                         }
-                        lastEventSeq = Option.some(stored.eventSeq);
+                        if (!dryRun) {
+                          lastEventSeq = Option.some(stored.eventSeq);
+                        }
                       },
                       Skipped: () => {
                         skipped += 1;
@@ -493,6 +593,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                   ] => {
                     const processed = state.processed + messages.length;
                     const stored = state.stored + added;
+                    const deletedTotal = state.deleted + deleted;
                     const skippedTotal = state.skipped + skipped;
                     const errorsTotal = state.errors + errors.length;
                     const shouldReport =
@@ -500,6 +601,7 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                     const nextState: SyncProgressState = {
                       processed,
                       stored,
+                      deleted: deletedTotal,
                       skipped: skippedTotal,
                       errors: errorsTotal,
                       lastReportAt: shouldReport ? now : state.lastReportAt,
@@ -528,14 +630,20 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                   const elapsedMs = now - startTime;
                   const rate =
                     elapsedMs > 0 ? state.processed / (elapsedMs / 1000) : 0;
+                  const etaMs = estimateEtaMs(state.processed, rate, elapsedMs);
                   yield* reporter.report(
                     SyncProgress.make({
                       processed: state.processed,
                       stored: state.stored,
+                      deleted: state.deleted,
                       skipped: state.skipped,
                       errors: state.errors,
                       elapsedMs,
-                      rate
+                      rate,
+                      ...(typeof totalLimit === "number" ? { total: totalLimit } : {}),
+                      ...(etaMs !== undefined ? { etaMs } : {}),
+                      store: config.store.name,
+                      source: sourceKey
                     })
                   );
                 }

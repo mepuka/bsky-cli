@@ -36,7 +36,7 @@ const typeaheadOption = Options.boolean("typeahead").pipe(
 );
 
 const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
-  Options.withDescription("Output format (default: json)"),
+  Options.withDescription("Output format (default: config output format)"),
   Options.optional
 );
 

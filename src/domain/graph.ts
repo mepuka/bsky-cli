@@ -30,6 +30,14 @@ export class GraphEdge extends Schema.Class<GraphEdge>("GraphEdge")({
   meta: Schema.optional(GraphMeta)
 }) {}
 
+export class GraphSummary extends Schema.Class<GraphSummary>("GraphSummary")({
+  postsScanned: Schema.Int,
+  interactionsByType: Schema.Record({ key: Schema.String, value: Schema.Int }),
+  uniqueActors: Schema.Int,
+  edgeCount: Schema.Int,
+  density: Schema.Number
+}) {}
+
 export class GraphSnapshot extends Schema.Class<GraphSnapshot>("GraphSnapshot")({
   nodes: Schema.Array(GraphNode),
   edges: Schema.Array(GraphEdge),
@@ -37,5 +45,6 @@ export class GraphSnapshot extends Schema.Class<GraphSnapshot>("GraphSnapshot")(
   builtAt: Timestamp,
   sources: Schema.Array(Schema.String),
   window: Schema.optional(Schema.Struct({ start: Timestamp, end: Timestamp })),
-  filters: Schema.optional(Schema.Struct({ filterHash: Schema.optional(Schema.String) }))
+  filters: Schema.optional(Schema.Struct({ filterHash: Schema.optional(Schema.String) })),
+  summary: Schema.optional(GraphSummary)
 }) {}

@@ -108,9 +108,11 @@ export const makeBskyMockLayer = (
     )
   );
 
+  const storeRoot = `/tmp/skygent-test-${Math.random().toString(36).slice(2)}`;
   const configLayer = Layer.succeed(ConfigOverrides, {
     service: "https://bsky.test",
-    identifier: credentials.identifier
+    identifier: credentials.identifier,
+    storeRoot
   });
 
   const credentialLayer = Layer.succeed(CredentialsOverrides, {

@@ -271,6 +271,24 @@ export interface FilterHasLinks {
 }
 
 /**
+ * Filter posts containing external links with URLs matching a substring.
+ */
+export interface FilterLinkContains {
+  readonly _tag: "LinkContains";
+  readonly text: string;
+  readonly caseSensitive?: boolean;
+}
+
+/**
+ * Filter posts containing external links with URLs matching a regex pattern.
+ */
+export interface FilterLinkRegex {
+  readonly _tag: "LinkRegex";
+  readonly pattern: string;
+  readonly flags?: string;
+}
+
+/**
  * Filter posts containing any media (images, video, or external links).
  */
 export interface FilterHasMedia {
@@ -416,6 +434,8 @@ export type FilterExpr =
   | FilterAltTextRegex
   | FilterHasVideo
   | FilterHasLinks
+  | FilterLinkContains
+  | FilterLinkRegex
   | FilterHasMedia
   | FilterHasEmbed
   | FilterLanguage
@@ -511,6 +531,16 @@ interface FilterHasVideoEncoded {
 interface FilterHasLinksEncoded {
   readonly _tag: "HasLinks";
 }
+interface FilterLinkContainsEncoded {
+  readonly _tag: "LinkContains";
+  readonly text: string;
+  readonly caseSensitive?: boolean;
+}
+interface FilterLinkRegexEncoded {
+  readonly _tag: "LinkRegex";
+  readonly pattern: string;
+  readonly flags?: string;
+}
 interface FilterHasMediaEncoded {
   readonly _tag: "HasMedia";
 }
@@ -566,6 +596,8 @@ type FilterExprEncoded =
   | FilterAltTextRegexEncoded
   | FilterHasVideoEncoded
   | FilterHasLinksEncoded
+  | FilterLinkContainsEncoded
+  | FilterLinkRegexEncoded
   | FilterHasMediaEncoded
   | FilterHasEmbedEncoded
   | FilterLanguageEncoded
@@ -681,6 +713,22 @@ const FilterHasLinksSchema: Schema.Schema<FilterHasLinks, FilterHasLinksEncoded,
   "HasLinks",
   {}
 );
+const FilterLinkContainsSchema: Schema.Schema<
+  FilterLinkContains,
+  FilterLinkContainsEncoded,
+  never
+> = Schema.TaggedStruct("LinkContains", {
+  text: required(Schema.NonEmptyString, "\"text\" is required"),
+  caseSensitive: Schema.optionalWith(Schema.Boolean, { exact: true })
+});
+const FilterLinkRegexSchema: Schema.Schema<
+  FilterLinkRegex,
+  FilterLinkRegexEncoded,
+  never
+> = Schema.TaggedStruct("LinkRegex", {
+  pattern: required(Schema.NonEmptyString, "\"pattern\" is required"),
+  flags: Schema.optionalWith(Schema.String, { exact: true })
+});
 const FilterHasMediaSchema: Schema.Schema<FilterHasMedia, FilterHasMediaEncoded, never> = Schema.TaggedStruct(
   "HasMedia",
   {}
@@ -770,6 +818,8 @@ const FilterExprInternal: Schema.Schema<FilterExpr, FilterExprEncoded, never> = 
   FilterAltTextRegexSchema,
   FilterHasVideoSchema,
   FilterHasLinksSchema,
+  FilterLinkContainsSchema,
+  FilterLinkRegexSchema,
   FilterHasMediaSchema,
   FilterHasEmbedSchema,
   FilterLanguageSchema,

@@ -14,6 +14,8 @@ const filterJsonExamples = [
   "  Has alt text:    '{\"_tag\":\"HasAltText\"}'",
   "  No alt text:     '{\"_tag\":\"NoAltText\"}'",
   "  Alt text:        '{\"_tag\":\"AltText\",\"text\":\"diagram\"}'",
+  "  Link contains:   '{\"_tag\":\"LinkContains\",\"text\":\"substack.com\"}'",
+  "  Link regex:      '{\"_tag\":\"LinkRegex\",\"pattern\":\"substack\\\\.com\",\"flags\":\"i\"}'",
   "  Language:        '{\"_tag\":\"Language\",\"langs\":[\"en\",\"es\"]}'",
   "  By regex:        '{\"_tag\":\"Regex\",\"patterns\":[\"pattern\"],\"flags\":\"i\"}'",
   "  Trending tag:    '{\"_tag\":\"Trending\",\"tag\":\"#ai\",\"onError\":{\"_tag\":\"Include\"}}'",
@@ -58,6 +60,8 @@ const filterDslExamples = [
   "  until:2024-01-15",
   "  age:<72h",
   "  links:onError=exclude",
+  "  links:/substack\\.com/i",
+  "  link-contains:substack.com",
   "  trending:#ai,onError=include",
   "  (hashtag:#ai OR hashtag:#ml) AND author:user.bsky.social",
   "",
@@ -83,3 +87,6 @@ export const filterDslDescription = () =>
     "",
     filterDslExamples
   ].join("\n");
+
+export const filterHelpText = () =>
+  [filterDslDescription(), "", filterJsonDescription()].join("\n");

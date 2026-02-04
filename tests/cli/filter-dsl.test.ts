@@ -136,6 +136,25 @@ describe("filter DSL", () => {
     });
   });
 
+  test("parses link-contains filter", async () => {
+    const result = await runDsl("link-contains:substack.com");
+
+    expect(result).toMatchObject({
+      _tag: "LinkContains",
+      text: "substack.com"
+    });
+  });
+
+  test("parses links regex filter", async () => {
+    const result = await runDsl("links:/substack\\.com/i");
+
+    expect(result).toMatchObject({
+      _tag: "LinkRegex",
+      pattern: "substack\\.com",
+      flags: "i"
+    });
+  });
+
   test("parses trending filter with onError override", async () => {
     const result = await runDsl("trending:#ai,onError=exclude");
 

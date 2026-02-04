@@ -22,7 +22,7 @@
  * - `Hashtag`, `HashtagIn`: Match by hashtag
  * - `Contains`: Text substring matching
  * - `IsReply`, `IsQuote`, `IsRepost`, `IsOriginal`: Post type matching
- * - `HasImages`, `MinImages`, `HasAltText`, `NoAltText`, `AltText`, `AltTextRegex`, `HasVideo`, `HasLinks`, `HasMedia`, `HasEmbed`: Media detection
+ * - `HasImages`, `MinImages`, `HasAltText`, `NoAltText`, `AltText`, `AltTextRegex`, `HasVideo`, `HasLinks`, `LinkContains`, `LinkRegex`, `HasMedia`, `HasEmbed`: Media detection
  * - `Engagement`: Threshold-based engagement matching
  * - `Language`: Language code matching
  * - `Regex`: Regular expression pattern matching
@@ -76,8 +76,8 @@ import type { FilterExpr } from "../domain/filter.js";
 import type { FilterErrorPolicy } from "../domain/policies.js";
 import type { Post } from "../domain/post.js";
 import type { FilterExplanation } from "../domain/filter-explain.js";
-import { extractImageRefs, hasExternalEmbed, hasVideoEmbed, isQuoteEmbed } from "../domain/embeds.js";
-import { isFeedReasonRepost } from "../domain/bsky.js";
+import { embedMedia, extractImageRefs, hasExternalEmbed, hasVideoEmbed, isQuoteEmbed } from "../domain/embeds.js";
+import { isEmbedExternal, isFeedReasonRepost } from "../domain/bsky.js";
 import type { LinkValidatorService } from "./link-validator.js";
 import type { TrendingTopicsService } from "./trending-topics.js";
 
@@ -96,6 +96,21 @@ type Explainer = (post: Post) => Effect.Effect<FilterExplanation, FilterEvalErro
 
 const hasExternalLink = (post: Post) =>
   post.links.length > 0 || hasExternalEmbed(post.embed);
+
+const linkUrls = (post: Post): ReadonlyArray<string> => {
+  const urls = post.links.map((link) => link.toString());
+  if (post.embed && isEmbedExternal(post.embed)) {
+    urls.push(post.embed.uri);
+  }
+  const media = embedMedia(post.embed);
+  if (media && isEmbedExternal(media)) {
+    urls.push(media.uri);
+  }
+  return urls;
+};
+
+const linkMatches = (post: Post, predicate: (value: string) => boolean) =>
+  linkUrls(post).some((value) => predicate(value));
 
 const imageRefs = (post: Post) => extractImageRefs(post.embed);
 
@@ -409,6 +424,40 @@ const buildExplanation = (
               detail: `links=${post.links.length}`
             })
           ),
+        LinkContains: (link) => {
+          const needle = link.caseSensitive ? link.text : link.text.toLowerCase();
+          const describe = link.caseSensitive
+            ? `needle=${link.text}`
+            : `needle=${link.text}, caseSensitive=false`;
+          return Effect.succeed((post: Post) => {
+            const ok = linkMatches(post, (value) =>
+              link.caseSensitive
+                ? value.includes(needle)
+                : value.toLowerCase().includes(needle)
+            );
+            return Effect.succeed({
+              _tag: "LinkContains",
+              ok,
+              detail: describe
+            });
+          });
+        },
+        LinkRegex: (link) =>
+          Effect.gen(function* () {
+            const compiled = yield* Effect.try({
+              try: () => new RegExp(link.pattern, link.flags),
+              catch: (error) =>
+                FilterCompileError.make({
+                  message: `Invalid regex "${link.pattern}": ${messageFromError(error)}`
+                })
+            });
+            return (post: Post) =>
+              Effect.succeed({
+                _tag: "LinkRegex",
+                ok: linkMatches(post, (value) => regexMatches(compiled, value)),
+                detail: `pattern=/${link.pattern}/${link.flags ?? ""}`
+              });
+          }),
         HasMedia: () =>
           Effect.succeed((post: Post) =>
             Effect.succeed({
@@ -681,6 +730,30 @@ const buildPredicate = (
           Effect.succeed((post: Post) =>
             Effect.succeed(hasExternalLink(post))
           ),
+        LinkContains: (link) => {
+          const needle = link.caseSensitive ? link.text : link.text.toLowerCase();
+          return Effect.succeed((post: Post) =>
+            Effect.succeed(
+              linkMatches(post, (value) =>
+                link.caseSensitive
+                  ? value.includes(needle)
+                  : value.toLowerCase().includes(needle)
+              )
+            )
+          );
+        },
+        LinkRegex: (link) =>
+          Effect.gen(function* () {
+            const compiled = yield* Effect.try({
+              try: () => new RegExp(link.pattern, link.flags),
+              catch: (error) =>
+                FilterCompileError.make({
+                  message: `Invalid regex "${link.pattern}": ${messageFromError(error)}`
+                })
+            });
+            return (post: Post) =>
+              Effect.succeed(linkMatches(post, (value) => regexMatches(compiled, value)));
+          }),
         HasMedia: () => Effect.succeed((post: Post) => Effect.succeed(hasMedia(post))),
         HasEmbed: () => Effect.succeed((post: Post) => Effect.succeed(hasEmbed(post))),
         Language: (language) => {

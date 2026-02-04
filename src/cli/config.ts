@@ -90,6 +90,22 @@ export const configOptions = {
   )
 };
 
+export const globalOptionNames = [
+  "--service",
+  "--store-root",
+  "--output-format",
+  "--identifier",
+  "--password",
+  "--full",
+  "--compact",
+  "--log-format",
+  "--sync-concurrency",
+  "--sync-batch-size",
+  "--sync-page-limit",
+  "--checkpoint-every",
+  "--checkpoint-interval-ms"
+] as const;
+
 export type ConfigOptions = {
   readonly service: Option.Option<string>;
   readonly storeRoot: Option.Option<string>;

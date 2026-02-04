@@ -575,3 +575,38 @@ describe("query thread output", () => {
     }
   });
 });
+
+describe("query global flag positioning", () => {
+  test("emits a helpful error when global flags appear after the store name", async () => {
+    const run = Command.run(queryCommand, {
+      name: "skygent",
+      version: "0.0.0"
+    });
+    const tempDir = await makeTempDir();
+    const { appLayer } = setupAppLayer(tempDir);
+
+    try {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* run([
+            "node",
+            "skygent",
+            "alpha",
+            "--full",
+            "--limit",
+            "5"
+          ]).pipe(Effect.either);
+        }).pipe(Effect.provide(appLayer))
+      );
+
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("CliInputError");
+        expect(result.left.message).toContain("--full");
+        expect(result.left.message).toContain("global option");
+      }
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+});

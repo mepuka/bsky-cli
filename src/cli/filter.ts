@@ -4,6 +4,7 @@ import { Chunk, Clock, Effect, Option, Stream } from "effect";
 import { StoreQuery } from "../domain/events.js";
 import { RawPost } from "../domain/raw.js";
 import type { Post } from "../domain/post.js";
+import type { FilterExpr } from "../domain/filter.js";
 import { PostUri, StoreName } from "../domain/primitives.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { FilterCompiler } from "../services/filter-compiler.js";
@@ -24,7 +25,7 @@ import { renderTableLegacy } from "./doc/table.js";
 import { withExamples } from "./help.js";
 import { filterOption, filterJsonOption } from "./shared-options.js";
 import { jsonTableFormats, resolveOutputFormat, textJsonFormats } from "./output-format.js";
-import { filterDslDescription, filterJsonDescription } from "./filter-help.js";
+import { filterHelpText } from "./filter-help.js";
 import { PositiveInt } from "./option-schemas.js";
 
 const filterNameArg = Args.text({ name: "name" }).pipe(
@@ -61,15 +62,15 @@ const sampleSizeOption = Options.integer("sample-size").pipe(
   Options.optional
 );
 const describeFormatOption = Options.choice("format", textJsonFormats).pipe(
-  Options.withDescription("Output format for filter descriptions (default: text)"),
+  Options.withDescription("Output format (default: config output format)"),
   Options.optional
 );
 const testFormatOption = Options.choice("format", textJsonFormats).pipe(
-  Options.withDescription("Output format for filter tests (default: text)"),
+  Options.withDescription("Output format (default: config output format)"),
   Options.optional
 );
 const listFormatOption = Options.choice("format", jsonTableFormats).pipe(
-  Options.withDescription("Output format (default: json)"),
+  Options.withDescription("Output format (default: config output format)"),
   Options.optional
 );
 const describeAnsiOption = Options.boolean("ansi").pipe(
@@ -160,6 +161,9 @@ const loadPost = (
     });
   });
 
+const filterExprEquals = (left: FilterExpr, right: FilterExpr) =>
+  JSON.stringify(left) === JSON.stringify(right);
+
 export const filterList = Command.make("list", { format: listFormatOption }, ({ format }) =>
   Effect.gen(function* () {
     const appConfig = yield* AppConfigService;
@@ -171,7 +175,7 @@ export const filterList = Command.make("list", { format: listFormatOption }, ({ 
       jsonTableFormats,
       "json"
     );
-    
+
     if (outputFormat === "table") {
       const filters = yield* Effect.forEach(names, (name) =>
         library.get(name as StoreName).pipe(Effect.map((expr) => ({ name, expr: formatFilterExpr(expr) })))
@@ -213,8 +217,20 @@ export const filterCreate = Command.make(
       yield* requireFilterExpr(filter, filterJson);
       const expr = yield* parseFilterExpr(filter, filterJson);
       const library = yield* FilterLibrary;
-      yield* library.save(name, expr);
-      yield* writeJson({ name, saved: true });
+      const existing = yield* library.get(name).pipe(
+        Effect.map(Option.some),
+        Effect.catchTag("FilterNotFound", () => Effect.succeed(Option.none()))
+      );
+      const action =
+        Option.isNone(existing)
+          ? ("created" as const)
+          : filterExprEquals(existing.value, expr)
+            ? ("unchanged" as const)
+            : ("updated" as const);
+      if (action !== "unchanged") {
+        yield* library.save(name, expr);
+      }
+      yield* writeJson({ name, saved: action !== "unchanged", action });
     })
 ).pipe(
   Command.withDescription(
@@ -231,7 +247,7 @@ export const filterDelete = Command.make(
     Effect.gen(function* () {
       const library = yield* FilterLibrary;
       yield* library.remove(name);
-      yield* writeJson({ name, deleted: true });
+      yield* writeJson({ name, deleted: true, action: "deleted" });
     })
 ).pipe(
   Command.withDescription(
@@ -287,10 +303,16 @@ export const filterTest = Command.make(
   },
   ({ filter, filterJson, postJson, postUri, store, limit, format }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       yield* requireFilterExpr(filter, filterJson);
       const expr = yield* parseFilterExpr(filter, filterJson);
       const runtime = yield* FilterRuntime;
-      const outputFormat = Option.getOrElse(format, () => "text" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        textJsonFormats,
+        "text"
+      );
       if (Option.isSome(store)) {
         if (Option.isSome(postJson) || Option.isSome(postUri)) {
           return yield* CliInputError.make({
@@ -460,10 +482,16 @@ export const filterDescribe = Command.make(
   { filter: filterOption, filterJson: filterJsonOption, format: describeFormatOption, ansi: describeAnsiOption },
   ({ filter, filterJson, format, ansi }) =>
     Effect.gen(function* () {
+      const appConfig = yield* AppConfigService;
       yield* requireFilterExpr(filter, filterJson);
       const expr = yield* parseFilterExpr(filter, filterJson);
       const description = describeFilter(expr);
-      const outputFormat = Option.getOrElse(format, () => "text" as const);
+      const outputFormat = resolveOutputFormat(
+        format,
+        appConfig.outputFormat,
+        textJsonFormats,
+        "text"
+      );
       if (outputFormat === "json") {
         yield* writeJson(description);
         return;
@@ -480,12 +508,7 @@ export const filterDescribe = Command.make(
   )
 );
 
-export const filterHelp = Command.make("help", {}, () =>
-  Effect.gen(function* () {
-    const body = [filterDslDescription(), "", filterJsonDescription()].join("\n");
-    yield* writeText(body);
-  })
-).pipe(
+export const filterHelp = Command.make("help", {}, () => writeText(filterHelpText())).pipe(
   Command.withDescription(
     withExamples("Show filter DSL and JSON help", ["skygent filter help"])
   )

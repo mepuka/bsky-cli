@@ -21,6 +21,8 @@ import { pipeCommand } from "./pipe.js";
 import { imageCacheCommand } from "./image-cache-command.js";
 import { configCommand } from "./config-command.js";
 import { digestCommand } from "./digest.js";
+import { actorCommand } from "./actor.js";
+import { capabilitiesCommand } from "./capabilities.js";
 import {
   configOptions,
   toConfigOverrides,
@@ -45,7 +47,9 @@ export const app = Command.make("skygent", configOptions).pipe(
     postCommand,
     imageCacheCommand,
     pipeCommand,
-    digestCommand
+    digestCommand,
+    actorCommand,
+    capabilitiesCommand
   ]),
   Command.provide((config) =>
     Layer.mergeAll(

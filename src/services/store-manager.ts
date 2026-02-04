@@ -13,7 +13,7 @@
  *
  * **Store Catalog:**
  * Each store is tracked in a central catalog database (catalog.sqlite)
- * with metadata: name, root path, creation date, config JSON.
+ * with metadata: name, root path, creation date, optional description, config JSON.
  *
  * **Store Root:**
  * Stores are organized under `{storeRoot}/stores/{storeName}/` with:
@@ -80,6 +80,7 @@ const storeRow = Schema.Struct({
   root: StorePath,
   created_at: Schema.String,
   updated_at: Schema.String,
+  description: Schema.NullOr(Schema.String),
   config_json: Schema.String
 });
 
@@ -144,7 +145,8 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
      */
     readonly createStore: (
       name: StoreName,
-      config: StoreConfig
+      config: StoreConfig,
+      description?: string
     ) => Effect.Effect<StoreRef, StoreIoError>;
 
     /**
@@ -165,6 +167,17 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
      * @throws {StoreIoError} When database operations fail
      */
     readonly listStores: () => Effect.Effect<Chunk.Chunk<StoreMetadata>, StoreIoError>;
+
+    /**
+     * Retrieves store metadata by name.
+     *
+     * @param name - Store name to look up
+     * @returns Effect resolving to Some(StoreMetadata) if found, None otherwise
+     * @throws {StoreIoError} When database operations fail
+     */
+    readonly getMetadata: (
+      name: StoreName
+    ) => Effect.Effect<Option.Option<StoreMetadata>, StoreIoError>;
 
     /**
      * Retrieves configuration for a specific store.
@@ -205,6 +218,20 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
       from: StoreName,
       to: StoreName
     ) => Effect.Effect<StoreRef, StoreNotFound | StoreAlreadyExists | StoreIoError>;
+
+    /**
+     * Updates the store description.
+     *
+     * @param name - Store name to update
+     * @param description - New description (or null to clear)
+     * @returns Effect resolving to updated StoreMetadata
+     * @throws {StoreNotFound} If the store does not exist
+     * @throws {StoreIoError} When database operations fail
+     */
+    readonly updateDescription: (
+      name: StoreName,
+      description: string | null
+    ) => Effect.Effect<StoreMetadata, StoreNotFound | StoreIoError>;
   }
 >() {
   /**
@@ -247,7 +274,8 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
           name: row.name,
           root: row.root,
           createdAt: row.created_at,
-          updatedAt: row.updated_at
+          updatedAt: row.updated_at,
+          ...(row.description !== null ? { description: row.description } : {})
         }).pipe(Effect.mapError(toStoreIoError(manifestPath)));
 
       const decodeConfigRow = (row: typeof storeRow.Type) =>
@@ -264,14 +292,14 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
         Request: StoreName,
         Result: storeRow,
         execute: (name) =>
-          client`SELECT name, root, created_at, updated_at, config_json FROM stores WHERE name = ${name}`
+          client`SELECT name, root, created_at, updated_at, description, config_json FROM stores WHERE name = ${name}`
       });
 
       const listStoresSql = SqlSchema.findAll({
         Request: Schema.Void,
         Result: storeRow,
         execute: () =>
-          client`SELECT name, root, created_at, updated_at, config_json FROM stores ORDER BY name ASC`
+          client`SELECT name, root, created_at, updated_at, description, config_json FROM stores ORDER BY name ASC`
       });
 
       const insertStore = SqlSchema.void({
@@ -301,8 +329,21 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
             WHERE name = ${oldName}`
       });
 
+      const updateDescriptionSql = SqlSchema.void({
+        Request: Schema.Struct({
+          name: StoreName,
+          description: Schema.NullOr(Schema.String),
+          updatedAt: Schema.String
+        }),
+        execute: ({ name, description, updatedAt }) =>
+          client`UPDATE stores
+            SET description = ${description},
+                updated_at = ${updatedAt}
+            WHERE name = ${name}`
+      });
+
       const createStore = Effect.fn("StoreManager.createStore")(
-        (name: StoreName, config: StoreConfig) =>
+        (name: StoreName, config: StoreConfig, description?: string) =>
           decodeStorePath(storeRootKey(name)).pipe(
             Effect.flatMap((root) =>
               Effect.gen(function* () {
@@ -320,6 +361,7 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
                   root,
                   created_at: now,
                   updated_at: now,
+                  description: description ?? null,
                   config_json: configJson
                 });
 
@@ -363,6 +405,21 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
         );
       });
 
+      const getMetadata = Effect.fn("StoreManager.getMetadata")((name: StoreName) => {
+        return decodeStorePath(storeRootKey(name)).pipe(
+          Effect.flatMap((root) =>
+            findStore(name).pipe(
+              Effect.flatMap((rows) =>
+                rows.length === 0
+                  ? Effect.succeed(Option.none())
+                  : decodeMetadataRow(rows[0]!).pipe(Effect.map(Option.some))
+              ),
+              Effect.mapError(toStoreIoError(root))
+            )
+          )
+        );
+      });
+
       const deleteStore = Effect.fn("StoreManager.deleteStore")((name: StoreName) => {
         return decodeStorePath(storeRootKey(name)).pipe(
           Effect.flatMap((root) =>
@@ -399,6 +456,31 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
           })
       );
 
+      const updateDescription = Effect.fn("StoreManager.updateDescription")(
+        (name: StoreName, description: string | null) =>
+          Effect.gen(function* () {
+            const existingRows = yield* findStore(name).pipe(
+              Effect.mapError(toStoreIoError(manifestPath))
+            );
+            if (existingRows.length === 0) {
+              return yield* StoreNotFound.make({ name });
+            }
+            const nowMillis = yield* Clock.currentTimeMillis;
+            const now = new Date(nowMillis).toISOString();
+            yield* updateDescriptionSql({
+              name,
+              description,
+              updatedAt: now
+            }).pipe(Effect.mapError(toStoreIoError(manifestPath)));
+            const base = existingRows[0]!;
+            return yield* decodeMetadataRow({
+              ...base,
+              description,
+              updated_at: now
+            });
+          })
+      );
+
       const listStores = Effect.fn("StoreManager.listStores")(() =>
         Effect.gen(function* () {
           const rows = yield* listStoresSql(undefined);
@@ -418,9 +500,11 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
         createStore,
         getStore,
         listStores,
+        getMetadata,
         getConfig,
         deleteStore,
-        renameStore
+        renameStore,
+        updateDescription
       });
     })
   ).pipe(Layer.provide(Reactivity.layer));

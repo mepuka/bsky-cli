@@ -106,6 +106,13 @@ const formatLeafValue = (expr: FilterExpr): string =>
       AltTextRegex: (altText) => formatRegex(altText.pattern, altText.flags),
       HasVideo: () => "video",
       HasLinks: () => "links",
+      LinkContains: (link) => {
+        const text = formatValue(link.text);
+        return link.caseSensitive !== undefined
+          ? `${text} (caseSensitive=${link.caseSensitive})`
+          : text;
+      },
+      LinkRegex: (link) => formatRegex(link.pattern, link.flags),
       HasMedia: () => "media",
       HasEmbed: () => "embed",
       Language: (language) => language.langs.join(", "),
@@ -150,6 +157,9 @@ const formatLeafPhrase = (expr: FilterExpr): string =>
         `with alt text matching regex ${formatRegex(altText.pattern, altText.flags)}`,
       HasVideo: () => "with video",
       HasLinks: () => "with links",
+      LinkContains: (link) => `with links containing ${formatValue(link.text)}`,
+      LinkRegex: (link) =>
+        `with links matching regex ${formatRegex(link.pattern, link.flags)}`,
       HasMedia: () => "with media",
       HasEmbed: () => "with embeds",
       Language: (language) => `in ${language.langs.join(", ")} language`,
@@ -233,6 +243,14 @@ export const formatFilterExpr = (expr: FilterExpr, parentPrec = 0): string => {
         formatWithOptions("alt-text", formatRegex(altText.pattern, altText.flags), []),
       HasVideo: () => "hasvideo",
       HasLinks: () => "haslinks",
+      LinkContains: (link) => {
+        const options: string[] = [];
+        if (link.caseSensitive !== undefined) {
+          options.push(`caseSensitive=${link.caseSensitive}`);
+        }
+        return formatWithOptions("link-contains", formatValue(link.text), options);
+      },
+      LinkRegex: (link) => `links:${formatRegex(link.pattern, link.flags)}`,
       HasMedia: () => "hasmedia",
       HasEmbed: () => "hasembed",
       Language: (language) => `language:${language.langs.join(",")}`,
@@ -494,6 +512,10 @@ const conditionLine = (condition: FilterCondition) => {
       return `${prefix}include video`;
     case "HasLinks":
       return `${prefix}include links`;
+    case "LinkContains":
+      return `${prefix}include links containing: ${condition.value}`;
+    case "LinkRegex":
+      return `${prefix}include links matching regex: ${condition.value}`;
     case "HasMedia":
       return `${prefix}include media`;
     case "HasEmbed":

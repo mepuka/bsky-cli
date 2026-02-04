@@ -7,9 +7,18 @@ import { ProfileResolver } from "../services/profile-resolver.js";
 import { GraphBuilder } from "../services/graph-builder.js";
 import { StoreTopology } from "../services/store-topology.js";
 import type { ListItemView, ListView } from "../domain/bsky.js";
-import { AtUri, StoreName } from "../domain/primitives.js";
+import { AtUri } from "../domain/primitives.js";
 import type { GraphSnapshot } from "../domain/graph.js";
-import { actorArg, decodeActor } from "./shared-options.js";
+import {
+  actorArg,
+  decodeActor,
+  filterHelpOption,
+  filterJsonOption,
+  filterOption,
+  resolveStoreName,
+  storeNameArg,
+  storeNameOption
+} from "./shared-options.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
@@ -28,13 +37,13 @@ import {
 } from "../graph/relationships.js";
 import { parseRangeOptions } from "./range-options.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
-import { filterOption, filterJsonOption } from "./shared-options.js";
 import { storeOptions } from "./store.js";
 import { StoreQuery } from "../domain/events.js";
 import { PositiveInt, boundedInt } from "./option-schemas.js";
 import { degreeCentrality, graphFromSnapshot, pageRankCentrality } from "../graph/centrality.js";
 import { communitiesFromSnapshot } from "../graph/communities.js";
 import { formatFilterExpr } from "../domain/filter-describe.js";
+import { filterHelpText } from "./filter-help.js";
 
 const listUriArg = Args.text({ name: "uri" }).pipe(
   Args.withSchema(AtUri),
@@ -54,7 +63,7 @@ const cursorOption = baseCursorOption.pipe(
 );
 
 const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
-  Options.withDescription("Output format (default: json)"),
+  Options.withDescription("Output format (default: config output format)"),
   Options.optional
 );
 
@@ -78,18 +87,57 @@ const snapshotMeta = (snapshot: GraphSnapshot, extra: Record<string, unknown> = 
   filters: snapshot.filters,
   nodeCount: snapshot.nodes.length,
   edgeCount: snapshot.edges.length,
+  ...(snapshot.summary
+    ? {
+        postsScanned: snapshot.summary.postsScanned,
+        interactionsByType: snapshot.summary.interactionsByType,
+        uniqueActors: snapshot.summary.uniqueActors,
+        graphDensity: snapshot.summary.density
+      }
+    : {}),
   ...extra
 });
+
+const formatCount = (value: number) =>
+  new Intl.NumberFormat("en-US").format(value);
+
+const formatDensity = (value: number) => value.toFixed(3);
+
+const renderGraphSummary = (
+  snapshot: GraphSnapshot,
+  extra?: { readonly store?: string }
+) => {
+  const summary = snapshot.summary;
+  if (!summary) return "";
+  const replies = summary.interactionsByType.reply ?? 0;
+  const quotes = summary.interactionsByType.quote ?? 0;
+  const reposts = summary.interactionsByType.repost ?? 0;
+  const mentions = summary.interactionsByType.mention ?? 0;
+  const lines = [
+    "Graph Summary",
+    "-------------",
+    ...(extra?.store ? [`Store: ${extra.store}`] : []),
+    `Posts scanned: ${formatCount(summary.postsScanned)}`,
+    `Unique actors: ${formatCount(summary.uniqueActors)}`,
+    `Edges: ${formatCount(summary.edgeCount)}`,
+    `Density: ${formatDensity(summary.density)}`,
+    `Interactions: replies=${formatCount(replies)} quotes=${formatCount(quotes)} reposts=${formatCount(reposts)} mentions=${formatCount(mentions)}`
+  ];
+  return lines.join("\n");
+};
+
+const renderTableWithSummary = (summary: string, table: string) =>
+  summary.length > 0 ? `${summary}\n\n${table}` : table;
 
 const purposeOption = Options.choice("purpose", ["modlist", "curatelist"]).pipe(
   Options.withDescription("List purpose filter"),
   Options.optional
 );
 
-const storeOption = Options.text("store").pipe(
-  Options.withSchema(StoreName),
+const storeOption = storeNameOption.pipe(
   Options.withDescription("Store name to build the interaction graph from")
 );
+const storeArg = storeNameArg;
 
 const rangeOption = Options.text("range").pipe(
   Options.withDescription("ISO range as <start>..<end>"),
@@ -241,16 +289,94 @@ const renderCentralityTable = (entries: ReadonlyArray<{
 };
 
 const renderCommunitiesTable = (entries: ReadonlyArray<{
-  readonly community: string;
+  readonly label: string;
   readonly size: number;
   readonly members: string;
 }>) => {
   const rows = entries.map((entry) => [
-    String(entry.community),
+    String(entry.label),
     String(entry.size),
     entry.members
   ]);
-  return renderTableLegacy(["COMMUNITY", "SIZE", "MEMBERS"], rows);
+  return renderTableLegacy(["LABEL", "SIZE", "MEMBERS"], rows);
+};
+
+const labelCommunities = (
+  snapshot: GraphSnapshot,
+  communities: ReadonlyArray<ReturnType<typeof communitiesFromSnapshot>[number]>
+) => {
+  const indexByDid = new Map<string, number>();
+  communities.forEach((community, index) => {
+    for (const member of community.members) {
+      indexByDid.set(String(member.id), index);
+    }
+  });
+
+  const degreeByCommunity = communities.map(() => new Map<string, number>());
+  communities.forEach((community, index) => {
+    const map = degreeByCommunity[index]!;
+    for (const member of community.members) {
+      map.set(String(member.id), 0);
+    }
+  });
+
+  for (const edge of snapshot.edges) {
+    const from = String(edge.from);
+    const to = String(edge.to);
+    const fromIndex = indexByDid.get(from);
+    if (fromIndex === undefined) continue;
+    const toIndex = indexByDid.get(to);
+    if (toIndex === undefined || toIndex !== fromIndex) continue;
+    const map = degreeByCommunity[fromIndex]!;
+    const weight = edge.weight ?? 1;
+    map.set(from, (map.get(from) ?? 0) + weight);
+    map.set(to, (map.get(to) ?? 0) + weight);
+  }
+
+  return communities.map((community, index) => {
+    const degreeMap = degreeByCommunity[index] ?? new Map<string, number>();
+    const members = community.members;
+    if (members.length === 0) {
+      return {
+        id: community.id,
+        label: community.id,
+        size: 0,
+        members: [] as ReadonlyArray<{ did: string; handle?: string }>
+      };
+    }
+    const select = members.reduce((best, member) => {
+      const bestScore = degreeMap.get(String(best.id)) ?? 0;
+      const nextScore = degreeMap.get(String(member.id)) ?? 0;
+      if (nextScore > bestScore) return member;
+      if (nextScore < bestScore) return best;
+      const bestHandle = best.label ?? "";
+      const nextHandle = member.label ?? "";
+      if (nextHandle && !bestHandle) return member;
+      if (nextHandle && bestHandle && nextHandle < bestHandle) return member;
+      if (!nextHandle && !bestHandle && String(member.id) < String(best.id)) {
+        return member;
+      }
+      return best;
+    }, members[0]!);
+    const centralDid = select ? String(select.id) : "";
+    const centralHandle = select?.label;
+    const label = centralHandle ? `Around ${centralHandle}` : `Around ${centralDid}`;
+    return {
+      id: community.id,
+      label,
+      size: community.members.length,
+      centralMember: select
+        ? {
+            did: centralDid,
+            ...(centralHandle ? { handle: centralHandle } : {})
+          }
+        : undefined,
+      members: community.members.map((member) => ({
+        did: String(member.id),
+        ...(member.label ? { handle: member.label } : {})
+      }))
+    };
+  });
 };
 
 const renderStoreTopologyTable = (
@@ -608,22 +734,29 @@ const listsCommand = Command.make(
 const interactionsCommand = Command.make(
   "interactions",
   {
+    storeName: storeArg,
     store: storeOption,
     range: rangeOption,
     since: sinceOption,
     until: untilOption,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     limit: storeLimitOption,
     scanLimit: scanLimitOption,
     format: formatOption
   },
-  ({ store, range, since, until, filter, filterJson, limit, scanLimit, format }) =>
+  ({ store, storeName, range, since, until, filter, filterJson, filterHelp, limit, scanLimit, format }) =>
     Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
+      const resolvedStore = yield* resolveStoreName(storeName, store);
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const builder = yield* GraphBuilder;
-      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const storeRef = yield* storeOptions.loadStoreRef(resolvedStore);
       const parsedRange = yield* parseRangeOptions(range, since, until);
       const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
       const query = StoreQuery.make({
@@ -649,7 +782,12 @@ const interactionsCommand = Command.make(
         {
           json: writeJson(snapshot),
           ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
-          table: writeText(renderInteractionTable(snapshot))
+          table: writeText(
+            renderTableWithSummary(
+              renderGraphSummary(snapshot, { store: storeRef.name }),
+              renderInteractionTable(snapshot)
+            )
+          )
         }
       );
     })
@@ -666,12 +804,14 @@ const interactionsCommand = Command.make(
 const centralityCommand = Command.make(
   "centrality",
   {
+    storeName: storeArg,
     store: storeOption,
     range: rangeOption,
     since: sinceOption,
     until: untilOption,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     limit: storeLimitOption,
     scanLimit: scanLimitOption,
     metric: metricOption,
@@ -681,12 +821,17 @@ const centralityCommand = Command.make(
     top: topOption,
     format: formatOption
   },
-  ({ store, range, since, until, filter, filterJson, limit, scanLimit, metric, direction, weighted, iterations, top, format }) =>
+  ({ store, storeName, range, since, until, filter, filterJson, filterHelp, limit, scanLimit, metric, direction, weighted, iterations, top, format }) =>
     Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
+      const resolvedStore = yield* resolveStoreName(storeName, store);
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const builder = yield* GraphBuilder;
-      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const storeRef = yield* storeOptions.loadStoreRef(resolvedStore);
       const parsedRange = yield* parseRangeOptions(range, since, until);
       const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
       const query = StoreQuery.make({
@@ -745,10 +890,16 @@ const centralityCommand = Command.make(
         {
           json: writeJson({
             metric: metricValue,
+            summary: snapshot.summary,
             nodes: entries
           }),
           ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
-          table: writeText(renderCentralityTable(entries))
+          table: writeText(
+            renderTableWithSummary(
+              renderGraphSummary(snapshot, { store: storeRef.name }),
+              renderCentralityTable(entries)
+            )
+          )
         }
       );
     })
@@ -765,12 +916,14 @@ const centralityCommand = Command.make(
 const communitiesCommand = Command.make(
   "communities",
   {
+    storeName: storeArg,
     store: storeOption,
     range: rangeOption,
     since: sinceOption,
     until: untilOption,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     limit: storeLimitOption,
     scanLimit: scanLimitOption,
     iterations: communityIterationsOption,
@@ -779,12 +932,17 @@ const communitiesCommand = Command.make(
     top: topOption,
     format: formatOption
   },
-  ({ store, range, since, until, filter, filterJson, limit, scanLimit, iterations, weighted, minSize, top, format }) =>
+  ({ store, storeName, range, since, until, filter, filterJson, filterHelp, limit, scanLimit, iterations, weighted, minSize, top, format }) =>
     Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
+      const resolvedStore = yield* resolveStoreName(storeName, store);
       const appConfig = yield* AppConfigService;
       yield* ensureSupportedFormat(format, appConfig.outputFormat);
       const builder = yield* GraphBuilder;
-      const storeRef = yield* storeOptions.loadStoreRef(store);
+      const storeRef = yield* storeOptions.loadStoreRef(resolvedStore);
       const parsedRange = yield* parseRangeOptions(range, since, until);
       const parsedFilter = yield* parseOptionalFilterExpr(filter, filterJson);
       const query = StoreQuery.make({
@@ -806,21 +964,21 @@ const communitiesCommand = Command.make(
       });
       const topValue = Option.getOrUndefined(top);
       const trimmed = topValue ? communities.slice(0, topValue) : communities;
-      const payload = trimmed.map((community) => ({
+      const labeled = labelCommunities(snapshot, trimmed);
+      const payload = labeled.map((community) => ({
         id: community.id,
-        size: community.members.length,
-        members: community.members.map((member) => ({
-          did: String(member.id),
-          ...(member.label ? { handle: member.label } : {})
-        }))
+        label: community.label,
+        size: community.size,
+        ...(community.centralMember ? { centralMember: community.centralMember } : {}),
+        members: community.members
       }));
-      const tableRows = trimmed.map((community) => {
+      const tableRows = labeled.map((community) => {
         const handles = community.members
           .slice(0, 5)
-          .map((member) => member.label ?? String(member.id));
+          .map((member) => member.handle ?? member.did);
         return {
-          community: community.id,
-          size: community.members.length,
+          label: community.label,
+          size: community.size,
           members: handles.join(", ")
         };
       });
@@ -841,9 +999,14 @@ const communitiesCommand = Command.make(
         jsonNdjsonTableFormats,
         "json",
         {
-          json: writeJson({ communities: payload }),
+          json: writeJson({ summary: snapshot.summary, communities: payload }),
           ndjson: writeJsonStream(Stream.fromIterable(ndjsonItems)),
-          table: writeText(renderCommunitiesTable(tableRows))
+          table: writeText(
+            renderTableWithSummary(
+              renderGraphSummary(snapshot, { store: storeRef.name }),
+              renderCommunitiesTable(tableRows)
+            )
+          )
         }
       );
     })

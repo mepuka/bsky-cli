@@ -30,12 +30,13 @@ import type { Annotation } from "./doc/annotation.js";
 import { parseOptionalFilterExpr } from "./filter-input.js";
 import { looksLikeFilterExpression } from "./filter-dsl.js";
 import { CliOutput, writeJson, writeJsonStream, writeText } from "./output.js";
+import { filterHelpText } from "./filter-help.js";
 import { parseRangeOptions } from "./range-options.js";
 import { CliPreferences } from "./preferences.js";
 import { projectFields, resolveFieldSelectors } from "./query-fields.js";
 import { CliInputError } from "./errors.js";
 import { withExamples } from "./help.js";
-import { filterOption, filterJsonOption } from "./shared-options.js";
+import { filterHelpOption, filterOption, filterJsonOption } from "./shared-options.js";
 import { filterByFlags } from "../typeclass/chunk.js";
 import { StoreManager } from "../services/store-manager.js";
 import { StoreNotFound } from "../domain/errors.js";
@@ -46,6 +47,7 @@ import { jsonNdjsonTableFormats, queryOutputFormats, resolveOutputFormat } from 
 import { PositiveInt } from "./option-schemas.js";
 import { renderTableLegacy } from "./doc/table.js";
 import { logWarn } from "./logging.js";
+import { globalOptionNames } from "./config.js";
 
 const storeNamesArg = Args.text({ name: "store" }).pipe(
   Args.repeated,
@@ -221,6 +223,22 @@ const parseStoreNames = (raw: ReadonlyArray<string>, hasExplicitFilter: boolean)
       });
     }
 
+    const globalFlag = names.find((value) => {
+      if (!value.startsWith("--")) {
+        return false;
+      }
+      const normalized = value.split("=")[0]!;
+      return (globalOptionNames as ReadonlyArray<string>).includes(normalized);
+    });
+    if (globalFlag) {
+      return yield* CliInputError.make({
+        message:
+          `"${globalFlag}" is a global option and must appear before the subcommand. ` +
+          `Example: skygent ${globalFlag} query <store> [options]`,
+        cause: { flag: globalFlag }
+      });
+    }
+
     // Only check for filter-like patterns when no explicit filter provided
     if (!hasExplicitFilter) {
       const filterLike = names.find(looksLikeFilterExpression);
@@ -281,6 +299,7 @@ export const queryCommand = Command.make(
     until: untilOption,
     filter: filterOption,
     filterJson: filterJsonOption,
+    filterHelp: filterHelpOption,
     limit: limitOption,
     scanLimit: scanLimitOption,
     sort: sortOption,
@@ -297,8 +316,12 @@ export const queryCommand = Command.make(
     count: countOption,
     countBy: countByOption
   },
-  ({ stores, range, since, until, filter, filterJson, limit, scanLimit, sort, newestFirst, format, includeStore, ansi, width, fields, extractImages, resolveImages, cacheImages, progress, count, countBy }) =>
+  ({ stores, range, since, until, filter, filterJson, filterHelp, limit, scanLimit, sort, newestFirst, format, includeStore, ansi, width, fields, extractImages, resolveImages, cacheImages, progress, count, countBy }) =>
     Effect.gen(function* () {
+      if (filterHelp) {
+        yield* writeText(filterHelpText());
+        return;
+      }
       const appConfig = yield* AppConfigService;
       const index = yield* StoreIndex;
       const runtime = yield* FilterRuntime;
