@@ -65,3 +65,6 @@ export type StoreName = typeof StoreName.Type;
 
 export const StorePath = Schema.String.pipe(Schema.brand("StorePath"));
 export type StorePath = typeof StorePath.Type;
+
+/** Pure constructor for StorePath -- no validation, cannot throw. */
+export const storePath = (value: string): StorePath => value as StorePath;

@@ -11,7 +11,7 @@
  * - Error handling and mapping to StoreIoError
  */
 
-import { Context, Effect, Layer, Option, Ref } from "effect";
+import { Context, Effect, Layer, Option, SynchronizedRef } from "effect";
 import type { Semaphore } from "effect/Effect";
 import { StoreIoError } from "../domain/errors.js";
 import type { StorePath } from "../domain/primitives.js";
@@ -125,21 +125,21 @@ export class StoreCommitter extends Context.Tag("@skygent/StoreCommitter")<
     Effect.gen(function* () {
       const storeDb = yield* StoreDb;
       const writer = yield* StoreWriter;
-      const locks = yield* Ref.make(new Map<string, Semaphore>());
+      const locks = yield* SynchronizedRef.make(new Map<string, Semaphore>());
 
       const getLock = (storeName: string) =>
-        Effect.gen(function* () {
-          const current = yield* Ref.get(locks);
-          const existing = current.get(storeName);
-          if (existing) {
-            return existing;
-          }
-          const created = yield* Effect.makeSemaphore(1);
-          const next = new Map(current);
-          next.set(storeName, created);
-          yield* Ref.set(locks, next);
-          return created;
-        });
+        SynchronizedRef.modifyEffect(locks, (current) =>
+          Effect.gen(function* () {
+            const existing = current.get(storeName);
+            if (existing) {
+              return [existing, current] as const;
+            }
+            const created = yield* Effect.makeSemaphore(1);
+            const next = new Map(current);
+            next.set(storeName, created);
+            return [created, next] as const;
+          })
+        );
 
       const withStoreLock = <A, E, R>(
         store: StoreRef,

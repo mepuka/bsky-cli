@@ -14,9 +14,9 @@
  */
 
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option } from "effect";
 import { StoreLineage } from "../domain/derivation.js";
-import { StoreName, StorePath } from "../domain/primitives.js";
+import { StoreName, storePath } from "../domain/primitives.js";
 import { StoreIoError } from "../domain/errors.js";
 
 /**
@@ -31,10 +31,8 @@ const lineageKey = (storeName: StoreName) => `stores/${storeName}/lineage`;
  * @param storeName - The name of the store
  * @returns A function that creates StoreIoError from any cause
  */
-const toStoreIoError = (storeName: StoreName) => (cause: unknown) => {
-  const path = Schema.decodeUnknownSync(StorePath)(`stores/${storeName}/lineage`);
-  return StoreIoError.make({ path, cause });
-};
+const toStoreIoError = (storeName: StoreName) => (cause: unknown) =>
+  StoreIoError.make({ path: storePath(`stores/${storeName}/lineage`), cause });
 
 /**
  * Service for managing store derivation lineage.

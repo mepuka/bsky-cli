@@ -171,25 +171,36 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
           yield* fs.makeDirectory(dbDir, { recursive: true, mode: privateDirMode });
 
           const clientScope = yield* Scope.make();
-          const client = yield* SqliteClient.make({ filename: dbPath }).pipe(
-            Effect.provideService(Scope.Scope, clientScope),
-            Effect.provideService(Reactivity.Reactivity, reactivity)
-          );
-          yield* fs
-            .chmod(dbPath, privateFileMode)
-            .pipe(Effect.catchAll(() => Effect.void));
 
-          // Configure SQLite for optimal performance
-          yield* client`PRAGMA busy_timeout = 5000`;
-          yield* client`PRAGMA journal_mode = WAL`;
-          yield* client`PRAGMA synchronous = NORMAL`;
-          yield* client`PRAGMA temp_store = MEMORY`;
-          yield* client`PRAGMA cache_size = -64000`;
-          yield* client`PRAGMA mmap_size = 30000000000`;
-          yield* client`PRAGMA optimize=0x10002`;
-          yield* client`PRAGMA foreign_keys = ON`;
-          yield* migrate.pipe(
-            Effect.provideService(SqlClient.SqlClient, client)
+          // Guard: close scope if client creation OR any setup step fails
+          const client = yield* Effect.gen(function* () {
+            const c = yield* SqliteClient.make({ filename: dbPath }).pipe(
+              Effect.provideService(Scope.Scope, clientScope),
+              Effect.provideService(Reactivity.Reactivity, reactivity)
+            );
+            yield* fs
+              .chmod(dbPath, privateFileMode)
+              .pipe(Effect.catchAll(() => Effect.void));
+
+            // Configure SQLite for optimal performance
+            yield* c`PRAGMA busy_timeout = 5000`;
+            yield* c`PRAGMA journal_mode = WAL`;
+            yield* c`PRAGMA synchronous = NORMAL`;
+            yield* c`PRAGMA temp_store = MEMORY`;
+            yield* c`PRAGMA cache_size = -64000`;
+            yield* c`PRAGMA mmap_size = 30000000000`;
+            yield* c`PRAGMA optimize=0x10002`;
+            yield* c`PRAGMA foreign_keys = ON`;
+            yield* migrate.pipe(
+              Effect.provideService(SqlClient.SqlClient, c)
+            );
+            return c;
+          }).pipe(
+            Effect.onError((cause) =>
+              Scope.close(clientScope, Exit.failCause(cause)).pipe(
+                Effect.catchAll(() => Effect.void)
+              )
+            )
           );
 
           return { client, scope: clientScope };

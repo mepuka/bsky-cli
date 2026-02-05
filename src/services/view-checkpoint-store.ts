@@ -13,7 +13,7 @@
 
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { DerivationCheckpoint, FilterEvaluationMode } from "../domain/derivation.js";
-import { EventSeq, StoreName, StorePath, Timestamp } from "../domain/primitives.js";
+import { EventSeq, StoreName, storePath, Timestamp } from "../domain/primitives.js";
 import { StoreIoError } from "../domain/errors.js";
 import { StoreDb } from "./store-db.js";
 import { StoreManager } from "./store-manager.js";
@@ -24,12 +24,11 @@ import { StoreManager } from "./store-manager.js";
  * @param sourceName - The name of the source store
  * @returns A function that creates StoreIoError from any cause
  */
-const toStoreIoError = (viewName: StoreName, sourceName: StoreName) => (cause: unknown) => {
-  const path = Schema.decodeUnknownSync(StorePath)(
-    `stores/${viewName}/checkpoints/derivation/${sourceName}`
-  );
-  return StoreIoError.make({ path, cause });
-};
+const toStoreIoError = (viewName: StoreName, sourceName: StoreName) => (cause: unknown) =>
+  StoreIoError.make({
+    path: storePath(`stores/${viewName}/checkpoints/derivation/${sourceName}`),
+    cause
+  });
 
 const checkpointRow = Schema.Struct({
   view_name: StoreName,

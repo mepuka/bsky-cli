@@ -1,8 +1,8 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Chunk, Context, Effect, Layer, Option, Ref, Schema } from "effect";
+import { Chunk, Context, Effect, Layer, Option, Ref } from "effect";
 import { StoreAlreadyExists, StoreIoError, StoreNotFound } from "../domain/errors.js";
 import { StoreLineage, StoreSource } from "../domain/derivation.js";
-import { StoreName, StorePath } from "../domain/primitives.js";
+import { StoreName, type StorePath, storePath } from "../domain/primitives.js";
 import { StoreRef } from "../domain/store.js";
 import { AppConfigService } from "./app-config.js";
 import { LineageStore } from "./lineage-store.js";
@@ -26,8 +26,8 @@ type RenameState = {
   readonly lineagesUpdated: boolean;
 };
 
-const storeRootKey = (name: StoreName) =>
-  Schema.decodeUnknownSync(StorePath)(`stores/${name}`);
+const storeRootKey = (name: StoreName): StorePath =>
+  storePath(`stores/${name}`);
 
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
   StoreIoError.make({ path, cause });
