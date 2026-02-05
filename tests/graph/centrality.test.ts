@@ -25,6 +25,14 @@ const snapshot = Schema.decodeUnknownSync(GraphSnapshot)({
   sources: ["store:test"]
 });
 
+const undirectedSnapshot = Schema.decodeUnknownSync(GraphSnapshot)({
+  nodes: [nodeA, nodeB, nodeC],
+  edges,
+  directed: false,
+  builtAt: new Date("2026-02-02T00:00:00.000Z"),
+  sources: ["store:test"]
+});
+
 describe("graph centrality", () => {
   test("degree centrality honors direction and weights", () => {
     const { graph } = graphFromSnapshot(snapshot);
@@ -41,5 +49,40 @@ describe("graph centrality", () => {
     const { graph } = graphFromSnapshot(snapshot);
     const ranks = pageRankCentrality(graph, { iterations: 25, weighted: true });
     expect(String(ranks[0]?.node.id)).toBe(didB);
+  });
+});
+
+describe("undirected graph centrality", () => {
+  test("unweighted degree with direction 'both' does not double-count", () => {
+    const { graph } = graphFromSnapshot(undirectedSnapshot);
+    const result = degreeCentrality(graph, { direction: "both", weighted: false });
+    const byId = new Map(result.map((e) => [String(e.node.id), e.score]));
+    // alice has 1 neighbor (bob), bob has 2 (alice, carol), carol has 1 (bob)
+    expect(byId.get(didA)).toBe(1);
+    expect(byId.get(didB)).toBe(2);
+    expect(byId.get(didC)).toBe(1);
+  });
+
+  test("weighted degree with 'in' and 'out' produce identical scores for undirected", () => {
+    const { graph } = graphFromSnapshot(undirectedSnapshot);
+    const inResult = degreeCentrality(graph, { direction: "in", weighted: true });
+    const outResult = degreeCentrality(graph, { direction: "out", weighted: true });
+    const inById = new Map(inResult.map((e) => [String(e.node.id), e.score]));
+    const outById = new Map(outResult.map((e) => [String(e.node.id), e.score]));
+    // Direction is meaningless for undirected graphs — scores must match
+    expect(inById.get(didA)).toBe(outById.get(didA));
+    expect(inById.get(didB)).toBe(outById.get(didB));
+    expect(inById.get(didC)).toBe(outById.get(didC));
+  });
+
+  test("weighted degree with 'both' computes correct total weight for undirected", () => {
+    const { graph } = graphFromSnapshot(undirectedSnapshot);
+    const result = degreeCentrality(graph, { direction: "both", weighted: true });
+    const byId = new Map(result.map((e) => [String(e.node.id), e.score]));
+    // Edges: A-B(2), B-C(1), C-B(1). Each edge adds weight to both endpoints.
+    // alice: 2, bob: 2+1+1=4, carol: 1+1=2
+    expect(byId.get(didA)).toBe(2);
+    expect(byId.get(didB)).toBe(4);
+    expect(byId.get(didC)).toBe(2);
   });
 });

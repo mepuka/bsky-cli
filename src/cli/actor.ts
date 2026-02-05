@@ -117,7 +117,7 @@ const resolveCommand = Command.make(
 
       const resolver = cacheOnly ? resolveCached : resolveLive;
       const results = yield* Effect.forEach(identifiers, resolver, {
-        concurrency: "unbounded",
+        concurrency: 10,
         discard: false
       });
 

@@ -117,7 +117,7 @@ export const deriveCommand = Command.make(
                     })
                   )
                 ),
-              { concurrency: "unbounded" }
+              { concurrency: 10 }
             ).pipe(
               Effect.map((handles) => Array.from(new Set(handles)))
             )

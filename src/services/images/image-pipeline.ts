@@ -36,7 +36,7 @@ export class ImagePipeline extends Context.Tag("@skygent/ImagePipeline")<
         (urls: ReadonlyArray<string>, variant: ImageVariant = "original") =>
           config.enabled
             ? Effect.forEach(urls, (url) => cache.get(url, variant), {
-                concurrency: "unbounded"
+                concurrency: 10
               })
             : Effect.succeed([])
       );

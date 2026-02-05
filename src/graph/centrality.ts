@@ -60,10 +60,16 @@ export const degreeCentrality = (
   if (weighted) {
     for (const edge of Graph.values(Graph.edges(graph))) {
       const weight = edge.data.weight ?? 1;
-      if (direction === "out" || direction === "both") {
+      if (graph.type === "directed") {
+        if (direction === "out" || direction === "both") {
+          scores.set(edge.source, (scores.get(edge.source) ?? 0) + weight);
+        }
+        if (direction === "in" || direction === "both") {
+          scores.set(edge.target, (scores.get(edge.target) ?? 0) + weight);
+        }
+      } else {
+        // Undirected: direction is meaningless, always count both endpoints
         scores.set(edge.source, (scores.get(edge.source) ?? 0) + weight);
-      }
-      if (direction === "in" || direction === "both") {
         scores.set(edge.target, (scores.get(edge.target) ?? 0) + weight);
       }
     }
@@ -81,7 +87,9 @@ export const degreeCentrality = (
       ? neighborsOut.length
       : direction === "in"
         ? neighborsIn.length
-        : neighborsOut.length + neighborsIn.length;
+        : graph.type === "directed"
+          ? neighborsOut.length + neighborsIn.length
+          : neighborsOut.length;
     scores.set(index, score);
   }
 

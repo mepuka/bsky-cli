@@ -887,7 +887,7 @@ export const storeAddSource = Command.make(
           const resolved = yield* Effect.forEach(
             selection.actors,
             resolveActor,
-            { concurrency: "unbounded" }
+            { concurrency: 10 }
           );
           const uniqueByDid = new Map<string, (typeof resolved)[number]>();
           for (const entry of resolved) {

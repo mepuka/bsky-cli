@@ -40,7 +40,12 @@ export const Did = Schema.String.pipe(
 export type Did = typeof Did.Type;
 
 export const ActorId = Schema.String.pipe(
-  Schema.pattern(/^(did:\S+|[a-z0-9][a-z0-9.-]{1,251})$/),
+  Schema.transform(Schema.String, {
+    strict: true,
+    decode: (s) => (/^did:/i.test(s) ? s : s.toLowerCase()),
+    encode: (s) => s
+  }),
+  Schema.pattern(/^(did:\S+|[a-z0-9][a-z0-9.-]{1,251})$/i),
   Schema.brand("ActorId")
 );
 export type ActorId = typeof ActorId.Type;

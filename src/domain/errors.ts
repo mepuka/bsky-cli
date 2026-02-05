@@ -114,4 +114,4 @@ export class FilterLibraryError extends Schema.TaggedError<FilterLibraryError>()
   }
 ) {}
 
-export type StoreError = StoreNotFound | StoreAlreadyExists | StoreIoError | StoreIndexError;
+export type StoreError = StoreNotFound | StoreAlreadyExists | StoreIoError | StoreIndexError | StoreSourcesError;
