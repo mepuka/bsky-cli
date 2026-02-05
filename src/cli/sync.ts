@@ -21,8 +21,7 @@ import { filterHelpText } from "./filter-help.js";
 import { withExamples } from "./help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { CliInputError } from "./errors.js";
-import { makeSyncCommandBody, resolveCacheLimit, resolveCacheMode } from "./sync-factory.js";
-import { cacheStoreImages } from "./image-cache.js";
+import { makeSyncCommandBody, resolveCacheMode, runImageCacheAfterSync } from "./sync-factory.js";
 import {
   feedUriArg,
   listUriArg,
@@ -515,37 +514,14 @@ const jetstreamCommand = Command.make(
       }
       const totalPosts = yield* index.count(storeRef);
       if (cacheImages && !dryRun) {
-        const mode = resolveCacheMode(cacheImagesMode);
-        const cacheLimit = resolveCacheLimit(mode, result.postsAdded, cacheImagesLimit);
-        const shouldRun = mode === "full" || result.postsAdded > 0;
-        if (shouldRun && cacheLimit !== 0) {
-          yield* Effect.gen(function* () {
-            if (mode === "full") {
-              yield* logWarn("Running full image cache scan", {
-                store: storeRef.name,
-                source: "jetstream"
-              });
-            }
-            yield* logInfo("Caching image embeds", {
-              store: storeRef.name,
-              source: "jetstream",
-              postsAdded: result.postsAdded
-            });
-            const cacheResult = yield* cacheStoreImages(storeRef, {
-              includeThumbnails: !noCacheImagesThumbnails,
-              ...(cacheLimit !== undefined ? { limit: cacheLimit } : {})
-            });
-            yield* logInfo("Image cache complete", cacheResult);
-          }).pipe(
-            Effect.catchAll((error) =>
-              logWarn("Image cache failed", {
-                store: storeRef.name,
-                source: "jetstream",
-                error
-              }).pipe(Effect.orElseSucceed(() => undefined))
-            )
-          );
-        }
+        yield* runImageCacheAfterSync({
+          storeRef,
+          sourceName: "jetstream",
+          mode: resolveCacheMode(cacheImagesMode),
+          postsAdded: result.postsAdded,
+          limitOverride: cacheImagesLimit,
+          includeThumbnails: !noCacheImagesThumbnails
+        });
       }
       yield* logInfo("Sync complete", {
         source: "jetstream",
@@ -878,37 +854,14 @@ const syncStoreCommand = Command.make(
       const totalPosts = yield* index.count(storeRef);
 
       if (cacheImages && !dryRun) {
-        const mode = resolveCacheMode(cacheImagesMode);
-        const cacheLimit = resolveCacheLimit(mode, combined.postsAdded, cacheImagesLimit);
-        const shouldRun = mode === "full" || combined.postsAdded > 0;
-        if (shouldRun && cacheLimit !== 0) {
-          yield* Effect.gen(function* () {
-            if (mode === "full") {
-              yield* logWarn("Running full image cache scan", {
-                store: storeRef.name,
-                source: "store"
-              });
-            }
-            yield* logInfo("Caching image embeds", {
-              store: storeRef.name,
-              source: "store",
-              postsAdded: combined.postsAdded
-            });
-            const cacheResult = yield* cacheStoreImages(storeRef, {
-              includeThumbnails: !noCacheImagesThumbnails,
-              ...(cacheLimit !== undefined ? { limit: cacheLimit } : {})
-            });
-            yield* logInfo("Image cache complete", cacheResult);
-          }).pipe(
-            Effect.catchAll((error) =>
-              logWarn("Image cache failed", {
-                store: storeRef.name,
-                source: "store",
-                error
-              }).pipe(Effect.orElseSucceed(() => undefined))
-            )
-          );
-        }
+        yield* runImageCacheAfterSync({
+          storeRef,
+          sourceName: "store",
+          mode: resolveCacheMode(cacheImagesMode),
+          postsAdded: combined.postsAdded,
+          limitOverride: cacheImagesLimit,
+          includeThumbnails: !noCacheImagesThumbnails
+        });
       }
 
       yield* logInfo("Sync complete", {

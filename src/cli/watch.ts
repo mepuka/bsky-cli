@@ -18,9 +18,8 @@ import { withExamples } from "./help.js";
 import { filterHelpText } from "./filter-help.js";
 import { buildJetstreamSelection, jetstreamOptions } from "./jetstream.js";
 import { CliInputError } from "./errors.js";
-import { makeWatchCommandBody, resolveCacheLimit, resolveCacheMode } from "./sync-factory.js";
+import { makeWatchCommandBody, resolveCacheMode, runInitialFullCacheScan, withIncrementalImageCaching } from "./sync-factory.js";
 import { parseInterval, parseOptionalDuration } from "./interval.js";
-import { cacheStoreImages } from "./image-cache.js";
 import {
   feedUriArg,
   listUriArg,
@@ -467,34 +466,17 @@ const jetstreamCommand = Command.make(
       );
       const parsedUntil = parseOptionalDuration(until);
       const cacheMode = cacheImages ? resolveCacheMode(cacheImagesMode) : "new";
-      const resolveNewCacheLimit = (postsAdded: number) =>
-        resolveCacheLimit("new", postsAdded, cacheImagesLimit);
       const engineLayer = JetstreamSyncEngine.layer.pipe(
         Layer.provideMerge(Jetstream.live(selection.config))
       );
       yield* logInfo("Starting watch", { source: "jetstream", store: storeRef.name });
       if (cacheImages && cacheMode === "full") {
-        yield* Effect.gen(function* () {
-          yield* logWarn("Running full image cache scan", {
-            store: storeRef.name,
-            source: "jetstream"
-          });
-          const cacheResult = yield* cacheStoreImages(storeRef, {
-            includeThumbnails: !noCacheImagesThumbnails,
-            ...(Option.isSome(cacheImagesLimit)
-              ? { limit: cacheImagesLimit.value }
-              : {})
-          });
-          yield* logInfo("Image cache complete", cacheResult);
-        }).pipe(
-          Effect.catchAll((error) =>
-            logWarn("Image cache failed", {
-              store: storeRef.name,
-              source: "jetstream",
-              error
-            }).pipe(Effect.orElseSucceed(() => undefined))
-          )
-        );
+        yield* runInitialFullCacheScan({
+          storeRef,
+          sourceName: "jetstream",
+          limitOverride: cacheImagesLimit,
+          includeThumbnails: !noCacheImagesThumbnails
+        });
       }
       yield* Effect.gen(function* () {
         const engine = yield* JetstreamSyncEngine;
@@ -517,33 +499,13 @@ const jetstreamCommand = Command.make(
         );
         const outputStream = cacheImages
           ? baseStream.pipe(
-              Stream.mapEffect((result) =>
-                result.postsAdded > 0
-                  ? Effect.gen(function* () {
-                      const cacheLimit = resolveNewCacheLimit(result.postsAdded);
-                      yield* logInfo("Caching image embeds", {
-                        store: storeRef.name,
-                        source: "jetstream",
-                        postsAdded: result.postsAdded
-                      });
-                      const cacheResult = yield* cacheStoreImages(storeRef, {
-                        includeThumbnails: !noCacheImagesThumbnails,
-                        ...(cacheLimit !== undefined && cacheLimit > 0
-                          ? { limit: cacheLimit }
-                          : {})
-                      });
-                      yield* logInfo("Image cache complete", cacheResult);
-                    }).pipe(
-                      Effect.catchAll((error) =>
-                        logWarn("Image cache failed", {
-                          store: storeRef.name,
-                          source: "jetstream",
-                          error
-                        }).pipe(Effect.orElseSucceed(() => undefined))
-                      ),
-                      Effect.as(result)
-                    )
-                  : Effect.succeed(result)
+              Stream.mapEffect(
+                withIncrementalImageCaching({
+                  storeRef,
+                  sourceName: "jetstream",
+                  limitOverride: cacheImagesLimit,
+                  includeThumbnails: !noCacheImagesThumbnails
+                })
               )
             )
           : baseStream;
@@ -675,27 +637,12 @@ const watchStoreCommand = Command.make(
       }
 
       if (cacheImages && cacheMode === "full") {
-        yield* Effect.gen(function* () {
-          yield* logWarn("Running full image cache scan", {
-            store: storeRef.name,
-            source: "store"
-          });
-          const cacheResult = yield* cacheStoreImages(storeRef, {
-            includeThumbnails: !noCacheImagesThumbnails,
-            ...(Option.isSome(cacheImagesLimit)
-              ? { limit: cacheImagesLimit.value }
-              : {})
-          });
-          yield* logInfo("Image cache complete", cacheResult);
-        }).pipe(
-          Effect.catchAll((error) =>
-            logWarn("Image cache failed", {
-              store: storeRef.name,
-              source: "store",
-              error
-            }).pipe(Effect.orElseSucceed(() => undefined))
-          )
-        );
+        yield* runInitialFullCacheScan({
+          storeRef,
+          sourceName: "store",
+          limitOverride: cacheImagesLimit,
+          includeThumbnails: !noCacheImagesThumbnails
+        });
       }
 
       const runCycle = Effect.gen(function* () {
@@ -872,37 +819,13 @@ const watchStoreCommand = Command.make(
 
       let outputStream = cacheImages
         ? baseStream.pipe(
-            Stream.mapEffect((result) =>
-              result.postsAdded > 0
-                ? Effect.gen(function* () {
-                    const cacheLimit = resolveCacheLimit(
-                      "new",
-                      result.postsAdded,
-                      cacheImagesLimit
-                    );
-                    yield* logInfo("Caching image embeds", {
-                      store: storeRef.name,
-                      source: "store",
-                      postsAdded: result.postsAdded
-                    });
-                    const cacheResult = yield* cacheStoreImages(storeRef, {
-                      includeThumbnails: !noCacheImagesThumbnails,
-                      ...(cacheLimit !== undefined && cacheLimit > 0
-                        ? { limit: cacheLimit }
-                        : {})
-                    });
-                    yield* logInfo("Image cache complete", cacheResult);
-                  }).pipe(
-                    Effect.catchAll((error) =>
-                      logWarn("Image cache failed", {
-                        store: storeRef.name,
-                        source: "store",
-                        error
-                      }).pipe(Effect.orElseSucceed(() => undefined))
-                    ),
-                    Effect.as(result)
-                  )
-                : Effect.succeed(result)
+            Stream.mapEffect(
+              withIncrementalImageCaching({
+                storeRef,
+                sourceName: "store",
+                limitOverride: cacheImagesLimit,
+                includeThumbnails: !noCacheImagesThumbnails
+              })
             )
           )
         : baseStream;
