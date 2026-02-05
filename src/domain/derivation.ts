@@ -48,7 +48,7 @@ export class StoreLineage extends Schema.Class<StoreLineage>("StoreLineage")({
 export class DerivationError extends Schema.TaggedError<DerivationError>()(
   "DerivationError",
   {
-    reason: Schema.String,
+    message: Schema.String,
     sourceStore: Schema.optional(StoreName),
     targetStore: Schema.optional(StoreName)
   }

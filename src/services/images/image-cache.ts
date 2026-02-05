@@ -200,7 +200,9 @@ export class ImageCache extends Context.Tag("@skygent/ImageCache")<
                       : Effect.void
                 })
               ),
-              Effect.catchAll(() => Effect.void)
+              Effect.catchAll((error) =>
+                Effect.logWarning("Image archive removal failed during invalidation", { error })
+              )
             );
           const removeStore = store
             .remove(request)

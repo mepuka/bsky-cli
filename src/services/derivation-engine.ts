@@ -217,7 +217,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
           Effect.gen(function* () {
             if (sourceRef.name === targetRef.name) {
               return yield* DerivationError.make({
-                reason: "Source and target stores must be different.",
+                message: "Source and target stores must be different.",
                 sourceStore: sourceRef.name,
                 targetStore: targetRef.name
               });
@@ -227,7 +227,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
             // service validates for safety (in case called from other contexts)
             if (options.mode === "EventTime" && isEffectfulFilter(filterExpr)) {
               return yield* DerivationError.make({
-                reason:
+                message:
                   "EventTime mode only supports pure filters. Use --mode derive-time for Trending/HasValidLinks.",
                 sourceStore: sourceRef.name,
                 targetStore: targetRef.name
@@ -263,7 +263,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
               const lastTargetSeq = yield* eventLog.getLastEventSeq(targetRef);
               if (Option.isSome(lastTargetSeq)) {
                 return yield* DerivationError.make({
-                  reason:
+                  message:
                     "Target store has existing data but no derivation checkpoint. Use --reset to rebuild or choose a new target store.",
                   sourceStore: sourceRef.name,
                   targetStore: targetRef.name
@@ -275,7 +275,7 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
               const checkpoint = checkpointOption.value;
               if (checkpoint.filterHash !== filterHash || checkpoint.evaluationMode !== options.mode) {
                 return yield* DerivationError.make({
-                  reason:
+                  message:
                     "Derivation settings have changed since last run. Use --reset to rebuild or choose a new target store.",
                   sourceStore: sourceRef.name,
                   targetStore: targetRef.name

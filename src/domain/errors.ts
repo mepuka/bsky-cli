@@ -73,12 +73,22 @@ export class CredentialError extends Schema.TaggedError<CredentialError>()(
 
 export class StoreNotFound extends Schema.TaggedError<StoreNotFound>()(
   "StoreNotFound",
-  { name: StoreName }
+  {
+    name: StoreName,
+    message: Schema.optionalWith(Schema.String, {
+      default: () => "Store not found"
+    })
+  }
 ) {}
 
 export class StoreAlreadyExists extends Schema.TaggedError<StoreAlreadyExists>()(
   "StoreAlreadyExists",
-  { name: StoreName }
+  {
+    name: StoreName,
+    message: Schema.optionalWith(Schema.String, {
+      default: () => "Store already exists"
+    })
+  }
 ) {}
 
 export class StoreIoError extends Schema.TaggedError<StoreIoError>()(
@@ -101,7 +111,12 @@ export const isStoreSourcesError = Schema.is(StoreSourcesError);
 
 export class FilterNotFound extends Schema.TaggedError<FilterNotFound>()(
   "FilterNotFound",
-  { name: Schema.String }
+  {
+    name: Schema.String,
+    message: Schema.optionalWith(Schema.String, {
+      default: () => "Filter not found"
+    })
+  }
 ) {}
 
 export class FilterLibraryError extends Schema.TaggedError<FilterLibraryError>()(

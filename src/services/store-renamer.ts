@@ -206,25 +206,33 @@ export class StoreRenamer extends Context.Tag("@skygent/StoreRenamer")<
                         (entry) => entry.name
                       );
                       yield* updateLineages(to, from, storeNames).pipe(
-                        Effect.catchAll(() => Effect.void)
+                        Effect.catchAll((error) =>
+                          Effect.logWarning("Rollback failed: revert lineages", { error })
+                        )
                       );
                     }
                     if (status.checkpointsUpdated) {
                       const stores = yield* manager.listStores();
                       const storeRefs = Chunk.toReadonlyArray(stores).map(toStoreRef);
                       yield* updateDerivationCheckpoints(to, from, storeRefs).pipe(
-                        Effect.catchAll(() => Effect.void)
+                        Effect.catchAll((error) =>
+                          Effect.logWarning("Rollback failed: revert checkpoints", { error })
+                        )
                       );
                     }
                     if (status.dirRenamed) {
                       yield* storeDb.removeClient(to);
                       yield* renameDirectory(fs, path, toPath, fromPath).pipe(
-                        Effect.catchAll(() => Effect.void)
+                        Effect.catchAll((error) =>
+                          Effect.logWarning("Rollback failed: revert directory rename", { error })
+                        )
                       );
                     }
                     if (status.catalogUpdated) {
                       yield* manager.renameStore(to, from).pipe(
-                        Effect.catchAll(() => Effect.void)
+                        Effect.catchAll((error) =>
+                          Effect.logWarning("Rollback failed: revert catalog rename", { error })
+                        )
                       );
                     }
                   });
@@ -280,7 +288,9 @@ export class StoreRenamer extends Context.Tag("@skygent/StoreRenamer")<
               Effect.ensuring(
                 Ref.get(state).pipe(
                   Effect.flatMap(rollback),
-                  Effect.catchAll(() => Effect.void),
+                  Effect.catchAll((error) =>
+                    Effect.logWarning("Rename rollback encountered errors", { error })
+                  ),
                   Effect.uninterruptible
                 )
               )

@@ -167,7 +167,7 @@ describe("DerivationEngine", () => {
         const error = result.left;
         expect(error._tag).toBe("DerivationError");
         if (error._tag === "DerivationError") {
-          expect(error.reason).toContain("Source and target stores must be different");
+          expect(error.message).toContain("Source and target stores must be different");
         }
       }
     }))
@@ -399,7 +399,7 @@ describe("DerivationEngine", () => {
         const error = result.left;
         expect(error._tag).toBe("DerivationError");
         if (error._tag === "DerivationError") {
-          expect(error.reason).toContain("Derivation settings have changed");
+          expect(error.message).toContain("Derivation settings have changed");
         }
       }
     }))
@@ -426,7 +426,7 @@ describe("DerivationEngine", () => {
         const error = result.left;
         expect(error._tag).toBe("DerivationError");
         if (error._tag === "DerivationError") {
-          expect(error.reason).toContain("Target store has existing data");
+          expect(error.message).toContain("Target store has existing data");
         }
       }
     }))
