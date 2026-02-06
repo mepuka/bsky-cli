@@ -441,7 +441,29 @@ export class CredentialStore extends Effect.Service<CredentialStore>()("@skygent
 
     const get = Effect.fn("CredentialStore.get")(() =>
       Effect.gen(function* () {
-        const filePayload = yield* loadFromFile();
+        // Fast path: overrides provide complete credentials — skip file I/O
+        if (overrides.identifier && overrides.password) {
+          return Option.some(
+            BskyCredentials.make({
+              identifier: overrides.identifier,
+              password: overrides.password
+            })
+          );
+        }
+        // Fast path: env vars provide complete credentials — skip file I/O
+        if (Option.isSome(envIdentifier) && Option.isSome(envPassword)) {
+          return Option.some(
+            BskyCredentials.make({
+              identifier: envIdentifier.value,
+              password: envPassword.value
+            })
+          );
+        }
+        // Tolerant file load: errors become Option.none() so the fallback chain
+        // can still merge partial results from overrides/env/config
+        const filePayload = yield* loadFromFile().pipe(
+          Effect.catchAll(() => Effect.succeed(Option.none<CredentialsPayload>()))
+        );
         const identifier = resolveIdentifier(filePayload);
         const password = resolvePassword(filePayload);
         if (!identifier || !password) {

@@ -5,7 +5,8 @@ import { BunContext } from "@effect/platform-bun";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import {
   CredentialStore,
-  CredentialsOverrides
+  CredentialsOverrides,
+  type CredentialsOverridesValue
 } from "../../src/services/credential-store.js";
 import { BskyCredentials } from "../../src/domain/credentials.js";
 
@@ -28,12 +29,19 @@ const removeTempDir = (path: string) =>
     }).pipe(Effect.provide(BunContext.layer))
   );
 
-const buildLayer = (storeRoot: string, envEntries: Array<readonly [string, string]>) => {
+const buildLayer = (
+  storeRoot: string,
+  envEntries: Array<readonly [string, string]>,
+  overrides?: CredentialsOverridesValue
+) => {
   const envLayer = envProvider(envEntries);
+  const overridesLayer = overrides
+    ? Layer.succeed(CredentialsOverrides, CredentialsOverrides.make(overrides))
+    : CredentialsOverrides.layer;
   const baseLayer = Layer.mergeAll(
     BunContext.layer,
     envLayer,
-    CredentialsOverrides.layer,
+    overridesLayer,
     Layer.succeed(ConfigOverrides, { storeRoot })
   );
   const appLayer = AppConfigService.layer.pipe(Layer.provideMerge(baseLayer));
@@ -72,7 +80,7 @@ describe("CredentialStore", () => {
     }
   });
 
-  test("env key overrides keyfile", async () => {
+  test("wrong env key results in no credentials (tolerant file load)", async () => {
     const tempDir = await makeTempDir();
     const writeLayer = buildLayer(tempDir, []);
     try {
@@ -94,24 +102,180 @@ describe("CredentialStore", () => {
       ]);
 
       const result = await Effect.runPromise(
-        Effect.either(
-          Effect.gen(function* () {
-            const store = yield* CredentialStore;
-            return yield* store.get();
-          }).pipe(Effect.provide(readLayer))
-        )
+        Effect.gen(function* () {
+          const store = yield* CredentialStore;
+          return yield* store.get();
+        }).pipe(Effect.provide(readLayer))
       );
 
-      expect(result._tag).toBe("Left");
-      if (result._tag === "Left") {
-        expect(result.left.message).toContain("decrypt");
+      expect(Option.isNone(result)).toBe(true);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("overrides take priority over file", async () => {
+    const tempDir = await makeTempDir();
+    const writeLayer = buildLayer(tempDir, []);
+    try {
+      // Save credentials with a keyfile
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CredentialStore;
+          yield* store.setKey();
+          yield* store.save(
+            BskyCredentials.make({
+              identifier: "file.bsky.social",
+              password: Redacted.make("file-password")
+            })
+          );
+        }).pipe(Effect.provide(writeLayer))
+      );
+
+      // Read with overrides — should return overrides, not file
+      const readLayer = buildLayer(tempDir, [], {
+        identifier: "override.bsky.social",
+        password: Redacted.make("override-password")
+      });
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CredentialStore;
+          return yield* store.get();
+        }).pipe(Effect.provide(readLayer))
+      );
+
+      expect(Option.isSome(result)).toBe(true);
+      if (Option.isSome(result)) {
+        expect(result.value.identifier).toBe("override.bsky.social");
+        expect(Redacted.value(result.value.password)).toBe("override-password");
       }
     } finally {
       await removeTempDir(tempDir);
     }
   });
 
-  test("missing key errors when credentials file exists", async () => {
+  test("env vars take priority over file", async () => {
+    const tempDir = await makeTempDir();
+    const writeLayer = buildLayer(tempDir, []);
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CredentialStore;
+          yield* store.setKey();
+          yield* store.save(
+            BskyCredentials.make({
+              identifier: "file.bsky.social",
+              password: Redacted.make("file-password")
+            })
+          );
+        }).pipe(Effect.provide(writeLayer))
+      );
+
+      const readLayer = buildLayer(tempDir, [
+        ["SKYGENT_IDENTIFIER", "env.bsky.social"],
+        ["SKYGENT_PASSWORD", "env-password"]
+      ]);
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CredentialStore;
+          return yield* store.get();
+        }).pipe(Effect.provide(readLayer))
+      );
+
+      expect(Option.isSome(result)).toBe(true);
+      if (Option.isSome(result)) {
+        expect(result.value.identifier).toBe("env.bsky.social");
+        expect(Redacted.value(result.value.password)).toBe("env-password");
+      }
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("tolerates corrupt file when overrides present", async () => {
+    const tempDir = await makeTempDir();
+    const writeLayer = buildLayer(tempDir, []);
+    try {
+      // Save credentials, then we'll read with wrong key + overrides
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CredentialStore;
+          yield* store.setKey();
+          yield* store.save(
+            BskyCredentials.make({
+              identifier: "file.bsky.social",
+              password: Redacted.make("file-password")
+            })
+          );
+        }).pipe(Effect.provide(writeLayer))
+      );
+
+      // Read with wrong key but with overrides — overrides win
+      const readLayer = buildLayer(
+        tempDir,
+        [["SKYGENT_CREDENTIALS_KEY", "wrong-key"]],
+        {
+          identifier: "override.bsky.social",
+          password: Redacted.make("override-password")
+        }
+      );
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CredentialStore;
+          return yield* store.get();
+        }).pipe(Effect.provide(readLayer))
+      );
+
+      expect(Option.isSome(result)).toBe(true);
+      if (Option.isSome(result)) {
+        expect(result.value.identifier).toBe("override.bsky.social");
+      }
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("tolerates corrupt file when env vars present", async () => {
+    const tempDir = await makeTempDir();
+    const writeLayer = buildLayer(tempDir, []);
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CredentialStore;
+          yield* store.setKey();
+          yield* store.save(
+            BskyCredentials.make({
+              identifier: "file.bsky.social",
+              password: Redacted.make("file-password")
+            })
+          );
+        }).pipe(Effect.provide(writeLayer))
+      );
+
+      // Read with wrong key but with env vars — env wins
+      const readLayer = buildLayer(tempDir, [
+        ["SKYGENT_CREDENTIALS_KEY", "wrong-key"],
+        ["SKYGENT_IDENTIFIER", "env.bsky.social"],
+        ["SKYGENT_PASSWORD", "env-password"]
+      ]);
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CredentialStore;
+          return yield* store.get();
+        }).pipe(Effect.provide(readLayer))
+      );
+
+      expect(Option.isSome(result)).toBe(true);
+      if (Option.isSome(result)) {
+        expect(result.value.identifier).toBe("env.bsky.social");
+        expect(Redacted.value(result.value.password)).toBe("env-password");
+      }
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("missing key returns none when credentials file exists (tolerant)", async () => {
     const tempDir = await makeTempDir();
     const writeLayer = buildLayer(tempDir, [
       ["SKYGENT_CREDENTIALS_KEY", "base-key"]
@@ -132,18 +296,13 @@ describe("CredentialStore", () => {
 
       const readLayer = buildLayer(tempDir, []);
       const result = await Effect.runPromise(
-        Effect.either(
-          Effect.gen(function* () {
-            const store = yield* CredentialStore;
-            return yield* store.get();
-          }).pipe(Effect.provide(readLayer))
-        )
+        Effect.gen(function* () {
+          const store = yield* CredentialStore;
+          return yield* store.get();
+        }).pipe(Effect.provide(readLayer))
       );
 
-      expect(result._tag).toBe("Left");
-      if (result._tag === "Left") {
-        expect(result.left.message).toContain("no credentials key");
-      }
+      expect(Option.isNone(result)).toBe(true);
     } finally {
       await removeTempDir(tempDir);
     }

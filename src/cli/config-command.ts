@@ -298,10 +298,10 @@ const configCredentialsKeyCommand = Command.make("key", {}).pipe(
 const credentialSetCommand = Command.make(
   "set",
   {
-    identifier: Options.text("identifier").pipe(
+    identifier: Options.text("id").pipe(
       Options.withDescription("Bluesky handle or DID")
     ),
-    password: Options.redacted("password").pipe(
+    password: Options.redacted("pw").pipe(
       Options.withDescription("Bluesky app password (redacted)")
     )
   },
@@ -339,7 +339,7 @@ const configCredentialsCommand = Command.make("credentials", {}).pipe(
   Command.withDescription(
     withExamples("Manage stored credentials", [
       "skygent config credentials status",
-      "skygent config credentials set --identifier handle.bsky.social --password app-password",
+      "skygent config credentials set --id handle.bsky.social --pw app-password",
       "skygent config credentials clear",
       "skygent config credentials key set"
     ])
