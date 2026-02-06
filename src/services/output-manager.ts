@@ -44,10 +44,10 @@ const ensureTrailingNewline = (value: string) =>
   value.endsWith("\n") ? value : `${value}\n`;
 
 const encodePostJson = (post: Post) =>
-  Schema.encodeSync(Schema.parseJson(PostSchema))(post);
+  Schema.encode(Schema.parseJson(PostSchema))(post).pipe(Effect.orDie);
 
 const encodeManifestJson = (manifest: unknown) =>
-  Schema.encodeSync(Schema.parseJson(Schema.Unknown))(manifest);
+  Schema.encode(Schema.parseJson(Schema.Unknown))(manifest).pipe(Effect.orDie);
 
 const appendFileString = (
   fs: FileSystem.FileSystem,
@@ -138,14 +138,16 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
           if (jsonPath && jsonFirstRef) {
             const isFirst = yield* Ref.get(jsonFirstRef);
             let first = isFirst;
-            const jsonChunk = posts
-              .map((post) => {
-                const prefix = first ? "" : ",";
-                first = false;
-                return `${prefix}${encodePostJson(post)}`;
-              })
-              .join("");
-            yield* appendFileString(fs, jsonPath, jsonChunk);
+            const encodedParts = yield* Effect.forEach(posts, (post) =>
+              encodePostJson(post).pipe(
+                Effect.map((encoded) => {
+                  const prefix = first ? "" : ",";
+                  first = false;
+                  return `${prefix}${encoded}`;
+                })
+              )
+            );
+            yield* appendFileString(fs, jsonPath, encodedParts.join(""));
             if (isFirst) {
               yield* Ref.set(jsonFirstRef, false);
             }
@@ -184,10 +186,11 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
         }
       };
       const manifestPath = path.join(outputDir, "manifest.json");
+      const manifestJson = yield* encodeManifestJson(manifest);
       yield* fs
         .writeFileString(
           manifestPath,
-          ensureTrailingNewline(encodeManifestJson(manifest))
+          ensureTrailingNewline(manifestJson)
         )
         .pipe(Effect.mapError(toStoreIoError(manifestPath)));
 

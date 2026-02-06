@@ -71,7 +71,7 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
-          BASE_URL="https://github.com/mepuka/bsky-cli/releases/download/v${VERSION}"
+          BASE_URL="https://github.com/mepuka/skygent-bsky/releases/download/v${VERSION}"
 
           SHA_DARWIN_ARM64=$(shasum -a 256 skygent-darwin-arm64 | awk '{print $1}')
           SHA_DARWIN_X64=$(shasum -a 256 skygent-darwin-x64 | awk '{print $1}')
@@ -81,7 +81,7 @@ jobs:
           cat > /tmp/skygent.rb << FORMULA
           class Skygent < Formula
             desc "Effect-based CLI for Bluesky monitoring, querying, and analytics"
-            homepage "https://github.com/mepuka/bsky-cli"
+            homepage "https://github.com/mepuka/skygent-bsky"
             version "${VERSION}"
             license "MIT"
 

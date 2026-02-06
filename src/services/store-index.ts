@@ -157,13 +157,7 @@ const buildColumnFtsQuery = (column: string, query: string) => {
   if (trimmed.length === 0) {
     return "";
   }
-  const columnPrefix = `${column.toLowerCase()}:`;
-  if (trimmed.toLowerCase().startsWith(columnPrefix)) {
-    return trimmed;
-  }
-  return hasFtsSyntax(trimmed)
-    ? `${column}:(${trimmed})`
-    : buildColumnLiteralFtsQuery(column, trimmed);
+  return buildColumnLiteralFtsQuery(column, trimmed);
 };
 
 const decodeEntryRow = (row: typeof postEntryRow.Type) =>

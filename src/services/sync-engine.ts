@@ -550,7 +550,7 @@ export class SyncEngine extends Effect.Service<SyncEngine>()("@skygent/SyncEngin
                           Effect.flatMap((now) => saveCheckpoint(state, now))
                         )
                       ),
-                      Effect.catchAll(() => Effect.void)
+                      Effect.catchAll((e) => Effect.logDebug("Checkpoint save failed in finalizer").pipe(Effect.annotateLogs("error", String(e))))
                     )
                   )
                 )

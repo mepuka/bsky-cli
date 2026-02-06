@@ -879,7 +879,7 @@ export const queryCommand = Command.make(
 
       if (count) {
         if (extractImages) {
-          const total = yield* Stream.runFold(imageStream, 0, (acc) => acc + 1);
+          const total = yield* Stream.runCount(imageStream);
           yield* writeJson(total);
           yield* warnIfScanLimitReached();
           return;
@@ -892,7 +892,7 @@ export const queryCommand = Command.make(
             }).pipe(
               Effect.map((counts) => counts.reduce((sum, value) => sum + value, 0))
             )
-          : yield* Stream.runFold(postStream, 0, (acc) => acc + 1);
+          : yield* Stream.runCount(postStream);
         const limited = Option.match(limit, {
           onNone: () => total,
           onSome: (value) => Math.min(total, value)
