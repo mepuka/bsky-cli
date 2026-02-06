@@ -1351,22 +1351,32 @@ export const storeMaterialize = Command.make(
   )
 );
 
+const storeStatsHandler = ({ name }: { readonly name: StoreName }) =>
+  Effect.gen(function* () {
+    const stats = yield* StoreStats;
+    const storeRef = yield* loadStoreRef(name);
+    const result = yield* stats.stats(storeRef);
+    yield* writeJson(result);
+  });
+
 export const storeStats = Command.make(
   "stats",
   { name: storeNameArg },
-  ({ name }) =>
-    Effect.gen(function* () {
-      const stats = yield* StoreStats;
-      const storeRef = yield* loadStoreRef(name);
-      const result = yield* stats.stats(storeRef);
-      yield* writeJson(result);
-    })
+  storeStatsHandler
 ).pipe(
   Command.withDescription(
     withExamples("Show summary stats for a store", [
       "skygent store stats my-store"
     ])
   )
+);
+
+export const storeInfo = Command.make(
+  "info",
+  { name: storeNameArg },
+  storeStatsHandler
+).pipe(
+  Command.withDescription("Alias for 'store stats'")
 );
 
 export const storeAnalytics = Command.make(
@@ -1584,6 +1594,7 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeDelete,
     storeMaterialize,
     storeStats,
+    storeInfo,
     storeAnalytics,
     storeSummary,
     storeCache,

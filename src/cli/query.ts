@@ -39,7 +39,6 @@ import { withExamples } from "./help.js";
 import { filterHelpOption, filterOption, filterJsonOption } from "./shared-options.js";
 import { filterByFlags } from "../typeclass/chunk.js";
 import { StoreManager } from "../services/store-manager.js";
-import { StoreNotFound } from "../domain/errors.js";
 import { LocaleStringOrder, StorePostOrder } from "../domain/order.js";
 import { formatSchemaError } from "./shared.js";
 import { mergeOrderedStreams } from "./stream-merge.js";
@@ -275,12 +274,18 @@ const loadStoreRefs = (names: ReadonlyArray<StoreName>) =>
     );
     const missing = names.filter((_, index) => Option.isNone(results[index]!));
     if (missing.length > 0) {
+      const allStores = yield* manager.listStores();
+      const available = Chunk.toReadonlyArray(allStores).map((s) => s.name);
+      const storeList = available.length > 0 ? ` Available: ${available.join(", ")}.` : "";
       if (missing.length === 1 && names.length === 1) {
-        return yield* StoreNotFound.make({ name: missing[0]! });
+        return yield* CliInputError.make({
+          message: `Unknown store: "${missing[0]}".${storeList} Usage: skygent query <store> [options]`,
+          cause: { missing, available, errorCode: "STORE_NOT_FOUND" }
+        });
       }
       return yield* CliInputError.make({
-        message: `Unknown stores: ${missing.join(", ")}. Usage: skygent query <store> [options]`,
-        cause: { missing }
+        message: `Unknown stores: ${missing.join(", ")}.${storeList} Usage: skygent query <store> [options]`,
+        cause: { missing, available }
       });
     }
     const stores = results
@@ -387,7 +392,7 @@ export const queryCommand = Command.make(
           });
         }
       }
-      if (count && (resolveImages || cacheImages)) {
+      if (count && Option.isNone(countBy) && (resolveImages || cacheImages)) {
         return yield* CliInputError.make({
           message: "--count cannot be combined with --resolve-images or --cache-images.",
           cause: { count, resolveImages, cacheImages }
@@ -395,12 +400,6 @@ export const queryCommand = Command.make(
       }
       if (Option.isSome(countBy)) {
         const countByValue = countBy.value;
-        if (count) {
-          return yield* CliInputError.make({
-            message: "--count-by cannot be combined with --count.",
-            cause: { countBy: countByValue, count }
-          });
-        }
         if (Option.isSome(fields)) {
           return yield* CliInputError.make({
             message: "--count-by cannot be combined with --fields.",
@@ -515,7 +514,7 @@ export const queryCommand = Command.make(
           cause: { format: outputFormat }
         });
       }
-      if (count && selectorsSource === "explicit") {
+      if (count && Option.isNone(countBy) && selectorsSource === "explicit") {
         return yield* CliInputError.make({
           message: "--count cannot be combined with --fields.",
           cause: { count, fields }
@@ -557,7 +556,7 @@ export const queryCommand = Command.make(
       const resolvedScanLimit =
         hasFilter
           ? userScanLimit ?? defaultScanLimit
-          : userScanLimit ?? (extractImages ? undefined : userLimit);
+          : userScanLimit ?? (extractImages || Option.isSome(countBy) ? undefined : userLimit);
       if (defaultScanLimit !== undefined) {
         yield* output
           .writeStderr(

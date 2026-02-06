@@ -21,6 +21,11 @@ export type CliErrorEnvelope = {
 const stripAnsi = (value: string) =>
   value.replace(/\u001b\[[0-9;]*m/g, "");
 
+const verbLikeNames = new Set([
+  "list", "show", "info", "create", "delete", "get", "set",
+  "remove", "update", "describe", "status", "help"
+]);
+
 const formatValidationError = (error: ValidationError.ValidationError) => {
   const text = HelpDoc.toAnsiText(error.error).trimEnd();
   return stripAnsi(text.length > 0 ? text : "Invalid command input. Use --help for usage.");
@@ -47,7 +52,11 @@ export const formatErrorMessage = (error: unknown, agentPayload?: AgentErrorPayl
     return error.message;
   }
   if (error instanceof StoreNotFound) {
-    return `Store "${error.name}" does not exist.`;
+    const base = `Store "${error.name}" does not exist.`;
+    if (verbLikeNames.has(error.name)) {
+      return `${base} "${error.name}" looks like a subcommand — this command may use positional arguments instead.`;
+    }
+    return base;
   }
   if (error instanceof StoreAlreadyExists) {
     return `Store "${error.name}" already exists.`;
@@ -72,10 +81,11 @@ export const formatErrorMessage = (error: unknown, agentPayload?: AgentErrorPayl
 export const errorType = (error: unknown, agentPayload?: AgentErrorPayload): string => {
   if (agentPayload) return agentPayload.error;
   if (ValidationError.isValidationError(error)) return "ValidationError";
-  if (error instanceof Error) return error.name;
+  // Check _tag BEFORE instanceof Error — Schema.TaggedError subclasses may shadow Error.name
   if (typeof error === "object" && error !== null && "_tag" in error) {
     return String((error as { readonly _tag?: unknown })._tag ?? "UnknownError");
   }
+  if (error instanceof Error) return error.name;
   return "UnknownError";
 };
 
@@ -130,7 +140,10 @@ export const errorSuggestion = (
 ): string | undefined => {
   if (agentPayload?.fix) return agentPayload.fix;
   if (error instanceof StoreNotFound) {
-    return `Run: skygent store create ${error.name}`;
+    if (verbLikeNames.has(error.name)) {
+      return "Run: skygent --help";
+    }
+    return "Run: skygent store list (to see available stores)";
   }
   if (error instanceof StoreAlreadyExists) {
     return "Run: skygent store list";

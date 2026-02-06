@@ -18,13 +18,14 @@ import {
   jsonErrorsEnabled,
   makeErrorEnvelope
 } from "./src/cli/error-envelope.js";
+import { relocateGlobalOptions } from "./src/cli/argv.js";
 
 const cli = Command.run(app, {
   name: "skygent",
   version: pkg.version
 });
 
-const program = cli(process.argv).pipe(
+const program = cli(relocateGlobalOptions(process.argv)).pipe(
   Effect.tapError((error) => {
     const agentPayload = getAgentPayload(error);
     const code = exitCodeFor(error);
