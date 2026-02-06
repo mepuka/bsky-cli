@@ -56,7 +56,7 @@
  */
 
 import { FileSystem, Path } from "@effect/platform";
-import { Chunk, Clock, Context, Effect, Exit, Layer, Option, Schema, Scope } from "effect";
+import { Chunk, Clock, Effect, Exit, Option, Schema, Scope } from "effect";
 import * as Reactivity from "@effect/experimental/Reactivity";
 import * as Migrator from "@effect/sql/Migrator";
 import { storeCatalogMigrations } from "../db/migrations/store-catalog/index.js";
@@ -131,117 +131,9 @@ const storeRefFromMetadata = (metadata: StoreMetadata) =>
  * yield* manager.deleteStore("old-store");
  * ```
  */
-export class StoreManager extends Context.Tag("@skygent/StoreManager")<
-  StoreManager,
-  {
-    /**
-     * Creates a new store or returns existing if name already exists.
-     * Stores creation timestamp and configuration in the catalog.
-     *
-     * @param name - Unique name for the store
-     * @param config - Store configuration including filter and error policy
-     * @returns Effect resolving to StoreRef (existing or newly created)
-     * @throws {StoreIoError} When database operations fail
-     */
-    readonly createStore: (
-      name: StoreName,
-      config: StoreConfig,
-      description?: string
-    ) => Effect.Effect<StoreRef, StoreIoError>;
-
-    /**
-     * Retrieves a store reference by name.
-     *
-     * @param name - Store name to look up
-     * @returns Effect resolving to Some(StoreRef) if found, None otherwise
-     * @throws {StoreIoError} When database operations fail
-     */
-    readonly getStore: (
-      name: StoreName
-    ) => Effect.Effect<Option.Option<StoreRef>, StoreIoError>;
-
-    /**
-     * Lists all stores sorted alphabetically by name.
-     *
-     * @returns Effect resolving to chunk of StoreMetadata
-     * @throws {StoreIoError} When database operations fail
-     */
-    readonly listStores: () => Effect.Effect<Chunk.Chunk<StoreMetadata>, StoreIoError>;
-
-    /**
-     * Retrieves store metadata by name.
-     *
-     * @param name - Store name to look up
-     * @returns Effect resolving to Some(StoreMetadata) if found, None otherwise
-     * @throws {StoreIoError} When database operations fail
-     */
-    readonly getMetadata: (
-      name: StoreName
-    ) => Effect.Effect<Option.Option<StoreMetadata>, StoreIoError>;
-
-    /**
-     * Retrieves configuration for a specific store.
-     *
-     * @param name - Store name to look up
-     * @returns Effect resolving to Some(StoreConfig) if found, None otherwise
-     * @throws {StoreIoError} When database operations fail or config parsing fails
-     */
-    readonly getConfig: (
-      name: StoreName
-    ) => Effect.Effect<Option.Option<StoreConfig>, StoreIoError>;
-
-    /**
-     * Deletes a store from the catalog.
-     * Note: This only removes the catalog entry, not the store files.
-     *
-     * @param name - Store name to delete
-     * @returns Effect resolving to void
-     * @throws {StoreIoError} When database operations fail
-     */
-    readonly deleteStore: (
-      name: StoreName
-    ) => Effect.Effect<void, StoreIoError>;
-
-    /**
-     * Renames a store in the catalog.
-     *
-     * This updates the store name and root path while preserving creation time.
-     *
-     * @param from - Existing store name
-     * @param to - New store name
-     * @returns Effect resolving to the updated StoreRef
-     * @throws {StoreNotFound} If the source store does not exist
-     * @throws {StoreAlreadyExists} If the target store already exists
-     * @throws {StoreIoError} When database operations fail
-     */
-    readonly renameStore: (
-      from: StoreName,
-      to: StoreName
-    ) => Effect.Effect<StoreRef, StoreNotFound | StoreAlreadyExists | StoreIoError>;
-
-    /**
-     * Updates the store description.
-     *
-     * @param name - Store name to update
-     * @param description - New description (or null to clear)
-     * @returns Effect resolving to updated StoreMetadata
-     * @throws {StoreNotFound} If the store does not exist
-     * @throws {StoreIoError} When database operations fail
-     */
-    readonly updateDescription: (
-      name: StoreName,
-      description: string | null
-    ) => Effect.Effect<StoreMetadata, StoreNotFound | StoreIoError>;
-  }
->() {
-  /**
-   * Scoped layer that creates the store manager service.
-   * Manages SQLite client lifecycle with automatic cleanup.
-   * Requires: AppConfigService, FileSystem, Path, Reactivity
-   */
-  static readonly layer = Layer.scoped(
-    StoreManager,
-    Effect.gen(function* () {
+export class StoreManager extends Effect.Service<StoreManager>()("@skygent/StoreManager", {
+  dependencies: [Reactivity.layer],
+  scoped: Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -496,7 +388,7 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
         }).pipe(Effect.mapError(toStoreIoError(manifestPath)))
       );
 
-      return StoreManager.of({
+      return {
         createStore,
         getStore,
         listStores,
@@ -505,7 +397,8 @@ export class StoreManager extends Context.Tag("@skygent/StoreManager")<
         deleteStore,
         renameStore,
         updateDescription
-      });
+      };
     })
-  ).pipe(Layer.provide(Reactivity.layer));
+}) {
+  static readonly layer = StoreManager.Default;
 }

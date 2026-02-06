@@ -40,7 +40,7 @@
  * ```
  */
 
-import { Context, Duration, Effect, Layer, Match } from "effect";
+import { Duration, Effect, Match } from "effect";
 import { FilterCompileError } from "../domain/errors.js";
 import type { FilterExpr } from "../domain/filter.js";
 import type { FilterErrorPolicy } from "../domain/policies.js";
@@ -221,56 +221,13 @@ const validateExpr: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError
  * yield* compiler.compile(complexFilter); // OK
  * ```
  */
-export class FilterCompiler extends Context.Tag("@skygent/FilterCompiler")<
-  FilterCompiler,
-  {
-    /**
-     * Compiles a filter spec by validating its expression.
-     * Returns the original expression if valid.
-     *
-     * @param spec - The filter specification containing the expression to validate
-     * @returns Effect resolving to the validated FilterExpr
-     * @throws {FilterCompileError} When validation fails with detailed message
-     */
-    readonly compile: (spec: FilterSpec) => Effect.Effect<FilterExpr, FilterCompileError>;
-
-    /**
-     * Validates a filter expression without a spec wrapper.
-     * Useful for re-validating expressions or standalone validation.
-     *
-     * @param expr - The filter expression to validate
-     * @returns Effect resolving to void on success
-     * @throws {FilterCompileError} When validation fails
-     */
-    readonly validate: (expr: FilterExpr) => Effect.Effect<void, FilterCompileError>;
+export class FilterCompiler extends Effect.Service<FilterCompiler>()("@skygent/FilterCompiler", {
+  succeed: {
+    compile: Effect.fn("FilterCompiler.compile")((spec: FilterSpec) =>
+      validateExpr(spec.expr).pipe(Effect.as(spec.expr))
+    ),
+    validate: Effect.fn("FilterCompiler.validate")(validateExpr)
   }
->() {
-  /**
-   * Layer that provides the filter compiler service.
-   * Stateless service with no dependencies.
-   */
-  static readonly layer = Layer.succeed(
-    FilterCompiler,
-    FilterCompiler.of({
-      /**
-       * Compiles a filter specification by validating its expression.
-       * Returns the expression unchanged if valid.
-       *
-       * @param spec - Filter specification with expr field
-       * @returns Validated filter expression
-       */
-      compile: Effect.fn("FilterCompiler.compile")((spec: FilterSpec) =>
-        validateExpr(spec.expr).pipe(Effect.as(spec.expr))
-      ),
-
-      /**
-       * Validates a filter expression recursively.
-       * Checks all constraints based on expression type.
-       *
-       * @param expr - Filter expression to validate
-       * @returns Effect that succeeds if valid, fails with FilterCompileError otherwise
-       */
-      validate: Effect.fn("FilterCompiler.validate")(validateExpr)
-    })
-  );
+}) {
+  static readonly layer = FilterCompiler.Default;
 }

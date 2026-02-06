@@ -1,5 +1,5 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Context, Effect, Exit, Layer, Ref, Scope } from "effect";
+import { Effect, Exit, Ref, Scope } from "effect";
 import * as Reactivity from "@effect/experimental/Reactivity";
 import * as Migrator from "@effect/sql/Migrator";
 import { storeIndexMigrations } from "../db/migrations/store-index/index.js";
@@ -80,53 +80,9 @@ const toStoreIoError = (path: StorePath) => (cause: unknown) =>
  * );
  * ```
  */
-export class StoreDb extends Context.Tag("@skygent/StoreDb")<
-  StoreDb,
-  {
-    /**
-     * Execute a database operation with a cached client for the specified store.
-     *
-     * This method automatically retrieves an existing connection or creates a new one,
-     * runs the provided operation, and keeps the connection cached for future use.
-     * The connection remains open until explicitly removed via `removeClient` or
-     * service shutdown.
-     *
-     * @param store - Store reference containing name and root path
-     * @param run - Effect function that receives the SQL client and returns a result
-     * @returns Effect containing the operation result, potentially failing with StoreIoError
-     * @example
-     * ```typescript
-     * const posts = yield* storeDb.withClient(store, (client) =>
-     *   client`SELECT * FROM posts LIMIT 10`
-     * );
-     * ```
-     */
-    readonly withClient: <A, E>(
-      store: StoreRef,
-      run: (client: SqlClient.SqlClient) => Effect.Effect<A, E>
-    ) => Effect.Effect<A, StoreIoError | E>;
-
-    /**
-     * Remove a cached database connection for a store.
-     *
-     * Closes the connection gracefully (running PRAGMA optimize first) and
-     * removes it from the cache. Subsequent calls to `withClient` for this
-     * store will create a new connection.
-     *
-     * @param storeName - The name of the store whose connection should be removed
-     * @returns Effect that completes when the connection is closed
-     * @example
-     * ```typescript
-     * // Clean up a store's connection when no longer needed
-     * yield* storeDb.removeClient("myStore");
-     * ```
-     */
-    readonly removeClient: (storeName: string) => Effect.Effect<void>;
-  }
->() {
-  static readonly layer = Layer.scoped(
-    StoreDb,
-    Effect.gen(function* () {
+export class StoreDb extends Effect.Service<StoreDb>()("@skygent/StoreDb", {
+  dependencies: [Reactivity.layer],
+  scoped: Effect.gen(function* () {
       const config = yield* AppConfigService;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -197,9 +153,7 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
             return c;
           }).pipe(
             Effect.onError((cause) =>
-              Scope.close(clientScope, Exit.failCause(cause)).pipe(
-                Effect.catchAll(() => Effect.void)
-              )
+              Scope.close(clientScope, Exit.failCause(cause))
             )
           );
 
@@ -255,7 +209,8 @@ export class StoreDb extends Context.Tag("@skygent/StoreDb")<
           )
         );
 
-      return StoreDb.of({ withClient, removeClient });
+      return { withClient, removeClient };
     })
-  ).pipe(Layer.provide(Reactivity.layer));
+}) {
+  static readonly layer = StoreDb.Default;
 }

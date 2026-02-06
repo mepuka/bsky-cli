@@ -1,5 +1,5 @@
 import * as Persistence from "@effect/experimental/Persistence";
-import { Clock, Context, Effect, Exit, Layer, Option, PrimaryKey, Schema } from "effect";
+import { Clock, Effect, Exit, Option, PrimaryKey, Schema } from "effect";
 import { createHash } from "node:crypto";
 import { ImageCacheError, isImageCacheError } from "../../domain/errors.js";
 import { Timestamp } from "../../domain/primitives.js";
@@ -39,19 +39,8 @@ const toIndexError = (path: string, operation: string) => (cause: unknown) => {
   });
 };
 
-export class ImageRefIndex extends Context.Tag("@skygent/ImageRefIndex")<
-  ImageRefIndex,
-  {
-    readonly get: (path: string) => Effect.Effect<Option.Option<ImageRefEntry>, ImageCacheError>;
-    readonly ensure: (path: string) => Effect.Effect<ImageRefEntry, ImageCacheError>;
-    readonly increment: (path: string) => Effect.Effect<ImageRefEntry, ImageCacheError>;
-    readonly decrement: (path: string) => Effect.Effect<number, ImageCacheError>;
-    readonly remove: (path: string) => Effect.Effect<void, ImageCacheError>;
-  }
->() {
-  static readonly layer = Layer.scoped(
-    ImageRefIndex,
-    Effect.gen(function* () {
+export class ImageRefIndex extends Effect.Service<ImageRefIndex>()("@skygent/ImageRefIndex", {
+  scoped: Effect.gen(function* () {
       const persistence = yield* Persistence.ResultPersistence;
       const store = yield* persistence.make({ storeId: "image-ref-index" });
 
@@ -133,7 +122,8 @@ export class ImageRefIndex extends Context.Tag("@skygent/ImageRefIndex")<
         })
       );
 
-      return ImageRefIndex.of({ get: getEntry, ensure, increment, decrement, remove });
+      return { get: getEntry, ensure, increment, decrement, remove };
     })
-  );
+}) {
+  static readonly layer = ImageRefIndex.Default;
 }

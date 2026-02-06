@@ -40,7 +40,7 @@
 import { FileSystem, Path } from "@effect/platform";
 import { formatSchemaError } from "./shared.js";
 import { SystemError, type PlatformError } from "@effect/platform/Error";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { FilterExprSchema } from "../domain/filter.js";
 import type { FilterExpr } from "../domain/filter.js";
 import { FilterLibraryError, FilterNotFound } from "../domain/errors.js";
@@ -144,80 +144,8 @@ const filterPath = (path: Path.Path, root: string, name: StoreName) =>
  * const runnable = program.pipe(Effect.provide(FilterLibrary.layer));
  * ```
  */
-export class FilterLibrary extends Context.Tag("@skygent/FilterLibrary")<
-  FilterLibrary,
-  {
-    /**
-     * Lists all saved filter names.
-     * Returns filter names without the `.json` extension, sorted alphabetically.
-     * Returns an empty array if the filters directory doesn't exist.
-     * @returns An Effect that resolves to an array of filter names
-     * @throws {FilterLibraryError} If listing filters fails
-     */
-    readonly list: () => Effect.Effect<ReadonlyArray<string>, FilterLibraryError>;
-
-    /**
-     * Retrieves a saved filter expression by name.
-     * @param name - The name of the filter to retrieve
-     * @returns An Effect that resolves to the filter expression
-     * @throws {FilterNotFound} If the filter doesn't exist
-     * @throws {FilterLibraryError} If reading or parsing the filter fails
-     */
-    readonly get: (
-      name: StoreName
-    ) => Effect.Effect<
-      FilterExpr,
-      FilterNotFound | FilterLibraryError
-    >;
-
-    /**
-     * Saves a filter expression to the library.
-     * Creates the filters directory if it doesn't exist.
-     * Overwrites existing filters with the same name.
-     * @param name - The name for the filter
-     * @param expr - The filter expression to save
-     * @returns An Effect that resolves when the filter is saved
-     * @throws {FilterLibraryError} If saving fails
-     */
-    readonly save: (
-      name: StoreName,
-      expr: FilterExpr
-    ) => Effect.Effect<void, FilterLibraryError>;
-
-    /**
-     * Removes a filter from the library.
-     * @param name - The name of the filter to remove
-     * @returns An Effect that resolves when the filter is removed
-     * @throws {FilterNotFound} If the filter doesn't exist
-     * @throws {FilterLibraryError} If removing fails
-     */
-    readonly remove: (
-      name: StoreName
-    ) => Effect.Effect<void, FilterNotFound | FilterLibraryError>;
-
-    /**
-     * Validates all saved filters.
-     * Checks each filter for proper JSON syntax and valid filter expression structure.
-     * Returns results for each filter indicating success or failure with error details.
-     * @returns An Effect that resolves to validation results for each filter
-     * @throws {FilterLibraryError} If the validation process itself fails
-     */
-    readonly validateAll: () => Effect.Effect<
-      ReadonlyArray<{ readonly name: string; readonly ok: boolean; readonly error?: string }>,
-      FilterLibraryError
-    >;
-  }
->() {
-  /**
-   * Production layer that provides the FilterLibrary service.
-   * Requires FileSystem, Path, and AppConfigService to be provided.
-   *
-   * The implementation stores filters as JSON files in the filters directory,
-   * with each filter named `{filterName}.json`.
-   */
-  static readonly layer = Layer.effect(
-    FilterLibrary,
-    Effect.gen(function* () {
+export class FilterLibrary extends Effect.Service<FilterLibrary>()("@skygent/FilterLibrary", {
+  effect: Effect.gen(function* () {
       const config = yield* AppConfigService;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -369,7 +297,8 @@ export class FilterLibrary extends Context.Tag("@skygent/FilterLibrary")<
         })
       );
 
-      return FilterLibrary.of({ list, get, save, remove, validateAll });
+      return { list, get, save, remove, validateAll };
     })
-  );
+}) {
+  static readonly layer = FilterLibrary.Default;
 }

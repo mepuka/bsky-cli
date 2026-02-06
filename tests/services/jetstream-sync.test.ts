@@ -129,7 +129,7 @@ const makeJetstreamLayer = (
 
 const profileLayer = Layer.succeed(
   ProfileResolver,
-  ProfileResolver.of({
+  ProfileResolver.make({
     handleForDid: () => Effect.succeed(sampleHandle)
   })
 );
@@ -473,7 +473,7 @@ describe("JetstreamSyncEngine", () => {
     let shutdowns = 0;
     const reporterLayer = Layer.succeed(
       SyncReporter,
-      SyncReporter.of({
+      SyncReporter.make({
         report: () => Effect.void,
         warn: (message, data) =>
           Effect.sync(() => {

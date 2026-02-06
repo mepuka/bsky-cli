@@ -22,11 +22,9 @@ import {
   Cache,
   Clock,
   Config,
-  Context,
   Duration,
   Exit,
   Effect,
-  Layer,
   Match,
   Option,
   ParseResult,
@@ -170,68 +168,8 @@ const entryStatusError = (
  * caching. Lookup methods check cache only, while resolve methods will fetch
  * from the network if not cached.
  */
-export class IdentityResolver extends Context.Tag("@skygent/IdentityResolver")<
-  IdentityResolver,
-  {
-    /**
-     * Looks up a DID from cache by handle (cache-only, no network request).
-     *
-     * @param handle - The handle to look up (e.g., "alice.bsky.social")
-     * @returns Effect resolving to Option of DID, or BskyError on cache failure
-     */
-    readonly lookupDid: (handle: string) => Effect.Effect<Option.Option<Did>, BskyError>;
-
-    /**
-     * Looks up a handle from cache by DID (cache-only, no network request).
-     *
-     * @param did - The DID to look up (e.g., "did:plc:...")
-     * @returns Effect resolving to Option of Handle, or BskyError on cache failure
-     */
-    readonly lookupHandle: (did: string) => Effect.Effect<Option.Option<Handle>, BskyError>;
-
-    /**
-     * Resolves a handle to a DID, fetching from network if not cached.
-     *
-     * @param handle - The handle to resolve
-     * @returns Effect resolving to DID, or BskyError on resolution failure
-     */
-    readonly resolveDid: (handle: string) => Effect.Effect<Did, BskyError>;
-
-    /**
-     * Resolves a DID to a handle, fetching from network if not cached.
-     *
-     * @param did - The DID to resolve
-     * @returns Effect resolving to Handle, or BskyError on resolution failure
-     */
-    readonly resolveHandle: (did: string) => Effect.Effect<Handle, BskyError>;
-
-    /**
-     * Resolves an identity (handle or DID) to full identity info with verification.
-     *
-     * @param identifier - The handle or DID to resolve
-     * @returns Effect resolving to IdentityInfo with did and handle, or BskyError
-     */
-    readonly resolveIdentity: (
-      identifier: string
-    ) => Effect.Effect<IdentityInfo, BskyError>;
-
-    /**
-     * Manually caches a profile's identity information.
-     *
-     * @param input - Object containing did, handle, and optional verified flag and source
-     * @returns Effect resolving to void, or BskyError on cache failure
-     */
-    readonly cacheProfile: (input: {
-      readonly did: Did;
-      readonly handle: Handle;
-      readonly verified?: boolean;
-      readonly source?: IdentityCacheEntry["source"];
-    }) => Effect.Effect<void, BskyError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    IdentityResolver,
-    Effect.gen(function* () {
+export class IdentityResolver extends Effect.Service<IdentityResolver>()("@skygent/IdentityResolver", {
+  effect: Effect.gen(function* () {
       const bsky = yield* BskyClient;
       const kv = yield* KeyValueStore.KeyValueStore;
       const { handleStore, didStore } = makeCacheStores(kv);
@@ -605,14 +543,15 @@ export class IdentityResolver extends Context.Tag("@skygent/IdentityResolver")<
           })
       );
 
-      return IdentityResolver.of({
-        lookupDid,
-        lookupHandle,
-        resolveDid,
-        resolveHandle,
-        resolveIdentity,
-        cacheProfile
-      });
-    })
-  );
+    return {
+      lookupDid,
+      lookupHandle,
+      resolveDid,
+      resolveHandle,
+      resolveIdentity,
+      cacheProfile
+    };
+  })
+}) {
+  static readonly layer = IdentityResolver.Default;
 }

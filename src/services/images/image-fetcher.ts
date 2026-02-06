@@ -1,10 +1,8 @@
 import { Headers, HttpClient, HttpClientError } from "@effect/platform";
 import {
   Config,
-  Context,
   Duration,
   Effect,
-  Layer,
   Option,
   Request,
   RequestResolver
@@ -77,16 +75,8 @@ const ensureImageContentType = (url: string, value: string | undefined) => {
   }
 };
 
-export class ImageFetcher extends Context.Tag("@skygent/ImageFetcher")<
-  ImageFetcher,
-  {
-    readonly fetch: (url: string) => Effect.Effect<ImageFetchResult, ImageFetchError>;
-    readonly fetchMany: (urls: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<ImageFetchResult>, ImageFetchError>;
-  }
->() {
-  static readonly layer = Layer.scoped(
-    ImageFetcher,
-    Effect.gen(function* () {
+export class ImageFetcher extends Effect.Service<ImageFetcher>()("@skygent/ImageFetcher", {
+  scoped: Effect.gen(function* () {
       const http = yield* HttpClient.HttpClient;
 
       const concurrency = yield* Config.integer("SKYGENT_IMAGE_FETCH_CONCURRENCY").pipe(
@@ -263,7 +253,8 @@ export class ImageFetcher extends Context.Tag("@skygent/ImageFetcher")<
           Effect.forEach(urls, (url) => fetch(url), { concurrency: "unbounded" })
       );
 
-      return ImageFetcher.of({ fetch, fetchMany });
+      return { fetch, fetchMany };
     })
-  );
+}) {
+  static readonly layer = ImageFetcher.Default;
 }

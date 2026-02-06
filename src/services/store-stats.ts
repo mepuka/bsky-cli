@@ -38,7 +38,7 @@
 
 import { FileSystem, Path } from "@effect/platform";
 import { directorySize } from "./shared.js";
-import { Context, Effect, Layer, Option, Order } from "effect";
+import { Context, Effect, Option, Order } from "effect";
 import { AppConfigService } from "./app-config.js";
 import { StoreManager } from "./store-manager.js";
 import { StoreIndex } from "./store-index.js";
@@ -51,39 +51,9 @@ import { DataSource, type SyncCheckpoint } from "../domain/sync.js";
 import { StoreName, type StorePath } from "../domain/primitives.js";
 import { StoreRef } from "../domain/store.js";
 import type { StoreLineage } from "../domain/derivation.js";
-import { StoreIoError, isStoreIoError, type StoreIndexError } from "../domain/errors.js";
+import { StoreIoError, isStoreIoError } from "../domain/errors.js";
 import { updatedAtOrder } from "../domain/order.js";
 
-/**
- * Detailed statistics for a single store.
- * Includes post counts, author counts, date ranges, top items, and status.
- */
-type StoreStatsResult = {
-  /** Store name */
-  readonly store: string;
-  /** Total number of posts in the store */
-  readonly posts: number;
-  /** Number of unique authors in the store */
-  readonly authors: number;
-  /** Date range of posts (first and last post dates) */
-  readonly dateRange?: { readonly first: string; readonly last: string };
-  /** Top hashtags in the store (up to TOP_LIMIT) */
-  readonly hashtags: ReadonlyArray<string>;
-  /** Top authors by post count (up to TOP_LIMIT) */
-  readonly topAuthors: ReadonlyArray<string>;
-  /** Whether this is a derived store (vs source store) */
-  readonly derived: boolean;
-  /** Store status: source (not derived), ready (derived and current), stale (derived and outdated), or unknown */
-  readonly status: "source" | "ready" | "stale" | "unknown";
-  /** Sync status for source stores: current, stale, unknown, or empty */
-  readonly syncStatus?: "current" | "stale" | "unknown" | "empty";
-  /** Total size of the store directory in bytes */
-  readonly sizeBytes: number;
-};
-
-/**
- * Summary entry for a single store in the overall summary.
- */
 type StoreSummaryEntry = {
   /** Store name */
   readonly name: string;
@@ -95,33 +65,6 @@ type StoreSummaryEntry = {
   readonly source?: string;
   /** Source store names (for multi-source derived stores) */
   readonly sources?: ReadonlyArray<string>;
-};
-
-/**
- * Summary statistics across all stores.
- */
-type StoreSummaryResult = {
-  /** Total number of stores */
-  readonly total: number;
-  /** Number of source stores */
-  readonly sources: number;
-  /** Number of derived stores */
-  readonly derived: number;
-  /** Total posts across all stores */
-  readonly totalPosts: number;
-  /** Total size of all stores in bytes */
-  readonly totalSizeBytes: number;
-  /** Human-readable total size (e.g., "1.5MB") */
-  readonly totalSize: string;
-  /** Individual store summaries */
-  readonly stores: ReadonlyArray<StoreSummaryEntry>;
-};
-
-type StoreAuthorStats = {
-  readonly author: string;
-  readonly posts: number;
-  readonly engagement: number;
-  readonly lastActive?: string;
 };
 
 type StoreAuthorSort = "posts" | "engagement" | "lastActive";
@@ -311,72 +254,8 @@ const resolveSyncStatus = (
  * const runnable = program.pipe(Effect.provide(StoreStats.layer));
  * ```
  */
-export class StoreStats extends Context.Tag("@skygent/StoreStats")<
-  StoreStats,
-  {
-    /**
-     * Calculates detailed statistics for a single store.
-     * Includes post counts, author counts, date ranges, top hashtags/authors,
-     * derivation status, sync status, and store size.
-     *
-     * @param store - Reference to the store to analyze
-     * @returns An Effect that resolves to detailed store statistics
-     * @throws {StoreIndexError} If accessing store index fails
-     * @throws {StoreIoError} If database operations fail
-     * @example
-     * ```ts
-     * const stats = yield* storeStats.stats(StoreRef.make({ name: "my-store", root: "my-store" }));
-     * console.log(`${stats.posts} posts, ${stats.authors} authors`);
-     * console.log(`Derived: ${stats.derived}, Status: ${stats.status}`);
-     * ```
-     */
-    readonly stats: (
-      store: StoreRef
-    ) => Effect.Effect<StoreStatsResult, StoreIndexError | StoreIoError>;
-
-    /**
-     * Calculates a summary across all stores.
-     * Provides aggregate statistics including total counts, sizes, and per-store summaries.
-     *
-     * @returns An Effect that resolves to a summary of all stores
-     * @throws {StoreIndexError} If accessing store index fails
-     * @throws {StoreIoError} If database operations fail
-     * @example
-     * ```ts
-     * const summary = yield* storeStats.summary();
-     * console.log(`${summary.total} stores (${summary.sources} source, ${summary.derived} derived)`);
-     * console.log(`${summary.totalPosts} total posts, ${summary.totalSize} storage used`);
-     * ```
-     */
-    readonly summary: () => Effect.Effect<StoreSummaryResult, StoreIndexError | StoreIoError>;
-
-    /**
-     * List authors for a store with basic engagement statistics.
-     *
-     * @param store - Reference to the store to analyze
-     * @param options - Optional sort/limit controls
-     * @returns An Effect that resolves to author stats
-     * @throws {StoreIndexError} If accessing store index fails
-     * @throws {StoreIoError} If database operations fail
-     */
-    readonly authors: (
-      store: StoreRef,
-      options?: { readonly sort?: StoreAuthorSort; readonly limit?: number }
-    ) => Effect.Effect<ReadonlyArray<StoreAuthorStats>, StoreIndexError | StoreIoError>;
-  }
->() {
-  /**
-   * Production layer that provides the StoreStats service.
-   * Requires multiple services to be provided: StoreIndex, StoreManager,
-   * LineageStore, DerivationValidator, StoreEventLog, SyncCheckpointStore,
-   * StoreDb, AppConfigService, FileSystem, and Path.
-   *
-   * The implementation queries SQLite databases for statistics and aggregates
-   * information from various sources to provide comprehensive store metrics.
-   */
-  static readonly layer = Layer.effect(
-    StoreStats,
-    Effect.gen(function* () {
+export class StoreStats extends Effect.Service<StoreStats>()("@skygent/StoreStats", {
+  effect: Effect.gen(function* () {
       const index = yield* StoreIndex;
       const manager = yield* StoreManager;
       const lineageStore = yield* LineageStore;
@@ -585,7 +464,8 @@ export class StoreStats extends Context.Tag("@skygent/StoreStats")<
           })
       );
 
-      return StoreStats.of({ stats: computeStats, summary, authors });
-    })
-  );
+    return { stats: computeStats, summary, authors };
+  })
+}) {
+  static readonly layer = StoreStats.Default;
 }

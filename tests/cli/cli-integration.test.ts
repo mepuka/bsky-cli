@@ -88,7 +88,7 @@ describe("CLI store command", () => {
     ).pipe(Layer.provide(KeyValueStore.layerMemory));
     const cleanerLayer = Layer.succeed(
       StoreCleaner,
-      StoreCleaner.of({
+      StoreCleaner.make({
         deleteStore: () => Effect.succeed({ deleted: false } as const)
       })
     );

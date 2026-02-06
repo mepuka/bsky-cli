@@ -21,7 +21,7 @@ const timestampArb = fc.date({
 
 const emptyLibraryLayer = Layer.succeed(
   FilterLibrary,
-  FilterLibrary.of({
+  FilterLibrary.make({
     list: () => Effect.succeed([]),
     get: (name) => Effect.fail(FilterNotFound.make({ name })),
     save: () => Effect.void,

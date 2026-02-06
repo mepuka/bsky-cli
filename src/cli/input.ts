@@ -1,6 +1,6 @@
 import { BunStream } from "@effect/platform-bun";
 import { SystemError, type PlatformError } from "@effect/platform/Error";
-import { Context, Layer, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import { fstatSync } from "node:fs";
 import { isatty } from "node:tty";
 
@@ -29,24 +29,20 @@ const makeLines = () => {
   );
 };
 
-export class CliInput extends Context.Tag("@skygent/CliInput")<
-  CliInput,
-  CliInputService
->() {
-  static readonly layer = Layer.succeed(
-    CliInput,
-    CliInput.of({
-      lines: makeLines(),
-      isTTY: Boolean(process.stdin.isTTY || isatty(process.stdin.fd ?? 0)),
-      isReadable: (() => {
-        try {
-          const fd = process.stdin.fd ?? 0;
-          const stat = fstatSync(fd);
-          return stat.isFIFO() || stat.isFile() || stat.isSocket();
-        } catch {
-          return false;
-        }
-      })()
-    })
-  );
+export class CliInput extends Effect.Service<CliInput>()("@skygent/CliInput", {
+  succeed: {
+    lines: makeLines(),
+    isTTY: Boolean(process.stdin.isTTY || isatty(process.stdin.fd ?? 0)),
+    isReadable: (() => {
+      try {
+        const fd = process.stdin.fd ?? 0;
+        const stat = fstatSync(fd);
+        return stat.isFIFO() || stat.isFile() || stat.isSocket();
+      } catch {
+        return false;
+      }
+    })()
+  }
+}) {
+  static readonly layer = CliInput.Default;
 }

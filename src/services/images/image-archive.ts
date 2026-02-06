@@ -1,5 +1,5 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Clock, Context, Effect, Layer } from "effect";
+import { Clock, Effect } from "effect";
 import { createHash } from "node:crypto";
 import { ImageAsset, ImageVariant } from "../../domain/images.js";
 import { ImageArchiveError } from "../../domain/errors.js";
@@ -68,18 +68,8 @@ const toArchiveError = (message: string, path?: string, operation?: string) =>
       cause
     });
 
-export class ImageArchive extends Context.Tag("@skygent/ImageArchive")<
-  ImageArchive,
-  {
-    readonly store: (input: ImageArchiveInput) => Effect.Effect<ImageAsset, ImageArchiveError>;
-    readonly resolvePath: (asset: ImageAsset) => string;
-    readonly exists: (asset: ImageAsset) => Effect.Effect<boolean, ImageArchiveError>;
-    readonly remove: (asset: ImageAsset) => Effect.Effect<void, ImageArchiveError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    ImageArchive,
-    Effect.gen(function* () {
+export class ImageArchive extends Effect.Service<ImageArchive>()("@skygent/ImageArchive", {
+  effect: Effect.gen(function* () {
       const config = yield* ImageConfig;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -151,7 +141,8 @@ export class ImageArchive extends Context.Tag("@skygent/ImageArchive")<
           )
       );
 
-      return ImageArchive.of({ store, resolvePath, exists, remove });
+      return { store, resolvePath, exists, remove };
     })
-  );
+}) {
+  static readonly layer = ImageArchive.Default;
 }

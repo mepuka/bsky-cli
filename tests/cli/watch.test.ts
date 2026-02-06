@@ -71,7 +71,7 @@ const sampleStore = StoreRef.make({ name: sampleStoreName, root: "stores/watch-t
 
 const libraryLayer = Layer.succeed(
   FilterLibrary,
-  FilterLibrary.of({
+  FilterLibrary.make({
     list: () => Effect.succeed([]),
     get: (name) => Effect.fail(FilterNotFound.make({ name })),
     save: () => Effect.void,
@@ -82,7 +82,7 @@ const libraryLayer = Layer.succeed(
 
 const storeManagerLayer = Layer.succeed(
   StoreManager,
-  StoreManager.of({
+  StoreManager.make({
     createStore: () => Effect.succeed(sampleStore),
     getStore: () => Effect.succeed(Option.some(sampleStore)),
     listStores: () => Effect.succeed(Chunk.empty()),
@@ -96,7 +96,7 @@ const storeManagerLayer = Layer.succeed(
 
 const storeIndexLayer = Layer.succeed(
   StoreIndex,
-  StoreIndex.of({
+  StoreIndex.make({
     apply: () => Effect.die("unused"),
     getByDate: () => Effect.die("unused"),
     getByHashtag: () => Effect.die("unused"),
@@ -117,7 +117,7 @@ const storeIndexLayer = Layer.succeed(
 
 const imageConfigLayer = Layer.succeed(
   ImageConfig,
-  ImageConfig.of({
+  ImageConfig.make({
     enabled: false,
     cacheRoot: ".",
     metaRoot: ".",
@@ -132,7 +132,7 @@ const imageConfigLayer = Layer.succeed(
 
 const imageCacheLayer = Layer.succeed(
   ImageCache,
-  ImageCache.of({
+  ImageCache.make({
     get: () => Effect.die("unused"),
     getCached: () => Effect.die("unused"),
     invalidate: () => Effect.die("unused")
@@ -163,7 +163,7 @@ describe("watch command", () => {
 
     const engineLayer = Layer.succeed(
       SyncEngine,
-      SyncEngine.of({
+      SyncEngine.make({
         stream: () => Stream.empty,
         sync: () => Effect.succeed(makeResult(0)),
         watch: () => Stream.fromIterable(events)
@@ -213,7 +213,7 @@ describe("watch command", () => {
 
     const engineLayer = Layer.succeed(
       SyncEngine,
-      SyncEngine.of({
+      SyncEngine.make({
         stream: () => Stream.empty,
         sync: () => Effect.succeed(makeResult(0)),
         watch: () => timedStream

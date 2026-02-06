@@ -70,7 +70,7 @@
  * @module services/filter-runtime
  */
 
-import { Chunk, Context, Duration, Effect, Layer, Match, Schedule } from "effect";
+import { Chunk, Duration, Effect, Match, Schedule } from "effect";
 import { FilterCompileError, FilterEvalError } from "../domain/errors.js";
 import type { FilterExpr } from "../domain/filter.js";
 import type { FilterErrorPolicy } from "../domain/policies.js";
@@ -863,101 +863,47 @@ const buildPredicate = (
  * const results = yield* batchPredicate(Chunk.fromIterable(posts));
  * ```
  */
-export class FilterRuntime extends Context.Tag("@skygent/FilterRuntime")<
-  FilterRuntime,
-  {
-    /**
-     * Compiles a filter expression into an executable predicate.
-     *
-     * @param expr - The filter expression to compile
-     * @returns Effect that yields a predicate function
-     */
-    readonly evaluate: (
-      expr: FilterExpr
-    ) => Effect.Effect<Predicate, FilterCompileError>;
-
-    /**
-     * Like evaluate, but returns detailed match results with metadata.
-     *
-     * @param expr - The filter expression to compile
-     * @returns Effect that yields a predicate returning { ok: boolean }
-     */
-    readonly evaluateWithMetadata: (
-      expr: FilterExpr
-    ) => Effect.Effect<
-      (post: Post) => Effect.Effect<
-        { readonly ok: boolean },
-        FilterEvalError
-      >,
-      FilterCompileError
-    >;
-
-    /**
-     * Compiles a filter for efficient batch evaluation.
-     *
-     * Batch evaluation processes multiple posts concurrently with
-     * automatic request batching for effectful filters.
-     *
-     * @param expr - The filter expression to compile
-     * @returns Effect that yields a batch predicate
-     */
-    readonly evaluateBatch: (
-      expr: FilterExpr
-    ) => Effect.Effect<
-      (posts: Chunk.Chunk<Post>) => Effect.Effect<Chunk.Chunk<boolean>, FilterEvalError>,
-      FilterCompileError
-    >;
-
-    /**
-     * Compiles a filter into an explainer function.
-     *
-     * Explainer functions provide detailed reasoning for filter decisions,
-     * useful for debugging and user feedback.
-     *
-     * @param expr - The filter expression to compile
-     * @returns Effect that yields an explainer function
-     */
-    readonly explain: (
-      expr: FilterExpr
-    ) => Effect.Effect<Explainer, FilterCompileError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    FilterRuntime,
-    Effect.gen(function* () {
-      const links = yield* LinkValidator;
-      const trending = yield* TrendingTopics;
-      const settings = yield* FilterSettings;
-      const evaluate = Effect.fn("FilterRuntime.evaluate")((expr: FilterExpr) =>
-        buildPredicate(links, trending)(expr)
-      );
-      const evaluateWithMetadata = Effect.fn(
-        "FilterRuntime.evaluateWithMetadata"
-      )((expr: FilterExpr) =>
-        buildPredicate(links, trending)(expr).pipe(
-          Effect.map((predicate) => (post: Post) =>
-            predicate(post).pipe(Effect.map((ok) => ({ ok })))
+export class FilterRuntime extends Effect.Service<FilterRuntime>()("@skygent/FilterRuntime", {
+  effect: Effect.gen(function* () {
+    const links = yield* LinkValidator;
+    const trending = yield* TrendingTopics;
+    const settings = yield* FilterSettings;
+    const evaluate = Effect.fn("FilterRuntime.evaluate")((expr: FilterExpr) =>
+      buildPredicate(links, trending)(expr)
+    );
+    const evaluateWithMetadata = Effect.fn(
+      "FilterRuntime.evaluateWithMetadata"
+    )((expr: FilterExpr) =>
+      buildPredicate(links, trending)(expr).pipe(
+        Effect.map((predicate) => (post: Post) =>
+          predicate(post).pipe(Effect.map((ok) => ({ ok })))
+        )
+      )
+    );
+    const evaluateBatch = Effect.fn("FilterRuntime.evaluateBatch")((expr: FilterExpr) =>
+      buildPredicate(links, trending)(expr).pipe(
+        Effect.map((predicate) => (posts: Chunk.Chunk<Post>) =>
+          Effect.all(Array.from(posts, (post) => predicate(post)), {
+            batching: true,
+            concurrency: settings.concurrency
+          }).pipe(
+            Effect.map(Chunk.fromIterable),
+            Effect.withRequestBatching(true)
           )
         )
-      );
-      const evaluateBatch = Effect.fn("FilterRuntime.evaluateBatch")((expr: FilterExpr) =>
-        buildPredicate(links, trending)(expr).pipe(
-          Effect.map((predicate) => (posts: Chunk.Chunk<Post>) =>
-            Effect.all(Array.from(posts, (post) => predicate(post)), {
-              batching: true,
-              concurrency: settings.concurrency
-            }).pipe(
-              Effect.map(Chunk.fromIterable),
-              Effect.withRequestBatching(true)
-            )
-          )
-        )
-      );
-      const explain = Effect.fn("FilterRuntime.explain")((expr: FilterExpr) =>
-        buildExplanation(links, trending)(expr)
-      );
+      )
+    );
+    const explain = Effect.fn("FilterRuntime.explain")((expr: FilterExpr) =>
+      buildExplanation(links, trending)(expr)
+    );
 
-      return FilterRuntime.of({ evaluate, evaluateWithMetadata, evaluateBatch, explain });
-    })
-  );
+    return {
+      evaluate,
+      evaluateWithMetadata,
+      evaluateBatch,
+      explain
+    };
+  })
+}) {
+  static readonly layer = FilterRuntime.Default;
 }

@@ -1,5 +1,5 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Chunk, Clock, Context, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { Chunk, Clock, Effect, Option, Ref, Schema, Stream } from "effect";
 import { StoreQuery } from "../domain/events.js";
 import type { Post } from "../domain/post.js";
 import { Post as PostSchema } from "../domain/post.js";
@@ -12,9 +12,6 @@ import { AppConfigService } from "./app-config.js";
 import { traverseFilterEffect } from "../typeclass/chunk.js";
 import { renderPostMarkdownRow, renderPostsMarkdownHeader } from "../domain/format.js";
 import {
-  FilterCompileError,
-  FilterEvalError,
-  StoreIndexError,
   StoreIoError
 } from "../domain/errors.js";
 import { defaultStoreConfig } from "../domain/defaults.js";
@@ -210,79 +207,61 @@ const materializeFilters = (store: StoreRef, filters: ReadonlyArray<FilterSpec>)
     discard: false
   });
 
-export class OutputManager extends Context.Tag("@skygent/OutputManager")<
-  OutputManager,
-  {
-    readonly materializeStore: (
-      store: StoreRef
-    ) => Effect.Effect<
-      MaterializedStoreOutput,
-      FilterCompileError | FilterEvalError | StoreIndexError | StoreIoError
-    >;
-    readonly materializeFilters: (
-      store: StoreRef,
-      filters: ReadonlyArray<FilterSpec>
-    ) => Effect.Effect<
-      ReadonlyArray<MaterializedFilterOutput>,
-      FilterCompileError | FilterEvalError | StoreIndexError | StoreIoError
-    >;
-  }
->() {
-  static readonly layer = Layer.effect(
-    OutputManager,
-    Effect.gen(function* () {
-      const appConfig = yield* AppConfigService;
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const compiler = yield* FilterCompiler;
-      const runtime = yield* FilterRuntime;
-      const index = yield* StoreIndex;
-      const manager = yield* StoreManager;
-      const filterSettings = yield* FilterSettings;
+export class OutputManager extends Effect.Service<OutputManager>()("@skygent/OutputManager", {
+  effect: Effect.gen(function* () {
+    const appConfig = yield* AppConfigService;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const compiler = yield* FilterCompiler;
+    const runtime = yield* FilterRuntime;
+    const index = yield* StoreIndex;
+    const manager = yield* StoreManager;
+    const filterSettings = yield* FilterSettings;
 
-      type OutputManagerDeps =
-        | AppConfigService
-        | FileSystem.FileSystem
-        | Path.Path
-        | FilterCompiler
-        | FilterRuntime
-        | StoreIndex
-        | FilterSettings;
+    type OutputManagerDeps =
+      | AppConfigService
+      | FileSystem.FileSystem
+      | Path.Path
+      | FilterCompiler
+      | FilterRuntime
+      | StoreIndex
+      | FilterSettings;
 
-      const provideDeps = <A, E>(effect: Effect.Effect<A, E, OutputManagerDeps>) =>
-        effect.pipe(
-          Effect.provideService(AppConfigService, appConfig),
-          Effect.provideService(FileSystem.FileSystem, fs),
-          Effect.provideService(Path.Path, path),
-          Effect.provideService(FilterCompiler, compiler),
-          Effect.provideService(FilterRuntime, runtime),
-          Effect.provideService(StoreIndex, index),
-          Effect.provideService(FilterSettings, filterSettings)
-        );
-
-      const materializeStore = Effect.fn("OutputManager.materializeStore")(
-        (store: StoreRef) =>
-          Effect.gen(function* () {
-            const configOption = yield* manager.getConfig(store.name);
-            const config = Option.getOrElse(configOption, () => defaultStoreConfig);
-
-            const results = yield* provideDeps(materializeFilters(store, config.filters));
-            return {
-              store: store.name,
-              filters: results
-            } satisfies MaterializedStoreOutput;
-          })
+    const provideDeps = <A, E>(effect: Effect.Effect<A, E, OutputManagerDeps>) =>
+      effect.pipe(
+        Effect.provideService(AppConfigService, appConfig),
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(FilterCompiler, compiler),
+        Effect.provideService(FilterRuntime, runtime),
+        Effect.provideService(StoreIndex, index),
+        Effect.provideService(FilterSettings, filterSettings)
       );
 
-      const materializeFiltersFn = Effect.fn("OutputManager.materializeFilters")(
-        (store: StoreRef, filters: ReadonlyArray<FilterSpec>) =>
-          provideDeps(materializeFilters(store, filters))
-      );
+    const materializeStore = Effect.fn("OutputManager.materializeStore")(
+      (store: StoreRef) =>
+        Effect.gen(function* () {
+          const configOption = yield* manager.getConfig(store.name);
+          const config = Option.getOrElse(configOption, () => defaultStoreConfig);
 
-      return OutputManager.of({
-        materializeStore,
-        materializeFilters: materializeFiltersFn
-      });
-    })
-  );
+          const results = yield* provideDeps(materializeFilters(store, config.filters));
+          return {
+            store: store.name,
+            filters: results
+          } satisfies MaterializedStoreOutput;
+        })
+    );
+
+    const materializeFiltersFn = Effect.fn("OutputManager.materializeFilters")(
+      (store: StoreRef, filters: ReadonlyArray<FilterSpec>) =>
+        provideDeps(materializeFilters(store, filters))
+    );
+
+    return {
+      materializeStore,
+      materializeFilters: materializeFiltersFn
+    };
+  })
+}) {
+  static readonly layer = OutputManager.Default;
 }

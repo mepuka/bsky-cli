@@ -164,7 +164,7 @@ const buildLayer = (storeRoot: string) => {
   const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer));
   const filterRuntimeLayer = Layer.succeed(
     FilterRuntime,
-    FilterRuntime.of({
+    FilterRuntime.make({
       evaluate: () => Effect.succeed(() => Effect.succeed(true)),
       evaluateWithMetadata: () => Effect.succeed(() => Effect.succeed({ ok: true })),
       evaluateBatch: () =>

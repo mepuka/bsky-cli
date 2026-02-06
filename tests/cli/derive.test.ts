@@ -93,7 +93,7 @@ describe("CLI derive command", () => {
     );
     const engineLayer = Layer.succeed(
       DerivationEngine,
-      DerivationEngine.of({
+      DerivationEngine.make({
         derive: () =>
           Effect.succeed(
             DerivationResult.make({
@@ -108,7 +108,7 @@ describe("CLI derive command", () => {
     );
     const checkpointsLayer = Layer.succeed(
       ViewCheckpointStore,
-      ViewCheckpointStore.of({
+      ViewCheckpointStore.make({
         load: () => Effect.succeed(Option.none()),
         save: () => Effect.void,
         remove: () => Effect.void
@@ -116,7 +116,7 @@ describe("CLI derive command", () => {
     );
     const outputManagerLayer = Layer.succeed(
       OutputManager,
-      OutputManager.of({
+      OutputManager.make({
         materializeStore: (store) =>
           Effect.succeed({ store: store.name, filters: [] }),
         materializeFilters: () => Effect.succeed([])
@@ -124,7 +124,7 @@ describe("CLI derive command", () => {
     );
     const filterLibraryLayer = Layer.succeed(
       FilterLibrary,
-      FilterLibrary.of({
+      FilterLibrary.make({
         list: () => Effect.succeed([]),
         get: (name) => Effect.fail(FilterNotFound.make({ name })),
         save: () => Effect.void,
@@ -136,7 +136,7 @@ describe("CLI derive command", () => {
     const stubHandle = Schema.decodeUnknownSync(Handle)("example.bsky");
     const identityLayer = Layer.succeed(
       IdentityResolver,
-      IdentityResolver.of({
+      IdentityResolver.make({
         lookupDid: () => Effect.succeed(Option.none()),
         lookupHandle: () => Effect.succeed(Option.none()),
         resolveDid: () => Effect.succeed(stubDid),

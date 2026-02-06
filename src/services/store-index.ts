@@ -54,7 +54,7 @@
  * @module StoreIndex
  */
 
-import { Chunk, Clock, Context, Effect, Layer, Match, Option, Predicate, Ref, Schema, Stream } from "effect";
+import { Chunk, Clock, Effect, Match, Option, Predicate, Ref, Schema, Stream } from "effect";
 import * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import type { Fragment } from "@effect/sql/Statement";
@@ -572,260 +572,8 @@ const applyDelete = (
  * - Incremental updates (process only new events since last checkpoint)
  * - Multiple index versions (tracked by index name)
  */
-export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
-  StoreIndex,
-  {
-    /**
-     * Apply a single post event to the index
-     *
-     * Processes a PostEventRecord and updates the index accordingly:
-     * - PostUpsert: Inserts or updates the post with all metadata
-     * - PostDelete: Removes the post and related data from index
-     *
-     * @param store - Store reference to apply the event to
-     * @param record - The post event record containing the event to apply
-     * @returns Effect that completes when the index has been updated
-     */
-    readonly apply: (
-      store: StoreRef,
-      record: PostEventRecord
-    ) => Effect.Effect<void, StoreIndexError>;
-
-    /**
-     * Get all post URIs created on a specific date
-     *
-     * Returns posts ordered by creation time (ascending). The date should be
-     * in ISO date format (YYYY-MM-DD).
-     *
-     * @param store - Store reference to query
-     * @param date - ISO date string (YYYY-MM-DD)
-     * @returns Effect containing array of post URIs
-     */
-    readonly getByDate: (
-      store: StoreRef,
-      date: string
-    ) => Effect.Effect<ReadonlyArray<PostUri>, StoreIndexError>;
-
-    /**
-     * Get all post URIs tagged with a specific hashtag
-     *
-     * Returns posts ordered by URI (ascending). Case-sensitive exact match.
-     *
-     * @param store - Store reference to query
-     * @param tag - Hashtag to search for (without # prefix)
-     * @returns Effect containing array of post URIs
-     */
-    readonly getByHashtag: (
-      store: StoreRef,
-      tag: string
-    ) => Effect.Effect<ReadonlyArray<PostUri>, StoreIndexError>;
-
-    /**
-     * Get all post URIs for a specific author handle
-     *
-     * Returns posts ordered by creation time (ascending). The author must be a
-     * normalized handle matching the stored post author field.
-     *
-     * @param store - Store reference to query
-     * @param author - Author handle to search for
-     * @returns Effect containing array of post URIs
-     */
-    readonly getByAuthor: (
-      store: StoreRef,
-      author: Handle
-    ) => Effect.Effect<ReadonlyArray<PostUri>, StoreIndexError>;
-
-    /**
-     * Retrieve a single post by URI
-     *
-     * Fetches the post JSON from the database and decodes it into a Post object.
-     * Returns None if the post doesn't exist in the index.
-     *
-     * @param store - Store reference to query
-     * @param uri - Post URI to retrieve
-     * @returns Effect containing Option of Post (Some if found, None if not)
-     */
-    readonly getPost: (
-      store: StoreRef,
-      uri: PostUri
-    ) => Effect.Effect<Option.Option<Post>, StoreIndexError>;
-
-    /**
-     * Check if a post URI exists in the index
-     *
-     * Efficient existence check using a LIMIT 1 query.
-     *
-     * @param store - Store reference to query
-     * @param uri - Post URI to check
-     * @returns Effect containing true if the URI exists, false otherwise
-     */
-    readonly hasUri: (
-      store: StoreRef,
-      uri: PostUri
-    ) => Effect.Effect<boolean, StoreIndexError>;
-
-    /**
-     * Clear all indexed data for a store
-     *
-     * Removes all posts, hashtags, languages, and checkpoints from the index.
-     * This operation is performed in a transaction for consistency.
-     *
-     * @param store - Store reference to clear
-     * @returns Effect that completes when all data has been cleared
-     */
-    readonly clear: (store: StoreRef) => Effect.Effect<void, StoreIndexError>;
-
-    /**
-     * Load a checkpoint for an index
-     *
-     * Retrieves the stored checkpoint for a given index name, containing
-     * the last processed event ID and event count. Returns None if no
-     * checkpoint exists.
-     *
-     * @param store - Store reference to load from
-     * @param index - Name of the index to load checkpoint for
-     * @returns Effect containing Option of IndexCheckpoint
-     */
-    readonly loadCheckpoint: (
-      store: StoreRef,
-      index: string
-    ) => Effect.Effect<Option.Option<IndexCheckpoint>, StoreIndexError>;
-
-    /**
-     * Save a checkpoint for an index
-     *
-     * Persists the checkpoint to the database, overwriting any existing
-     * checkpoint for the same index name.
-     *
-     * @param store - Store reference to save to
-     * @param checkpoint - Checkpoint data to persist
-     * @returns Effect that completes when checkpoint has been saved
-     */
-    readonly saveCheckpoint: (
-      store: StoreRef,
-      checkpoint: IndexCheckpoint
-    ) => Effect.Effect<void, StoreIndexError>;
-
-    /**
-     * Query posts with filtering and pagination
-     *
-     * Executes a query against the index with optional:
-     * - Filter expressions (converted to SQL via pushdown)
-     * - Date range constraints
-     * - Scan limits (maximum posts to examine)
-     * - Sort order (ascending/descending)
-     *
-     * Results are streamed using keyset pagination for efficient large result sets.
-     *
-     * @param store - Store reference to query
-     * @param query - Query configuration including filter, range, limit, and order
-     * @returns Stream of Posts matching the query criteria
-     */
-    readonly query: (
-      store: StoreRef,
-      query: StoreQuery
-    ) => Stream.Stream<Post, StoreIndexError>;
-
-    /**
-     * Load posts for a thread containing the target URI
-     *
-     * Uses reply_root_uri to find the root, then returns all posts in that thread.
-     *
-     * @param store - Store reference to query
-     * @param uri - Post URI in the thread
-     * @returns Effect containing array of posts in the thread
-     */
-    readonly threadPosts: (
-      store: StoreRef,
-      uri: PostUri
-    ) => Effect.Effect<ReadonlyArray<Post>, StoreIndexError>;
-
-    /**
-     * Search posts using full-text search (FTS5)
-     *
-     * Performs a full-text search across post content using SQLite FTS5.
-     * Supports different sort orders: relevance (BM25 ranking), newest, or oldest.
-     * Results are paginated using offset-based cursors.
-     *
-     * @param store - Store reference to search
-     * @param input - Search configuration
-     * @param input.query - Search query string (FTS5 syntax supported; plain text is sanitized)
-     * @param input.limit - Maximum results to return (default: 25)
-     * @param input.cursor - Offset for pagination (default: 0)
-     * @param input.sort - Sort order: "relevance" | "newest" | "oldest"
-     * @returns Effect containing search results and optional next cursor
-     */
-    readonly searchPosts: (
-      store: StoreRef,
-      input: {
-        readonly query: string;
-        readonly limit?: number;
-        readonly cursor?: number;
-        readonly sort?: SearchSort;
-      }
-    ) => Effect.Effect<{ readonly posts: ReadonlyArray<Post>; readonly cursor?: number }, StoreIndexError>;
-
-    /**
-     * Stream all index entries
-     *
-     * Returns a stream of PostIndexEntry objects containing basic metadata
-     * (URI, creation date, author, hashtags) for all posts in the index.
-     * Results are paginated internally and streamed as a continuous flow.
-     *
-     * @param store - Store reference to stream from
-     * @returns Stream of PostIndexEntry objects
-     */
-    readonly entries: (store: StoreRef) => Stream.Stream<PostIndexEntry, StoreIndexError>;
-
-    /**
-     * Group posts into conversation threads by root URI
-     *
-     * Uses reply_root_uri when available (falls back to post uri) and returns
-     * counts plus the earliest creation time per thread.
-     * Note: only pushdown-compatible filters are applied; runtime-only filters
-     * are ignored for this aggregate.
-     *
-     * @param store - Store reference to query
-     * @param query - Query configuration including filter and range
-     * @returns Effect containing grouped thread summaries
-     */
-    readonly threadGroups: (
-      store: StoreRef,
-      query: StoreQuery
-    ) => Effect.Effect<ReadonlyArray<ThreadGroup>, StoreIndexError>;
-
-    /**
-     * Count total posts in the index
-     *
-     * Returns the total number of posts currently indexed in the store.
-     *
-     * @param store - Store reference to count
-     * @returns Effect containing the post count
-     */
-    readonly count: (store: StoreRef) => Effect.Effect<number, StoreIndexError>;
-
-    /**
-     * Rebuild the index from the event log
-     *
-     * Performs a full or incremental rebuild of the index:
-     * - If a checkpoint exists, only processes events after the checkpoint
-     * - If no checkpoint exists, processes all events from the beginning
-     * - Updates the checkpoint upon completion
-     * - Runs ANALYZE and PRAGMA optimize for query performance
-     *
-     * Events are processed in batches within transactions for efficiency.
-     *
-     * @param store - Store reference to rebuild
-     * @returns Effect that completes when rebuild is finished
-     */
-    readonly rebuild: (
-      store: StoreRef
-    ) => Effect.Effect<void, StoreIndexError>;
-  }
->() {
-  static readonly layer = Layer.scoped(
-    StoreIndex,
-    Effect.gen(function* () {
+export class StoreIndex extends Effect.Service<StoreIndex>()("@skygent/StoreIndex", {
+  scoped: Effect.gen(function* () {
       const eventLog = yield* StoreEventLog;
       const storeDb = yield* StoreDb;
       const bootstrapped = yield* Ref.make(new Set<string>());
@@ -1418,7 +1166,7 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         )
       );
 
-      return StoreIndex.of({
+      return {
         apply,
         getByDate,
         getByHashtag,
@@ -1435,7 +1183,8 @@ export class StoreIndex extends Context.Tag("@skygent/StoreIndex")<
         threadGroups,
         count,
         rebuild
-      });
+      };
     })
-  );
+}) {
+  static readonly layer = StoreIndex.Default;
 }

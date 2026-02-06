@@ -48,7 +48,7 @@
 
 import { HttpClient } from "@effect/platform";
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
-import { Clock, Context, Duration, Effect, Layer, Option, Schema } from "effect";
+import { Clock, Duration, Effect, Layer, Option, Schema } from "effect";
 import { FilterEvalError } from "../domain/errors.js";
 
 const cachePrefix = "cache/links/";
@@ -138,84 +138,76 @@ export type LinkValidatorService = {
  * // Testing with mock responses
  * const testLayer = Layer.succeed(
  *   LinkValidator,
- *   LinkValidator.of({
+ *   LinkValidator.make({
  *     isValid: (url) => Effect.succeed(url.includes("ok")),
  *     hasValidLink: (urls) => Effect.succeed(urls.some(u => u.includes("ok")))
  *   })
  * );
  * ```
  */
-export class LinkValidator extends Context.Tag("@skygent/LinkValidator")<
-  LinkValidator,
-  LinkValidatorService
->() {
-  /**
-   * Layer that creates the link validator service.
-   * Requires KeyValueStore and HttpClient services.
-   */
-  static readonly layer = Layer.effect(
-    LinkValidator,
-    Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const http = yield* HttpClient.HttpClient;
-      const store = KeyValueStore.prefix(kv.forSchema(LinkCacheEntry), cachePrefix);
+export class LinkValidator extends Effect.Service<LinkValidator>()("@skygent/LinkValidator", {
+  effect: Effect.gen(function* () {
+    const kv = yield* KeyValueStore.KeyValueStore;
+    const http = yield* HttpClient.HttpClient;
+    const store = KeyValueStore.prefix(kv.forSchema(LinkCacheEntry), cachePrefix);
 
-      const isFresh = (entry: LinkCacheEntry, now: number) =>
-        now - entry.checkedAt.getTime() < Duration.toMillis(cacheTtl);
+    const isFresh = (entry: LinkCacheEntry, now: number) =>
+      now - entry.checkedAt.getTime() < Duration.toMillis(cacheTtl);
 
-      const fetchStatus = (url: string) =>
-        http.head(url).pipe(
-          Effect.map((response) => response.status),
-          Effect.flatMap((status) =>
-            status === 405 || status === 501
-              ? http.get(url).pipe(Effect.map((response) => response.status))
-              : Effect.succeed(status)
-          ),
-          Effect.mapError(toFilterEvalError("Link validation failed"))
-        );
-
-      const isValid = Effect.fn("LinkValidator.isValid")((url: string) =>
-        Effect.gen(function* () {
-          if (!isHttpUrl(url)) {
-            return false;
-          }
-
-          const now = yield* Clock.currentTimeMillis;
-          const cached = yield* store
-            .get(cacheKey(url))
-            .pipe(Effect.mapError(toFilterEvalError("Link cache read failed")));
-
-          if (Option.isSome(cached) && isFresh(cached.value, now)) {
-            return cached.value.ok;
-          }
-
-          const status = yield* fetchStatus(url);
-          const ok = isValidStatus(status);
-          const entry = LinkCacheEntry.make({
-            url,
-            ok,
-            status,
-            checkedAt: new Date(now)
-          });
-
-          yield* store
-            .set(cacheKey(url), entry)
-            .pipe(Effect.mapError(toFilterEvalError("Link cache write failed")));
-
-          return ok;
-        })
+    const fetchStatus = (url: string) =>
+      http.head(url).pipe(
+        Effect.map((response) => response.status),
+        Effect.flatMap((status) =>
+          status === 405 || status === 501
+            ? http.get(url).pipe(Effect.map((response) => response.status))
+            : Effect.succeed(status)
+        ),
+        Effect.mapError(toFilterEvalError("Link validation failed"))
       );
 
-      const hasValidLink = Effect.fn("LinkValidator.hasValidLink")(
-        (urls: ReadonlyArray<string>) =>
-          Effect.findFirst(urls, (url) => isValid(url)).pipe(
-            Effect.map(Option.isSome)
-          )
-      );
+    const isValid = Effect.fn("LinkValidator.isValid")((url: string) =>
+      Effect.gen(function* () {
+        if (!isHttpUrl(url)) {
+          return false;
+        }
 
-      return LinkValidator.of({ isValid, hasValidLink });
-    })
-  );
+        const now = yield* Clock.currentTimeMillis;
+        const cached = yield* store
+          .get(cacheKey(url))
+          .pipe(Effect.mapError(toFilterEvalError("Link cache read failed")));
+
+        if (Option.isSome(cached) && isFresh(cached.value, now)) {
+          return cached.value.ok;
+        }
+
+        const status = yield* fetchStatus(url);
+        const ok = isValidStatus(status);
+        const entry = LinkCacheEntry.make({
+          url,
+          ok,
+          status,
+          checkedAt: new Date(now)
+        });
+
+        yield* store
+          .set(cacheKey(url), entry)
+          .pipe(Effect.mapError(toFilterEvalError("Link cache write failed")));
+
+        return ok;
+      })
+    );
+
+    const hasValidLink = Effect.fn("LinkValidator.hasValidLink")(
+      (urls: ReadonlyArray<string>) =>
+        Effect.findFirst(urls, (url) => isValid(url)).pipe(
+          Effect.map(Option.isSome)
+        )
+    );
+
+    return { isValid, hasValidLink };
+  })
+}) {
+  static readonly layer = LinkValidator.Default;
 
   /**
    * Test layer that provides a mock link validator.
@@ -235,7 +227,7 @@ export class LinkValidator extends Context.Tag("@skygent/LinkValidator")<
    */
   static readonly testLayer = Layer.succeed(
     LinkValidator,
-    LinkValidator.of({
+    LinkValidator.make({
       isValid: (url) => Effect.succeed(url.includes("ok")),
       hasValidLink: (urls) =>
         Effect.succeed(urls.some((url) => url.includes("ok")))

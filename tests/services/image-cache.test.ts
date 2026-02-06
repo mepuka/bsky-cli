@@ -44,7 +44,7 @@ const makeFetcherLayer = (onFetch: () => void) => {
 
   return Layer.succeed(
     ImageFetcher,
-    ImageFetcher.of({
+    ImageFetcher.make({
       fetch,
       fetchMany: (urls) => Effect.forEach(urls, (url) => fetch(url))
     })

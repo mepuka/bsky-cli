@@ -63,7 +63,7 @@ const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(configLayer));
 
 const emptyLibraryLayer = Layer.succeed(
   FilterLibrary,
-  FilterLibrary.of({
+  FilterLibrary.make({
     list: () => Effect.succeed([]),
     get: (name) => Effect.fail(FilterNotFound.make({ name })),
     save: () => Effect.void,
@@ -74,7 +74,7 @@ const emptyLibraryLayer = Layer.succeed(
 
 const runtimeLayer = Layer.succeed(
   FilterRuntime,
-  FilterRuntime.of({
+  FilterRuntime.make({
     evaluate: () => Effect.succeed(() => Effect.succeed(false)),
     evaluateWithMetadata: () => Effect.succeed(() => Effect.succeed({ ok: false })),
     evaluateBatch: () =>

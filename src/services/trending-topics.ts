@@ -32,7 +32,6 @@
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import {
   Clock,
-  Context,
   Duration,
   Effect,
   Layer,
@@ -127,89 +126,76 @@ export type TrendingTopicsService = {
  * const runnable = program.pipe(Effect.provide(TrendingTopics.layer));
  * ```
  */
-export class TrendingTopics extends Context.Tag("@skygent/TrendingTopics")<
-  TrendingTopics,
-  TrendingTopicsService
->() {
-  /**
-   * Production layer that provides the TrendingTopics service.
-   * Requires KeyValueStore and BskyClient to be provided.
-   *
-   * The implementation:
-   * - Fetches trending topics from Bluesky API
-   * - Caches results for 15 minutes
-   * - Normalizes topic names for case-insensitive comparison
-   */
-  static readonly layer = Layer.effect(
-    TrendingTopics,
-    Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const bsky = yield* BskyClient;
-      const store = KeyValueStore.prefix(
-        kv.forSchema(TrendingCacheEntry),
-        cachePrefix
-      );
+export class TrendingTopics extends Effect.Service<TrendingTopics>()("@skygent/TrendingTopics", {
+  effect: Effect.gen(function* () {
+    const kv = yield* KeyValueStore.KeyValueStore;
+    const bsky = yield* BskyClient;
+    const store = KeyValueStore.prefix(
+      kv.forSchema(TrendingCacheEntry),
+      cachePrefix
+    );
 
-      /**
-       * Fetches trending topics from Bluesky API.
-       * Wrapped with error mapping for consistent error handling.
-       */
-      const fetchTopics = bsky.getTrendingTopics().pipe(
-        Effect.mapError(toFilterEvalError("Trending topics fetch failed"))
-      );
+    /**
+     * Fetches trending topics from Bluesky API.
+     * Wrapped with error mapping for consistent error handling.
+     */
+    const fetchTopics = bsky.getTrendingTopics().pipe(
+      Effect.mapError(toFilterEvalError("Trending topics fetch failed"))
+    );
 
-      /**
-       * Checks if a cache entry is still fresh (within TTL).
-       * @param entry - The cached trending topics entry
-       * @param now - Current timestamp in milliseconds
-       * @returns True if the entry is still fresh
-       */
-      const isFresh = (entry: TrendingCacheEntry, now: number) =>
-        now - entry.checkedAt.getTime() < Duration.toMillis(cacheTtl);
+    /**
+     * Checks if a cache entry is still fresh (within TTL).
+     * @param entry - The cached trending topics entry
+     * @param now - Current timestamp in milliseconds
+     * @returns True if the entry is still fresh
+     */
+    const isFresh = (entry: TrendingCacheEntry, now: number) =>
+      now - entry.checkedAt.getTime() < Duration.toMillis(cacheTtl);
 
-      /**
-       * Gets trending topics, using cache if available and fresh.
-       * Fetches fresh data if cache is expired or missing.
-       */
-      const getTopics = Effect.fn("TrendingTopics.getTopics")(() =>
-        Effect.gen(function* () {
-          const cached = yield* store
-            .get(cacheKey)
-            .pipe(Effect.mapError(toFilterEvalError("Trending cache read failed")));
+    /**
+     * Gets trending topics, using cache if available and fresh.
+     * Fetches fresh data if cache is expired or missing.
+     */
+    const getTopics = Effect.fn("TrendingTopics.getTopics")(() =>
+      Effect.gen(function* () {
+        const cached = yield* store
+          .get(cacheKey)
+          .pipe(Effect.mapError(toFilterEvalError("Trending cache read failed")));
 
-          const now = yield* Clock.currentTimeMillis;
-          if (Option.isSome(cached) && isFresh(cached.value, now)) {
-            return cached.value.topics;
-          }
+        const now = yield* Clock.currentTimeMillis;
+        if (Option.isSome(cached) && isFresh(cached.value, now)) {
+          return cached.value.topics;
+        }
 
-          const topics = yield* fetchTopics;
-          const entry = TrendingCacheEntry.make({
-            topics,
-            checkedAt: new Date(now)
-          });
-          yield* store
-            .set(cacheKey, entry)
-            .pipe(Effect.mapError(toFilterEvalError("Trending cache write failed")));
+        const topics = yield* fetchTopics;
+        const entry = TrendingCacheEntry.make({
+          topics,
+          checkedAt: new Date(now)
+        });
+        yield* store
+          .set(cacheKey, entry)
+          .pipe(Effect.mapError(toFilterEvalError("Trending cache write failed")));
 
-          return topics;
-        })
-      );
+        return topics;
+      })
+    );
 
-      /**
-       * Checks if a specific hashtag is in the trending topics list.
-       * Uses normalized comparison for case-insensitive matching.
-       */
-      const isTrending = Effect.fn("TrendingTopics.isTrending")((tag: Hashtag) =>
-        getTopics().pipe(
-          Effect.map((topics) =>
-            topics.includes(normalizeTopic(String(tag)))
-          )
+    /**
+     * Checks if a specific hashtag is in the trending topics list.
+     * Uses normalized comparison for case-insensitive matching.
+     */
+    const isTrending = Effect.fn("TrendingTopics.isTrending")((tag: Hashtag) =>
+      getTopics().pipe(
+        Effect.map((topics) =>
+          topics.includes(normalizeTopic(String(tag)))
         )
-      );
+      )
+    );
 
-      return TrendingTopics.of({ getTopics, isTrending });
-    })
-  );
+    return { getTopics, isTrending };
+  })
+}) {
+  static readonly layer = TrendingTopics.Default;
 
   /**
    * Test layer with mock trending topics for testing.
@@ -217,7 +203,7 @@ export class TrendingTopics extends Context.Tag("@skygent/TrendingTopics")<
    */
   static readonly testLayer = Layer.succeed(
     TrendingTopics,
-    TrendingTopics.of({
+    TrendingTopics.make({
       getTopics: () => Effect.succeed(["effect", "bsky"]),
       isTrending: (tag) =>
         Effect.succeed(["effect", "bsky"].includes(normalizeTopic(String(tag))))

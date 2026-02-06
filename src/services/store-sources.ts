@@ -1,7 +1,6 @@
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { StoreRef } from "../domain/store.js";
 import { StoreSourcesError, isStoreSourcesError } from "../domain/errors.js";
-import type { StoreIoError } from "../domain/errors.js";
 import { StoreSourceSchema, type StoreSource, storeSourceId } from "../domain/store-sources.js";
 import { Timestamp } from "../domain/primitives.js";
 import { StoreDb } from "./store-db.js";
@@ -48,20 +47,8 @@ const sourceValue = (source: StoreSource) => {
   }
 };
 
-export class StoreSources extends Context.Tag("@skygent/StoreSources")<
-  StoreSources,
-  {
-    readonly list: (store: StoreRef) => Effect.Effect<ReadonlyArray<StoreSource>, StoreIoError | StoreSourcesError>;
-    readonly get: (store: StoreRef, id: string) => Effect.Effect<Option.Option<StoreSource>, StoreIoError | StoreSourcesError>;
-    readonly add: (store: StoreRef, source: StoreSource) => Effect.Effect<StoreSource, StoreIoError | StoreSourcesError>;
-    readonly remove: (store: StoreRef, id: string) => Effect.Effect<void, StoreIoError | StoreSourcesError>;
-    readonly setEnabled: (store: StoreRef, id: string, enabled: boolean) => Effect.Effect<void, StoreIoError | StoreSourcesError>;
-    readonly markSynced: (store: StoreRef, id: string, at: Date) => Effect.Effect<void, StoreIoError | StoreSourcesError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    StoreSources,
-    Effect.gen(function* () {
+export class StoreSources extends Effect.Service<StoreSources>()("@skygent/StoreSources", {
+  effect: Effect.gen(function* () {
       const storeDb = yield* StoreDb;
 
       const list = Effect.fn("StoreSources.list")((store: StoreRef) =>
@@ -220,7 +207,8 @@ export class StoreSources extends Context.Tag("@skygent/StoreSources")<
           )
       );
 
-      return StoreSources.of({ list, get, add, remove, setEnabled, markSynced });
+      return { list, get, add, remove, setEnabled, markSynced };
     })
-  );
+}) {
+  static readonly layer = StoreSources.Default;
 }

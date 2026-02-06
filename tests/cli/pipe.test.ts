@@ -69,7 +69,7 @@ const makeInputLayer = (lines: ReadonlyArray<string>) => {
     isTTY: false,
     isReadable: true
   };
-  return Layer.succeed(CliInput, CliInput.of(service));
+  return Layer.succeed(CliInput, CliInput.make(service));
 };
 
 const matches = (expr: FilterExpr, post: Post) => {
@@ -88,7 +88,7 @@ const matches = (expr: FilterExpr, post: Post) => {
 
 const runtimeLayer = Layer.succeed(
   FilterRuntime,
-  FilterRuntime.of({
+  FilterRuntime.make({
     evaluate: (expr) =>
       Effect.succeed((post) => Effect.succeed(matches(expr, post))),
     evaluateWithMetadata: (expr) =>
@@ -103,7 +103,7 @@ const runtimeLayer = Layer.succeed(
 
 const libraryLayer = Layer.succeed(
   FilterLibrary,
-  FilterLibrary.of({
+  FilterLibrary.make({
     list: () => Effect.succeed([]),
     get: (name) => Effect.fail(FilterNotFound.make({ name })),
     save: () => Effect.void,
@@ -253,7 +253,7 @@ describe("pipe command", () => {
     const { layer: outputLayer } = makeOutputCapture();
     const inputLayer = Layer.succeed(
       CliInput,
-      CliInput.of({ lines: Stream.empty, isTTY: false, isReadable: false })
+      CliInput.make({ lines: Stream.empty, isTTY: false, isReadable: false })
     );
     const appLayer = Layer.mergeAll(
       outputLayer,

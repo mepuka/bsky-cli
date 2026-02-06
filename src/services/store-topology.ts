@@ -1,4 +1,4 @@
-import { Chunk, Context, Effect, Layer, Option } from "effect";
+import { Chunk, Effect, Option } from "effect";
 import type { FilterExpr } from "../domain/filter.js";
 import type { StoreName } from "../domain/primitives.js";
 import { StoreRef } from "../domain/store.js";
@@ -32,15 +32,8 @@ export type StoreTopologyData = {
 
 export type StoreTopologyError = StoreIoError | StoreIndexError | StoreSourcesError;
 
-export class StoreTopology extends Context.Tag("@skygent/StoreTopology")<
-  StoreTopology,
-  {
-    readonly build: () => Effect.Effect<StoreTopologyData, StoreTopologyError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    StoreTopology,
-    Effect.gen(function* () {
+export class StoreTopology extends Effect.Service<StoreTopology>()("@skygent/StoreTopology", {
+  effect: Effect.gen(function* () {
       const manager = yield* StoreManager;
       const index = yield* StoreIndex;
       const lineageStore = yield* LineageStore;
@@ -108,7 +101,8 @@ export class StoreTopology extends Context.Tag("@skygent/StoreTopology")<
         })
       );
 
-      return StoreTopology.of({ build });
-    })
-  );
+    return { build };
+  })
+}) {
+  static readonly layer = StoreTopology.Default;
 }

@@ -56,9 +56,9 @@ export const app = Command.make("skygent", configOptions).pipe(
       CliLive.pipe(
         Layer.provide(
           Layer.mergeAll(
-            Layer.succeed(ConfigOverrides, toConfigOverrides(config)),
-            Layer.succeed(CredentialsOverrides, toCredentialsOverrides(config)),
-            Layer.succeed(SyncSettingsOverrides, toSyncSettingsOverrides(config)),
+            Layer.succeed(ConfigOverrides, ConfigOverrides.make(toConfigOverrides(config))),
+            Layer.succeed(CredentialsOverrides, CredentialsOverrides.make(toCredentialsOverrides(config))),
+            Layer.succeed(SyncSettingsOverrides, SyncSettingsOverrides.make(toSyncSettingsOverrides(config))),
             DerivationSettingsOverrides.layer
           )
         )

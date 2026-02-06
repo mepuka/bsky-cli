@@ -11,7 +11,7 @@
  * @module services/sync-checkpoint-store
  */
 
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { StoreIoError } from "../domain/errors.js";
 import { DataSourceSchema, SyncCheckpoint, type DataSource, dataSourceKey } from "../domain/sync.js";
 import { EventSeq, Timestamp, type StorePath } from "../domain/primitives.js";
@@ -48,37 +48,8 @@ const encodeSource = (source: DataSource) =>
  * the last successfully processed position for each data source. This enables
  * resumable sync operations that can pick up where they left off.
  */
-export class SyncCheckpointStore extends Context.Tag("@skygent/SyncCheckpointStore")<
-  SyncCheckpointStore,
-  {
-    /**
-     * Loads the sync checkpoint for a given store and data source.
-     *
-     * @param store - The store reference to load from
-     * @param source - The data source to get checkpoint for
-     * @returns Effect resolving to Option of SyncCheckpoint, or StoreIoError on failure
-     */
-    readonly load: (
-      store: StoreRef,
-      source: DataSource
-    ) => Effect.Effect<Option.Option<SyncCheckpoint>, StoreIoError>;
-
-    /**
-     * Saves a sync checkpoint for resumable operations.
-     *
-     * @param store - The store reference to save to
-     * @param checkpoint - The checkpoint data to persist
-     * @returns Effect resolving to void, or StoreIoError on failure
-     */
-    readonly save: (
-      store: StoreRef,
-      checkpoint: SyncCheckpoint
-    ) => Effect.Effect<void, StoreIoError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    SyncCheckpointStore,
-    Effect.gen(function* () {
+export class SyncCheckpointStore extends Effect.Service<SyncCheckpointStore>()("@skygent/SyncCheckpointStore", {
+  effect: Effect.gen(function* () {
       const storeDb = yield* StoreDb;
 
       const load = Effect.fn("SyncCheckpointStore.load")(
@@ -163,7 +134,8 @@ export class SyncCheckpointStore extends Context.Tag("@skygent/SyncCheckpointSto
         }
       );
 
-      return SyncCheckpointStore.of({ load, save });
+      return { load, save };
     })
-  );
+}) {
+  static readonly layer = SyncCheckpointStore.Default;
 }

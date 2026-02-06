@@ -1,6 +1,6 @@
 import { FileSystem } from "@effect/platform";
 import { Path } from "@effect/platform";
-import { Config, Context, Effect, Layer, Option, Schema } from "effect";
+import { Config, Effect, Option, Schema } from "effect";
 import { formatSchemaError, pickDefined } from "./shared.js";
 import { AppConfig, OutputFormat } from "../domain/config.js";
 import { ConfigError } from "../domain/errors.js";
@@ -81,17 +81,16 @@ type AppConfigOverrides = Partial<AppConfig>;
  * }).pipe(Effect.provide(overridesLayer));
  * ```
  */
-export class ConfigOverrides extends Context.Tag("@skygent/ConfigOverrides")<
-  ConfigOverrides,
-  AppConfigOverrides
->() {
+export class ConfigOverrides extends Effect.Service<ConfigOverrides>()("@skygent/ConfigOverrides", {
+  succeed: {} as AppConfigOverrides
+}) {
   /**
    * Default empty configuration overrides layer.
    *
    * Use this as a base layer when no overrides are needed, or extend it
    * with custom overrides using Layer.succeed.
    */
-  static readonly layer = Layer.succeed(ConfigOverrides, {});
+  static readonly layer = ConfigOverrides.Default;
 }
 
 const PartialAppConfig = Schema.Struct({
@@ -197,10 +196,54 @@ const envOutputFormat = Config.literal("json", "ndjson", "markdown", "table")(
  * const runnable = program.pipe(Effect.provide(AppConfigService.layer));
  * ```
  */
-export class AppConfigService extends Context.Tag("@skygent/AppConfig")<
-  AppConfigService,
-  AppConfig
->() {
+export class AppConfigService extends Effect.Service<AppConfigService>()("@skygent/AppConfig", {
+  effect: Effect.gen(function* () {
+    const { _tag: _, ...overrides } = yield* ConfigOverrides;
+    const path = yield* Path.Path;
+    const defaultRoot = resolveDefaultRoot(path);
+    const configPath = path.join(defaultRoot, configFileName);
+
+    const fileConfig = yield* loadFileConfig(configPath);
+
+    const envService = yield* Config.string("SKYGENT_SERVICE").pipe(Config.option);
+    const envStoreRoot = yield* Config.string("SKYGENT_STORE_ROOT").pipe(Config.option);
+    const envFormat = yield* envOutputFormat.pipe(Config.option);
+    const envIdentifier = yield* Config.string("SKYGENT_IDENTIFIER").pipe(Config.option);
+
+    const envConfig = pickDefined({
+      service: Option.getOrUndefined(envService),
+      storeRoot: Option.getOrUndefined(envStoreRoot),
+      outputFormat: Option.getOrUndefined(envFormat),
+      identifier: Option.getOrUndefined(envIdentifier)
+    });
+
+    const merged = {
+      service: defaultService,
+      storeRoot: defaultRoot,
+      outputFormat: defaultOutputFormat,
+      ...fileConfig,
+      ...envConfig,
+      ...pickDefined(overrides as Record<string, unknown>)
+    };
+
+    const resolvedStoreRoot = merged.storeRoot ?? defaultRoot;
+    const normalized = {
+      ...merged,
+      storeRoot: normalizeStoreRoot(path, resolvedStoreRoot)
+    };
+
+    const decoded = yield* Schema.decodeUnknown(AppConfig)(normalized).pipe(
+      Effect.mapError((error) =>
+        ConfigError.make({
+          message: `Invalid config: ${formatSchemaError(error)}`,
+          path: configPath,
+          cause: error
+        })
+      )
+    );
+    return decoded;
+  })
+}) {
   /**
    * Layer that constructs the AppConfigService by resolving configuration
    * from all sources in priority order.
@@ -226,53 +269,5 @@ export class AppConfigService extends Context.Tag("@skygent/AppConfig")<
    * );
    * ```
    */
-  static readonly layer = Layer.effect(
-    AppConfigService,
-    Effect.gen(function* () {
-      const overrides = yield* ConfigOverrides;
-      const path = yield* Path.Path;
-      const defaultRoot = resolveDefaultRoot(path);
-      const configPath = path.join(defaultRoot, configFileName);
-
-      const fileConfig = yield* loadFileConfig(configPath);
-
-      const envService = yield* Config.string("SKYGENT_SERVICE").pipe(Config.option);
-      const envStoreRoot = yield* Config.string("SKYGENT_STORE_ROOT").pipe(Config.option);
-      const envFormat = yield* envOutputFormat.pipe(Config.option);
-      const envIdentifier = yield* Config.string("SKYGENT_IDENTIFIER").pipe(Config.option);
-
-      const envConfig = pickDefined({
-        service: Option.getOrUndefined(envService),
-        storeRoot: Option.getOrUndefined(envStoreRoot),
-        outputFormat: Option.getOrUndefined(envFormat),
-        identifier: Option.getOrUndefined(envIdentifier)
-      });
-
-      const merged = {
-        service: defaultService,
-        storeRoot: defaultRoot,
-        outputFormat: defaultOutputFormat,
-        ...fileConfig,
-        ...envConfig,
-        ...pickDefined(overrides as Record<string, unknown>)
-      };
-
-      const resolvedStoreRoot = merged.storeRoot ?? defaultRoot;
-      const normalized = {
-        ...merged,
-        storeRoot: normalizeStoreRoot(path, resolvedStoreRoot)
-      };
-
-      const decoded = yield* Schema.decodeUnknown(AppConfig)(normalized).pipe(
-        Effect.mapError((error) =>
-          ConfigError.make({
-            message: `Invalid config: ${formatSchemaError(error)}`,
-            path: configPath,
-            cause: error
-          })
-        )
-      );
-      return AppConfigService.of(decoded);
-    })
-  );
+  static readonly layer = AppConfigService.Default;
 }

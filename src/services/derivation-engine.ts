@@ -62,7 +62,7 @@
  * - DerivationSettings: Configures checkpoint frequency and intervals
  */
 
-import { Clock, Context, Effect, Exit, Layer, Option, ParseResult, Ref, Schema, Stream } from "effect";
+import { Clock, Effect, Exit, Option, Ref, Schema, Stream } from "effect";
 import { StoreEventLog } from "./store-event-log.js";
 import { StoreIndex } from "./store-index.js";
 import { StoreCommitter } from "./store-commit.js";
@@ -86,7 +86,6 @@ import {
 import { EventMeta, PostDelete, PostUpsert, isPostDelete } from "../domain/events.js";
 import type { EventLogEntry } from "../domain/events.js";
 import { EventSeq, Timestamp } from "../domain/primitives.js";
-import type { FilterCompileError, FilterEvalError, StoreIndexError, StoreIoError } from "../domain/errors.js";
 
 /**
  * Options controlling the derivation process.
@@ -130,91 +129,20 @@ export interface DerivationOptions {
  * Use this service to create filtered views that automatically stay in sync with their
  * source stores through incremental updates.
  */
-export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
-  DerivationEngine,
-  {
-    /**
-     * Derives a target store by applying a filter to posts from a source store.
-     *
-     * This method processes events from the source store, evaluates each post against
-     * the provided filter expression, and appends matching posts to the target store.
-     * Delete events are always propagated to maintain consistency.
-     *
-     * ## Process Overview
-     *
-     * 1. **Validation**: Ensures source and target stores are different; validates
-     *    filter compatibility with the selected evaluation mode
-     *
-     * 2. **Filter Compilation**: Compiles the filter expression and creates an
-     *    executable predicate
-     *
-     * 3. **Reset (optional)**: If `options.reset` is true, clears the target store
-     *    and removes any existing checkpoint
-     *
-     * 4. **Checkpoint Loading**: Loads the last checkpoint (if exists and compatible)
-     *    to resume from where derivation left off
-     *
-     * 5. **Event Streaming**: Streams events from the source store starting after
-     *    the checkpoint position
-     *
-     * 6. **Event Processing**:
-     *    - PostDelete: Always propagated to target store
-     *    - PostUpsert: Filtered; matching posts are added (with URI deduplication)
-     *
-     * 7. **Checkpoint Saving**: Saves checkpoint periodically during processing and
-     *    at completion, including on failure (if any progress was made)
-     *
-     * 8. **Lineage Recording**: Records derivation metadata for tracking store relationships
-     *
-     * @param sourceRef - Reference to the source store containing posts to filter
-     * @param targetRef - Reference to the target store where filtered posts will be stored
-     * @param filterExpr - The filter expression defining which posts to include
-     * @param options - Derivation options controlling mode and reset behavior
-     *
-     * @returns An effect that resolves to a {@link DerivationResult} containing:
-     *          - `eventsProcessed`: Total events evaluated from the source
-     *          - `eventsMatched`: Posts that matched the filter and were added
-     *          - `eventsSkipped`: Posts that didn't match or were duplicates
-         *          - `deletesPropagated`: Delete events forwarded to the target
-     *          - `durationMs`: Time taken for the derivation process
-     *
-     * @throws {DerivationError} When:
-     *         - Source and target stores are the same
-     *         - EventTime mode is used with effectful filters
-     *         - Target store has data but no checkpoint (inconsistent state)
-     *         - Filter or mode has changed since last run (without reset)
-     * @throws {StoreIoError} When reading from source or writing to target fails
-     * @throws {StoreIndexError} When index operations fail
-     * @throws {FilterCompileError} When the filter expression cannot be compiled
-     * @throws {FilterEvalError} When filter evaluation fails at runtime
-     * @throws {ParseResult.ParseError} When timestamp parsing fails
-     */
-    readonly derive: (
-      sourceRef: StoreRef,
-      targetRef: StoreRef,
-      filterExpr: FilterExpr,
-      options: DerivationOptions
-    ) => Effect.Effect<
-      DerivationResult,
-      DerivationError | StoreIoError | StoreIndexError | FilterCompileError | FilterEvalError | ParseResult.ParseError
-    >;
-  }
->() {
-  static readonly layer = Layer.effect(
-    DerivationEngine,
-    Effect.gen(function* () {
-      const eventLog = yield* StoreEventLog;
-      const index = yield* StoreIndex;
-      const committer = yield* StoreCommitter;
-      const compiler = yield* FilterCompiler;
-      const runtime = yield* FilterRuntime;
-      const checkpoints = yield* ViewCheckpointStore;
-      const lineageStore = yield* LineageStore;
-      const settings = yield* DerivationSettings;
+export class DerivationEngine extends Effect.Service<DerivationEngine>()("@skygent/DerivationEngine", {
+  effect: Effect.gen(function* () {
+    const eventLog = yield* StoreEventLog;
+    const index = yield* StoreIndex;
+    const committer = yield* StoreCommitter;
+    const compiler = yield* FilterCompiler;
+    const runtime = yield* FilterRuntime;
+    const checkpoints = yield* ViewCheckpointStore;
+    const lineageStore = yield* LineageStore;
+    const settings = yield* DerivationSettings;
 
-      const derive = Effect.fn("DerivationEngine.derive")(
-        (sourceRef, targetRef, filterExpr, options) =>
-          Effect.gen(function* () {
+    const derive = Effect.fn("DerivationEngine.derive")(
+      (sourceRef: StoreRef, targetRef: StoreRef, filterExpr: FilterExpr, options: DerivationOptions) =>
+        Effect.gen(function* () {
             if (sourceRef.name === targetRef.name) {
               return yield* DerivationError.make({
                 message: "Source and target stores must be different.",
@@ -531,7 +459,8 @@ export class DerivationEngine extends Context.Tag("@skygent/DerivationEngine")<
           })
       );
 
-      return DerivationEngine.of({ derive });
-    })
-  );
+    return { derive };
+  })
+}) {
+  static readonly layer = DerivationEngine.Default;
 }

@@ -48,7 +48,6 @@ import { FileSystem, Path } from "@effect/platform";
 import { formatSchemaError } from "./shared.js";
 import {
   Config,
-  Context,
   Effect,
   Layer,
   Option,
@@ -105,12 +104,11 @@ export type CredentialStatus = {
  * );
  * ```
  */
-export class CredentialsOverrides extends Context.Tag("@skygent/CredentialsOverrides")<
-  CredentialsOverrides,
-  CredentialsOverridesValue
->() {
+export class CredentialsOverrides extends Effect.Service<CredentialsOverrides>()("@skygent/CredentialsOverrides", {
+  succeed: {} as CredentialsOverridesValue
+}) {
   /** Empty layer for when no overrides are needed */
-  static readonly layer = Layer.succeed(CredentialsOverrides, {});
+  static readonly layer = CredentialsOverrides.Default;
 }
 
 const credentialsFileName = "credentials.json";
@@ -338,311 +336,304 @@ export interface CredentialStoreService {
  * );
  * ```
  */
-export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
-  CredentialStore,
-  CredentialStoreService
->() {
-  /**
-   * Production layer that creates the credential store service.
-   * Requires AppConfigService and FileSystem services.
-   */
-  static readonly layer = Layer.effect(
-    CredentialStore,
-    Effect.gen(function* () {
-      const overrides = yield* CredentialsOverrides;
-      const config = yield* AppConfigService;
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
+export class CredentialStore extends Effect.Service<CredentialStore>()("@skygent/CredentialStore", {
+  effect: Effect.gen(function* () {
+    const overrides = yield* CredentialsOverrides;
+    const config = yield* AppConfigService;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
 
-      const credentialsPath = path.join(config.storeRoot, credentialsFileName);
-      const credentialsKeyPath = path.join(config.storeRoot, credentialsKeyFileName);
+    const credentialsPath = path.join(config.storeRoot, credentialsFileName);
+    const credentialsKeyPath = path.join(config.storeRoot, credentialsKeyFileName);
 
-      const envIdentifier = yield* Config.string("SKYGENT_IDENTIFIER").pipe(Config.option);
-      const envPassword = yield* Config.redacted("SKYGENT_PASSWORD").pipe(Config.option);
-      const envKey = yield* Config.redacted("SKYGENT_CREDENTIALS_KEY").pipe(
-        Config.option
-      );
+    const envIdentifier = yield* Config.string("SKYGENT_IDENTIFIER").pipe(Config.option);
+    const envPassword = yield* Config.redacted("SKYGENT_PASSWORD").pipe(Config.option);
+    const envKey = yield* Config.redacted("SKYGENT_CREDENTIALS_KEY").pipe(
+      Config.option
+    );
 
-      const loadKeyFromFile = (exists?: boolean) =>
-        Effect.gen(function* () {
-          const hasFile =
-            exists ??
-            (yield* fs.exists(credentialsKeyPath).pipe(
-              Effect.mapError(toCredentialError("Failed to check credentials key file"))
-            ));
-          if (!hasFile) {
-            return Option.none<Redacted.Redacted<string>>();
-          }
-          const raw = yield* fs.readFileString(credentialsKeyPath).pipe(
-            Effect.mapError(toCredentialError("Failed to read credentials key file"))
-          );
-          const normalized = yield* normalizeKeyValue(raw);
-          return Option.some(Redacted.make(normalized));
-        });
-
-      const resolveKey = Effect.fn("CredentialStore.resolveKey")(() =>
-        Effect.gen(function* () {
-          if (Option.isSome(envKey)) {
-            return Option.some(envKey.value);
-          }
-          return yield* loadKeyFromFile();
-        })
-      );
-
-      const loadFromFile = (exists?: boolean) =>
-        Effect.gen(function* () {
-          const hasFile =
-            exists ??
-            (yield* fs.exists(credentialsPath).pipe(
-              Effect.mapError(toCredentialError("Failed to check credentials file"))
-            ));
-          if (!hasFile) {
-            return Option.none<CredentialsPayload>();
-          }
-          const key = yield* resolveKey();
-          if (Option.isNone(key)) {
-            return yield* CredentialError.make({
-              message:
-                "Credentials file exists but no credentials key is available."
-            });
-          }
-          const raw = yield* fs.readFileString(credentialsPath).pipe(
-            Effect.mapError(toCredentialError("Failed to read credentials file"))
-          );
-          const file = yield* decodeCredentialsFile(raw);
-          const payload = yield* decryptPayload(Redacted.value(key.value), file);
-          return Option.some(payload);
-        });
-
-      const resolveIdentifier = (
-        filePayload: Option.Option<CredentialsPayload>
-      ): string | undefined =>
-        overrides.identifier ??
-        Option.getOrUndefined(envIdentifier) ??
-        Option.getOrUndefined(Option.map(filePayload, (payload) => payload.identifier)) ??
-        config.identifier;
-
-      const resolvePassword = (
-        filePayload: Option.Option<CredentialsPayload>
-      ): Redacted.Redacted<string> | undefined =>
-        overrides.password ??
-        Option.getOrUndefined(envPassword) ??
-        Option.getOrUndefined(
-          Option.map(filePayload, (payload) => Redacted.make(payload.password))
+    const loadKeyFromFile = (exists?: boolean) =>
+      Effect.gen(function* () {
+        const hasFile =
+          exists ??
+          (yield* fs.exists(credentialsKeyPath).pipe(
+            Effect.mapError(toCredentialError("Failed to check credentials key file"))
+          ));
+        if (!hasFile) {
+          return Option.none<Redacted.Redacted<string>>();
+        }
+        const raw = yield* fs.readFileString(credentialsKeyPath).pipe(
+          Effect.mapError(toCredentialError("Failed to read credentials key file"))
         );
+        const normalized = yield* normalizeKeyValue(raw);
+        return Option.some(Redacted.make(normalized));
+      });
 
-      const resolveIdentifierSource = (
-        filePayload: Option.Option<CredentialsPayload>
-      ): CredentialSource => {
-        if (overrides.identifier) return "overrides";
-        if (Option.isSome(envIdentifier)) return "env";
-        if (Option.isSome(filePayload)) return "file";
-        if (config.identifier) return "config";
-        return "none";
-      };
+    const resolveKey = Effect.fn("CredentialStore.resolveKey")(() =>
+      Effect.gen(function* () {
+        if (Option.isSome(envKey)) {
+          return Option.some(envKey.value);
+        }
+        return yield* loadKeyFromFile();
+      })
+    );
 
-      const resolvePasswordSource = (
-        filePayload: Option.Option<CredentialsPayload>
-      ): CredentialSource => {
-        if (overrides.password) return "overrides";
-        if (Option.isSome(envPassword)) return "env";
-        if (Option.isSome(filePayload)) return "file";
-        return "none";
-      };
+    const loadFromFile = (exists?: boolean) =>
+      Effect.gen(function* () {
+        const hasFile =
+          exists ??
+          (yield* fs.exists(credentialsPath).pipe(
+            Effect.mapError(toCredentialError("Failed to check credentials file"))
+          ));
+        if (!hasFile) {
+          return Option.none<CredentialsPayload>();
+        }
+        const key = yield* resolveKey();
+        if (Option.isNone(key)) {
+          return yield* CredentialError.make({
+            message:
+              "Credentials file exists but no credentials key is available."
+          });
+        }
+        const raw = yield* fs.readFileString(credentialsPath).pipe(
+          Effect.mapError(toCredentialError("Failed to read credentials file"))
+        );
+        const file = yield* decodeCredentialsFile(raw);
+        const payload = yield* decryptPayload(Redacted.value(key.value), file);
+        return Option.some(payload);
+      });
 
-      const get = Effect.fn("CredentialStore.get")(() =>
-        Effect.gen(function* () {
-          const filePayload = yield* loadFromFile();
-          const identifier = resolveIdentifier(filePayload);
-          const password = resolvePassword(filePayload);
-          if (!identifier || !password) {
-            return Option.none<BskyCredentials>();
-          }
-          const creds = BskyCredentials.make({ identifier, password });
-          return Option.some(creds);
-        })
+    const resolveIdentifier = (
+      filePayload: Option.Option<CredentialsPayload>
+    ): string | undefined =>
+      overrides.identifier ??
+      Option.getOrUndefined(envIdentifier) ??
+      Option.getOrUndefined(Option.map(filePayload, (payload) => payload.identifier)) ??
+      config.identifier;
+
+    const resolvePassword = (
+      filePayload: Option.Option<CredentialsPayload>
+    ): Redacted.Redacted<string> | undefined =>
+      overrides.password ??
+      Option.getOrUndefined(envPassword) ??
+      Option.getOrUndefined(
+        Option.map(filePayload, (payload) => Redacted.make(payload.password))
       );
 
-      const require = Effect.fn("CredentialStore.require")(() =>
-        get().pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () =>
-                CredentialError.make({
-                  message: "Missing Bluesky credentials."
-                }),
-              onSome: Effect.succeed
+    const resolveIdentifierSource = (
+      filePayload: Option.Option<CredentialsPayload>
+    ): CredentialSource => {
+      if (overrides.identifier) return "overrides";
+      if (Option.isSome(envIdentifier)) return "env";
+      if (Option.isSome(filePayload)) return "file";
+      if (config.identifier) return "config";
+      return "none";
+    };
+
+    const resolvePasswordSource = (
+      filePayload: Option.Option<CredentialsPayload>
+    ): CredentialSource => {
+      if (overrides.password) return "overrides";
+      if (Option.isSome(envPassword)) return "env";
+      if (Option.isSome(filePayload)) return "file";
+      return "none";
+    };
+
+    const get = Effect.fn("CredentialStore.get")(() =>
+      Effect.gen(function* () {
+        const filePayload = yield* loadFromFile();
+        const identifier = resolveIdentifier(filePayload);
+        const password = resolvePassword(filePayload);
+        if (!identifier || !password) {
+          return Option.none<BskyCredentials>();
+        }
+        const creds = BskyCredentials.make({ identifier, password });
+        return Option.some(creds);
+      })
+    );
+
+    const require = Effect.fn("CredentialStore.require")(() =>
+      get().pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              CredentialError.make({
+                message: "Missing Bluesky credentials."
+              }),
+            onSome: Effect.succeed
+          })
+        )
+      )
+    );
+
+    const save = Effect.fn("CredentialStore.save")((credentials: BskyCredentials) =>
+      Effect.gen(function* () {
+        const key = yield* resolveKey();
+        if (Option.isNone(key)) {
+          return yield* CredentialError.make({
+            message:
+              "No credentials key available. Set SKYGENT_CREDENTIALS_KEY or run \"skygent config credentials key set\"."
+          });
+        }
+        const payload = CredentialsPayload.make({
+          identifier: credentials.identifier,
+          password: Redacted.value(credentials.password)
+        });
+        const file = yield* encryptPayload(Redacted.value(key.value), payload);
+        yield* fs
+          .makeDirectory(config.storeRoot, { recursive: true, mode: privateDirMode })
+          .pipe(Effect.mapError(toCredentialError("Failed to create credentials directory")));
+        const encoded = yield* Schema.encodeUnknown(
+          Schema.parseJson(CredentialsFile)
+        )(file).pipe(
+          Effect.mapError((error) =>
+            CredentialError.make({
+              message: `Invalid credentials file: ${formatSchemaError(error)}`,
+              cause: error
             })
           )
+        );
+        yield* fs
+          .writeFileString(credentialsPath, encoded, { mode: privateFileMode })
+          .pipe(Effect.mapError(toCredentialError("Failed to write credentials file")));
+        yield* fs
+          .chmod(credentialsPath, privateFileMode)
+          .pipe(Effect.catchAll(() => Effect.void));
+      })
+    );
+
+    const clear = Effect.fn("CredentialStore.clear")(() =>
+      fs
+        .remove(credentialsPath)
+        .pipe(
+          Effect.catchTag("SystemError", (error) =>
+            error.reason === "NotFound" ? Effect.void : Effect.fail(error)
+          ),
+          Effect.mapError(toCredentialError("Failed to remove credentials file"))
         )
-      );
+    );
 
-      const save = Effect.fn("CredentialStore.save")((credentials: BskyCredentials) =>
-        Effect.gen(function* () {
-          const key = yield* resolveKey();
-          if (Option.isNone(key)) {
-            return yield* CredentialError.make({
-              message:
-                "No credentials key available. Set SKYGENT_CREDENTIALS_KEY or run \"skygent config credentials key set\"."
-            });
-          }
-          const payload = CredentialsPayload.make({
-            identifier: credentials.identifier,
-            password: Redacted.value(credentials.password)
+    const setKey = Effect.fn("CredentialStore.setKey")((options?: {
+      readonly value?: string;
+      readonly overwrite?: boolean;
+    }) =>
+      Effect.gen(function* () {
+        const overwrite = options?.overwrite ?? false;
+        const keyValue = options?.value
+          ? yield* normalizeKeyValue(options.value)
+          : generateKeyValue();
+        const exists = yield* fs.exists(credentialsKeyPath).pipe(
+          Effect.mapError(toCredentialError("Failed to check credentials key file"))
+        );
+        if (exists && !overwrite) {
+          return yield* CredentialError.make({
+            message:
+              "Credentials key file already exists. Use --force to overwrite."
           });
-          const file = yield* encryptPayload(Redacted.value(key.value), payload);
-          yield* fs
-            .makeDirectory(config.storeRoot, { recursive: true, mode: privateDirMode })
-            .pipe(Effect.mapError(toCredentialError("Failed to create credentials directory")));
-          const encoded = yield* Schema.encodeUnknown(
-            Schema.parseJson(CredentialsFile)
-          )(file).pipe(
-            Effect.mapError((error) =>
-              CredentialError.make({
-                message: `Invalid credentials file: ${formatSchemaError(error)}`,
-                cause: error
-              })
-            )
-          );
-          yield* fs
-            .writeFileString(credentialsPath, encoded, { mode: privateFileMode })
-            .pipe(Effect.mapError(toCredentialError("Failed to write credentials file")));
-          yield* fs
-            .chmod(credentialsPath, privateFileMode)
-            .pipe(Effect.catchAll(() => Effect.void));
-        })
-      );
+        }
+        yield* fs
+          .makeDirectory(config.storeRoot, { recursive: true, mode: privateDirMode })
+          .pipe(Effect.mapError(toCredentialError("Failed to create credentials directory")));
+        yield* fs
+          .writeFileString(credentialsKeyPath, keyValue, { mode: privateFileMode })
+          .pipe(Effect.mapError(toCredentialError("Failed to write credentials key file")));
+        yield* fs
+          .chmod(credentialsKeyPath, privateFileMode)
+          .pipe(Effect.catchAll(() => Effect.void));
+        return { overwritten: exists };
+      })
+    );
 
-      const clear = Effect.fn("CredentialStore.clear")(() =>
-        fs
-          .remove(credentialsPath)
-          .pipe(
-            Effect.catchTag("SystemError", (error) =>
-              error.reason === "NotFound" ? Effect.void : Effect.fail(error)
-            ),
-            Effect.mapError(toCredentialError("Failed to remove credentials file"))
-          )
-      );
+    const clearKey = Effect.fn("CredentialStore.clearKey")(() =>
+      fs
+        .remove(credentialsKeyPath)
+        .pipe(
+          Effect.catchTag("SystemError", (error) =>
+            error.reason === "NotFound" ? Effect.void : Effect.fail(error)
+          ),
+          Effect.mapError(toCredentialError("Failed to remove credentials key file"))
+        )
+    );
 
-      const setKey = Effect.fn("CredentialStore.setKey")((options?: {
-        readonly value?: string;
-        readonly overwrite?: boolean;
-      }) =>
-        Effect.gen(function* () {
-          const overwrite = options?.overwrite ?? false;
-          const keyValue = options?.value
-            ? yield* normalizeKeyValue(options.value)
-            : generateKeyValue();
-          const exists = yield* fs.exists(credentialsKeyPath).pipe(
-            Effect.mapError(toCredentialError("Failed to check credentials key file"))
-          );
-          if (exists && !overwrite) {
-            return yield* CredentialError.make({
-              message:
-                "Credentials key file already exists. Use --force to overwrite."
-            });
-          }
-          yield* fs
-            .makeDirectory(config.storeRoot, { recursive: true, mode: privateDirMode })
-            .pipe(Effect.mapError(toCredentialError("Failed to create credentials directory")));
-          yield* fs
-            .writeFileString(credentialsKeyPath, keyValue, { mode: privateFileMode })
-            .pipe(Effect.mapError(toCredentialError("Failed to write credentials key file")));
-          yield* fs
-            .chmod(credentialsKeyPath, privateFileMode)
-            .pipe(Effect.catchAll(() => Effect.void));
-          return { overwritten: exists };
-        })
-      );
-
-      const clearKey = Effect.fn("CredentialStore.clearKey")(() =>
-        fs
-          .remove(credentialsKeyPath)
-          .pipe(
-            Effect.catchTag("SystemError", (error) =>
-              error.reason === "NotFound" ? Effect.void : Effect.fail(error)
-            ),
-            Effect.mapError(toCredentialError("Failed to remove credentials key file"))
-          )
-      );
-
-      const status = Effect.fn("CredentialStore.status")(() =>
-        Effect.gen(function* () {
-          const fileExists = yield* fs.exists(credentialsPath).pipe(
-            Effect.mapError(toCredentialError("Failed to check credentials file"))
-          );
-          const keyFileExists = yield* fs.exists(credentialsKeyPath).pipe(
-            Effect.mapError(toCredentialError("Failed to check credentials key file"))
-          );
-          const keyFileResult = keyFileExists
-            ? yield* loadKeyFromFile(true).pipe(Effect.either)
+    const status = Effect.fn("CredentialStore.status")(() =>
+      Effect.gen(function* () {
+        const fileExists = yield* fs.exists(credentialsPath).pipe(
+          Effect.mapError(toCredentialError("Failed to check credentials file"))
+        );
+        const keyFileExists = yield* fs.exists(credentialsKeyPath).pipe(
+          Effect.mapError(toCredentialError("Failed to check credentials key file"))
+        );
+        const keyFileResult = keyFileExists
+          ? yield* loadKeyFromFile(true).pipe(Effect.either)
+          : undefined;
+        const keyFileReadable = keyFileExists
+          ? keyFileResult ? keyFileResult._tag === "Right" && Option.isSome(keyFileResult.right) : false
+          : false;
+        const keyFileError = keyFileExists
+          ? keyFileResult && keyFileResult._tag === "Left"
+            ? keyFileResult.left.message
+            : undefined
+          : undefined;
+        const keySource: CredentialKeySource = Option.isSome(envKey)
+          ? "env"
+          : keyFileReadable
+            ? "file"
+            : "none";
+        const keyPresent = keySource !== "none";
+        const filePayloadResult =
+          fileExists && keyPresent
+            ? yield* loadFromFile(true).pipe(Effect.either)
             : undefined;
-          const keyFileReadable = keyFileExists
-            ? keyFileResult ? keyFileResult._tag === "Right" && Option.isSome(keyFileResult.right) : false
-            : false;
-          const keyFileError = keyFileExists
-            ? keyFileResult && keyFileResult._tag === "Left"
-              ? keyFileResult.left.message
-              : undefined
-            : undefined;
-          const keySource: CredentialKeySource = Option.isSome(envKey)
-            ? "env"
-            : keyFileReadable
-              ? "file"
-              : "none";
-          const keyPresent = keySource !== "none";
-          const filePayloadResult =
-            fileExists && keyPresent
-              ? yield* loadFromFile(true).pipe(Effect.either)
+        const filePayload = filePayloadResult && filePayloadResult._tag === "Right"
+          ? filePayloadResult.right
+          : Option.none<CredentialsPayload>();
+        const fileError = !fileExists
+          ? undefined
+          : !keyPresent
+            ? "Credentials file exists but no credentials key is available."
+            : filePayloadResult && filePayloadResult._tag === "Left"
+              ? filePayloadResult.left.message
               : undefined;
-          const filePayload = filePayloadResult && filePayloadResult._tag === "Right"
-            ? filePayloadResult.right
-            : Option.none<CredentialsPayload>();
-          const fileError = !fileExists
-            ? undefined
-            : !keyPresent
-              ? "Credentials file exists but no credentials key is available."
-              : filePayloadResult && filePayloadResult._tag === "Left"
-                ? filePayloadResult.left.message
-                : undefined;
-          const fileReadable = fileExists && keyPresent
-            ? filePayloadResult ? filePayloadResult._tag === "Right" : false
-            : false;
+        const fileReadable = fileExists && keyPresent
+          ? filePayloadResult ? filePayloadResult._tag === "Right" : false
+          : false;
 
-          const identifier = resolveIdentifier(filePayload);
-          const password = resolvePassword(filePayload);
-          const identifierSource = identifier
-            ? resolveIdentifierSource(filePayload)
-            : "none";
-          const passwordSource = password
-            ? resolvePasswordSource(filePayload)
-            : "none";
-          const hasCredentials = Boolean(identifier) && Boolean(password);
-          const source: CredentialSource = !hasCredentials
-            ? "none"
-            : identifierSource === passwordSource
-              ? identifierSource
-              : "mixed";
-          return {
-            source,
-            identifierSource,
-            passwordSource,
-            hasCredentials,
-            fileExists,
-            fileReadable,
-            ...(fileError ? { fileError } : {}),
-            keyPresent,
-            keySource,
-            keyFileExists,
-            keyFileReadable,
-            ...(keyFileError ? { keyFileError } : {})
-          };
-        })
-      );
+        const identifier = resolveIdentifier(filePayload);
+        const password = resolvePassword(filePayload);
+        const identifierSource = identifier
+          ? resolveIdentifierSource(filePayload)
+          : "none";
+        const passwordSource = password
+          ? resolvePasswordSource(filePayload)
+          : "none";
+        const hasCredentials = Boolean(identifier) && Boolean(password);
+        const source: CredentialSource = !hasCredentials
+          ? "none"
+          : identifierSource === passwordSource
+            ? identifierSource
+            : "mixed";
+        return {
+          source,
+          identifierSource,
+          passwordSource,
+          hasCredentials,
+          fileExists,
+          fileReadable,
+          ...(fileError ? { fileError } : {}),
+          keyPresent,
+          keySource,
+          keyFileExists,
+          keyFileReadable,
+          ...(keyFileError ? { keyFileError } : {})
+        };
+      })
+    );
 
-      return CredentialStore.of({ get, require, save, clear, status, setKey, clearKey });
-    })
-  );
+    const service: CredentialStoreService = { get, require, save, clear, status, setKey, clearKey };
+    return service;
+  })
+}) {
+  static readonly layer = CredentialStore.Default;
 
   /**
    * Test layer that provides an empty credential store.
@@ -651,7 +642,7 @@ export class CredentialStore extends Context.Tag("@skygent/CredentialStore")<
    */
   static readonly testLayer = Layer.succeed(
     CredentialStore,
-    CredentialStore.of({
+    CredentialStore.make({
       get: () => Effect.succeed(Option.none()),
       require: () =>
         Effect.fail(CredentialError.make({ message: "Missing Bluesky credentials." })),

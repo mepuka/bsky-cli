@@ -1,5 +1,5 @@
-import { Chunk, Clock, Context, Effect, Layer, Schema, Stream } from "effect";
-import { FilterCompileError, FilterEvalError, StoreIndexError } from "../domain/errors.js";
+import { Chunk, Clock, Effect, Schema, Stream } from "effect";
+import { StoreIndexError } from "../domain/errors.js";
 import { GraphEdge, GraphNode, GraphSnapshot, GraphSummary } from "../domain/graph.js";
 import { filterExprSignature } from "../domain/filter.js";
 import type { StoreQuery } from "../domain/events.js";
@@ -21,8 +21,6 @@ export type InteractionNetworkInput = {
   readonly query: StoreQuery;
   readonly limit?: number;
 };
-
-type GraphBuilderError = StoreIndexError | FilterCompileError | FilterEvalError;
 
 const getRecordAuthor = (
   record: EmbedRecordTarget
@@ -51,18 +49,8 @@ const recordRepostActor = (reason: FeedReasonRepost) => ({
   handle: reason.by.handle
 });
 
-export class GraphBuilder extends Context.Tag("@skygent/GraphBuilder")<
-  GraphBuilder,
-  {
-    readonly buildInteractionNetwork: (
-      store: StoreRef,
-      input: InteractionNetworkInput
-    ) => Effect.Effect<GraphSnapshot, GraphBuilderError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    GraphBuilder,
-    Effect.gen(function* () {
+export class GraphBuilder extends Effect.Service<GraphBuilder>()("@skygent/GraphBuilder", {
+  effect: Effect.gen(function* () {
       const index = yield* StoreIndex;
       const runtime = yield* FilterRuntime;
 
@@ -209,7 +197,8 @@ export class GraphBuilder extends Context.Tag("@skygent/GraphBuilder")<
           })
       );
 
-      return GraphBuilder.of({ buildInteractionNetwork });
-    })
-  );
+    return { buildInteractionNetwork };
+  })
+}) {
+  static readonly layer = GraphBuilder.Default;
 }

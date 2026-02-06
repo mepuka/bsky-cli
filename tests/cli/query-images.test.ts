@@ -159,7 +159,7 @@ const makeFetcherLayer = (onFetch: () => void) => {
 
   return Layer.succeed(
     ImageFetcher,
-    ImageFetcher.of({
+    ImageFetcher.make({
       fetch,
       fetchMany: (urls) => Effect.forEach(urls, (url) => fetch(url))
     })
@@ -182,7 +182,7 @@ const buildLayer = (
   const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer));
   const filterRuntimeLayer = Layer.succeed(
     FilterRuntime,
-    FilterRuntime.of({
+    FilterRuntime.make({
       evaluate: () => Effect.succeed(() => Effect.succeed(true)),
       evaluateWithMetadata: () => Effect.succeed(() => Effect.succeed({ ok: true })),
       evaluateBatch: () =>

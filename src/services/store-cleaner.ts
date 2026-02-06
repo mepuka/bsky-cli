@@ -1,25 +1,12 @@
-import { Context, Effect, Layer, Option } from "effect";
-import type { StoreError } from "../domain/errors.js";
+import { Effect, Option } from "effect";
 import { StoreName } from "../domain/primitives.js";
 import { StoreDb } from "./store-db.js";
 import { StoreEventLog } from "./store-event-log.js";
 import { StoreIndex } from "./store-index.js";
 import { StoreManager } from "./store-manager.js";
 
-export class StoreCleaner extends Context.Tag("@skygent/StoreCleaner")<
-  StoreCleaner,
-  {
-    readonly deleteStore: (
-      name: StoreName
-    ) => Effect.Effect<
-      { readonly deleted: boolean; readonly reason?: "missing" },
-      StoreError
-    >;
-  }
->() {
-  static readonly layer = Layer.effect(
-    StoreCleaner,
-    Effect.gen(function* () {
+export class StoreCleaner extends Effect.Service<StoreCleaner>()("@skygent/StoreCleaner", {
+  effect: Effect.gen(function* () {
       const manager = yield* StoreManager;
       const index = yield* StoreIndex;
       const eventLog = yield* StoreEventLog;
@@ -40,7 +27,8 @@ export class StoreCleaner extends Context.Tag("@skygent/StoreCleaner")<
         })
       );
 
-      return StoreCleaner.of({ deleteStore });
+      return { deleteStore };
     })
-  );
+}) {
+  static readonly layer = StoreCleaner.Default;
 }

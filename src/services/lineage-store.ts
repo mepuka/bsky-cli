@@ -14,7 +14,7 @@
  */
 
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
-import { Context, Effect, Layer, Option } from "effect";
+import { Effect } from "effect";
 import { StoreLineage } from "../domain/derivation.js";
 import { StoreName, storePath } from "../domain/primitives.js";
 import { StoreIoError } from "../domain/errors.js";
@@ -41,61 +41,31 @@ const toStoreIoError = (storeName: StoreName) => (cause: unknown) =>
  * which source stores were used to derive a given store. This enables
  * dependency tracking and validation of derivation chains.
  */
-export class LineageStore extends Context.Tag("@skygent/LineageStore")<
-  LineageStore,
-  {
-    /**
-     * Retrieves the lineage information for a store.
-     *
-     * @param storeName - The name of the store to get lineage for
-     * @returns Effect resolving to Option of StoreLineage, or StoreIoError on failure
-     */
-    readonly get: (
-      storeName: StoreName
-    ) => Effect.Effect<Option.Option<StoreLineage>, StoreIoError>;
+export class LineageStore extends Effect.Service<LineageStore>()("@skygent/LineageStore", {
+  effect: Effect.gen(function* () {
+    const kv = yield* KeyValueStore.KeyValueStore;
+    const lineages = kv.forSchema(StoreLineage);
 
-    /**
-     * Saves lineage information for a store.
-     *
-     * @param lineage - The lineage data to persist
-     * @returns Effect resolving to void, or StoreIoError on failure
-     */
-    readonly save: (lineage: StoreLineage) => Effect.Effect<void, StoreIoError>;
+    const get = Effect.fn("LineageStore.get")((storeName: StoreName) =>
+      lineages
+        .get(lineageKey(storeName))
+        .pipe(Effect.mapError(toStoreIoError(storeName)))
+    );
 
-    /**
-     * Removes lineage information for a store.
-     *
-     * @param storeName - The name of the store to remove lineage for
-     * @returns Effect resolving to void, or StoreIoError on failure
-     */
-    readonly remove: (storeName: StoreName) => Effect.Effect<void, StoreIoError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    LineageStore,
-    Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const lineages = kv.forSchema(StoreLineage);
+    const save = Effect.fn("LineageStore.save")((lineage: StoreLineage) =>
+      lineages
+        .set(lineageKey(lineage.storeName), lineage)
+        .pipe(Effect.mapError(toStoreIoError(lineage.storeName)))
+    );
 
-      const get = Effect.fn("LineageStore.get")((storeName: StoreName) =>
-        lineages
-          .get(lineageKey(storeName))
-          .pipe(Effect.mapError(toStoreIoError(storeName)))
-      );
+    const remove = Effect.fn("LineageStore.remove")((storeName: StoreName) =>
+      lineages
+        .remove(lineageKey(storeName))
+        .pipe(Effect.mapError(toStoreIoError(storeName)))
+    );
 
-      const save = Effect.fn("LineageStore.save")((lineage: StoreLineage) =>
-        lineages
-          .set(lineageKey(lineage.storeName), lineage)
-          .pipe(Effect.mapError(toStoreIoError(lineage.storeName)))
-      );
-
-      const remove = Effect.fn("LineageStore.remove")((storeName: StoreName) =>
-        lineages
-          .remove(lineageKey(storeName))
-          .pipe(Effect.mapError(toStoreIoError(storeName)))
-      );
-
-      return LineageStore.of({ get, save, remove });
-    })
-  );
+    return { get, save, remove };
+  })
+}) {
+  static readonly layer = LineageStore.Default;
 }

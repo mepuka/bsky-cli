@@ -59,7 +59,7 @@
  * @module services/sync-engine
  */
 
-import { Chunk, Clock, Context, Duration, Effect, Fiber, Layer, Match, Option, Predicate, Ref, Schedule, Schema, Stream } from "effect";
+import { Chunk, Clock, Duration, Effect, Fiber, Match, Option, Predicate, Ref, Schedule, Schema, Stream } from "effect";
 import { messageFromCause } from "./shared.js";
 import type { BskyError } from "../domain/errors.js";
 import { FilterRuntime } from "./filter-runtime.js";
@@ -152,35 +152,8 @@ const commandForSource = (source: DataSource) => {
   )(source);
 };
 
-export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
-  SyncEngine,
-  {
-    readonly stream: (
-      source: DataSource,
-      target: StoreRef,
-      filter: FilterExpr,
-      options?: {
-        readonly policy?: SyncUpsertPolicy;
-        readonly limit?: number;
-        readonly concurrency?: number;
-      }
-    ) => Stream.Stream<SyncResult, SyncError>;
-    readonly sync: (
-      source: DataSource,
-      target: StoreRef,
-      filter: FilterExpr,
-      options?: {
-        readonly policy?: SyncUpsertPolicy;
-        readonly limit?: number;
-        readonly dryRun?: boolean;
-      }
-    ) => Effect.Effect<SyncResult, SyncError>;
-    readonly watch: (config: WatchConfig) => Stream.Stream<SyncEvent, SyncError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    SyncEngine,
-    Effect.gen(function* () {
+export class SyncEngine extends Effect.Service<SyncEngine>()("@skygent/SyncEngine", {
+  effect: Effect.gen(function* () {
       const client = yield* BskyClient;
       const parser = yield* PostParser;
       const runtime = yield* FilterRuntime;
@@ -737,7 +710,8 @@ export class SyncEngine extends Context.Tag("@skygent/SyncEngine")<
         ).pipe(Stream.map((result) => SyncEvent.make({ result })));
       };
 
-      return SyncEngine.of({ stream, sync, watch });
-    })
-  );
+    return { stream, sync, watch };
+  })
+}) {
+  static readonly layer = SyncEngine.Default;
 }

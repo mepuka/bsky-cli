@@ -7,7 +7,7 @@ import { StoreName } from "../../src/domain/primitives.js";
 
 const emptyLibraryLayer = Layer.succeed(
   FilterLibrary,
-  FilterLibrary.of({
+  FilterLibrary.make({
     list: () => Effect.succeed([]),
     get: (name) => Effect.fail(FilterNotFound.make({ name })),
     save: () => Effect.void,
@@ -19,7 +19,7 @@ const emptyLibraryLayer = Layer.succeed(
 const techName = Schema.decodeUnknownSync(StoreName)("tech");
 const namedLibraryLayer = Layer.succeed(
   FilterLibrary,
-  FilterLibrary.of({
+  FilterLibrary.make({
     list: () => Effect.succeed(["tech"]),
     get: (name) =>
       name === techName

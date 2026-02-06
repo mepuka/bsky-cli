@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Option, Random, Schema, SynchronizedRef } from "effect";
+import { Clock, Effect, Option, Random, Schema, SynchronizedRef } from "effect";
 import type * as SqlClient from "@effect/sql/SqlClient";
 import * as SqlSchema from "@effect/sql/SqlSchema";
 import { StoreIoError } from "../domain/errors.js";
@@ -76,22 +76,8 @@ const eventLogSeqRow = Schema.Struct({
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
   StoreIoError.make({ path, cause });
 
-export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
-  StoreWriter,
-  {
-    readonly append: (
-      store: StoreRef,
-      event: PostEvent
-    ) => Effect.Effect<EventLogEntry, StoreIoError>;
-    readonly appendWithClient: (
-      client: SqlClient.SqlClient,
-      event: PostEvent
-    ) => Effect.Effect<EventLogEntry, unknown>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    StoreWriter,
-    Effect.gen(function* () {
+export class StoreWriter extends Effect.Service<StoreWriter>()("@skygent/StoreWriter", {
+  effect: Effect.gen(function* () {
       const storeDb = yield* StoreDb;
       const idState = yield* SynchronizedRef.make({
         lastTime: 0,
@@ -193,7 +179,8 @@ export class StoreWriter extends Context.Tag("@skygent/StoreWriter")<
             .pipe(Effect.mapError(toStoreIoError(store.root)))
       );
 
-      return StoreWriter.of({ append, appendWithClient });
+      return { append, appendWithClient };
     })
-  );
+}) {
+  static readonly layer = StoreWriter.Default;
 }

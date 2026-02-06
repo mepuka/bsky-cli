@@ -81,7 +81,7 @@ const engagementPost = Schema.decodeUnknownSync(Post)({
 
 const linkValidatorLayer = Layer.succeed(
   LinkValidator,
-  LinkValidator.of({
+  LinkValidator.make({
     isValid: (url) => Effect.succeed(url.includes("ok")),
     hasValidLink: (urls) => Effect.succeed(urls.some((url) => url.includes("ok")))
   })
@@ -89,7 +89,7 @@ const linkValidatorLayer = Layer.succeed(
 
 const trendingLayer = Layer.succeed(
   TrendingTopics,
-  TrendingTopics.of({
+  TrendingTopics.make({
     getTopics: () => Effect.succeed(["effect", "bsky"]),
     isTrending: (tag) => Effect.succeed(String(tag) === "#effect")
   })

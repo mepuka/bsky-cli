@@ -45,7 +45,7 @@ const removeTempDir = (path: string) =>
 
 const filterRuntimeLayer = Layer.succeed(
   FilterRuntime,
-  FilterRuntime.of({
+  FilterRuntime.make({
     evaluate: () => Effect.die("unused"),
     evaluateWithMetadata: () => Effect.die("unused"),
     evaluateBatch: () =>

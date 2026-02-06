@@ -41,4 +41,4 @@ const defaults: BskyClientService = {
 };
 
 export const makeBskyClient = (overrides: Override) =>
-  BskyClient.of({ ...defaults, ...overrides });
+  BskyClient.make({ ...defaults, ...overrides });

@@ -81,10 +81,8 @@ import {
   Chunk,
   Clock,
   Config,
-  Context,
   Duration,
   Effect,
-  Layer,
   Option,
   Redacted,
   Ref,
@@ -1162,115 +1160,8 @@ const toRawPostsFromThread = (root: ThreadViewPost) =>
  * });
  * ```
  */
-export class BskyClient extends Context.Tag("@skygent/BskyClient")<
-  BskyClient,
-  {
-    /**
-     * Get the authenticated user's home timeline.
-     *
-     * Returns a stream of posts from followed accounts.
-     *
-     * @param opts - Pagination options
-     * @returns Stream of posts from the timeline
-     */
-    readonly getTimeline: (opts?: TimelineOptions) => Stream.Stream<RawPost, BskyError>;
-    readonly getNotifications: (
-      opts?: NotificationsOptions
-    ) => Stream.Stream<RawPost, BskyError>;
-    readonly getFeed: (
-      uri: string,
-      opts?: FeedOptions
-    ) => Stream.Stream<RawPost, BskyError>;
-    readonly getListFeed: (
-      uri: string,
-      opts?: FeedOptions
-    ) => Stream.Stream<RawPost, BskyError>;
-    readonly getAuthorFeed: (
-      actor: string,
-      opts?: AuthorFeedOptions
-    ) => Stream.Stream<RawPost, BskyError>;
-    readonly getPost: (uri: string) => Effect.Effect<RawPost, BskyError>;
-    readonly getPostThread: (
-      uri: string,
-      opts?: ThreadOptions
-    ) => Effect.Effect<ReadonlyArray<RawPost>, BskyError>;
-    readonly getFollowers: (
-      actor: string,
-      opts?: GraphOptions
-    ) => Effect.Effect<{ readonly subject: ProfileView; readonly followers: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
-    readonly getFollows: (
-      actor: string,
-      opts?: GraphOptions
-    ) => Effect.Effect<{ readonly subject: ProfileView; readonly follows: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
-    readonly getKnownFollowers: (
-      actor: string,
-      opts?: GraphOptions
-    ) => Effect.Effect<{ readonly subject: ProfileView; readonly followers: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
-    readonly getRelationships: (
-      actor: string,
-      others: ReadonlyArray<string>
-    ) => Effect.Effect<{ readonly actor: string; readonly relationships: ReadonlyArray<RelationshipView> }, BskyError>;
-    readonly getList: (
-      uri: string,
-      opts?: GraphOptions
-    ) => Effect.Effect<{ readonly list: ListView; readonly items: ReadonlyArray<ListItemView>; readonly cursor?: string }, BskyError>;
-    readonly getLists: (
-      actor: string,
-      opts?: GraphListsOptions
-    ) => Effect.Effect<{ readonly lists: ReadonlyArray<ListView>; readonly cursor?: string }, BskyError>;
-    readonly getBlocks: (
-      opts?: GraphOptions
-    ) => Effect.Effect<{ readonly blocks: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
-    readonly getMutes: (
-      opts?: GraphOptions
-    ) => Effect.Effect<{ readonly mutes: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
-    readonly getFeedGenerator: (
-      uri: string
-    ) => Effect.Effect<{ readonly view: FeedGeneratorView; readonly isOnline: boolean; readonly isValid: boolean }, BskyError>;
-    readonly getFeedGenerators: (
-      uris: ReadonlyArray<string>
-    ) => Effect.Effect<{ readonly feeds: ReadonlyArray<FeedGeneratorView> }, BskyError>;
-    readonly getActorFeeds: (
-      actor: string,
-      opts?: ActorFeedsOptions
-    ) => Effect.Effect<{ readonly feeds: ReadonlyArray<FeedGeneratorView>; readonly cursor?: string }, BskyError>;
-    readonly getLikes: (
-      uri: string,
-      opts?: EngagementOptions
-    ) => Effect.Effect<{ readonly uri: string; readonly cid?: string; readonly likes: ReadonlyArray<PostLike>; readonly cursor?: string }, BskyError>;
-    readonly getRepostedBy: (
-      uri: string,
-      opts?: EngagementOptions
-    ) => Effect.Effect<{ readonly uri: string; readonly cid?: string; readonly repostedBy: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
-    readonly getQuotes: (
-      uri: string,
-      opts?: EngagementOptions
-    ) => Effect.Effect<{ readonly uri: string; readonly cid?: string; readonly posts: ReadonlyArray<RawPost>; readonly cursor?: string }, BskyError>;
-    readonly resolveHandle: (handle: string) => Effect.Effect<Did, BskyError>;
-    readonly resolveIdentity: (
-      identifier: string
-    ) => Effect.Effect<IdentityInfo, BskyError>;
-    readonly getProfiles: (
-      actors: ReadonlyArray<string>
-    ) => Effect.Effect<ReadonlyArray<ProfileBasic>, BskyError>;
-    readonly searchActors: (
-      query: string,
-      opts?: ActorSearchOptions
-    ) => Effect.Effect<{ readonly actors: ReadonlyArray<ProfileView>; readonly cursor?: string }, BskyError>;
-    readonly searchFeedGenerators: (
-      query: string,
-      opts?: FeedSearchOptions
-    ) => Effect.Effect<{ readonly feeds: ReadonlyArray<FeedGeneratorView>; readonly cursor?: string }, BskyError>;
-    readonly searchPosts: (
-      query: string,
-      opts?: NetworkSearchOptions
-    ) => Effect.Effect<{ readonly posts: ReadonlyArray<RawPost>; readonly cursor?: string; readonly hitsTotal?: number }, BskyError>;
-    readonly getTrendingTopics: () => Effect.Effect<ReadonlyArray<string>, BskyError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    BskyClient,
-    Effect.gen(function* () {
+export class BskyClient extends Effect.Service<BskyClient>()("@skygent/BskyClient", {
+  effect: Effect.gen(function* () {
       const config = yield* AppConfigService;
       const serviceUrl = yield* Effect.try({
         try: () => new URL(config.service),
@@ -2115,36 +2006,37 @@ export class BskyClient extends Context.Tag("@skygent/BskyClient")<
         return Array.from(new Set(topics));
       });
 
-      return BskyClient.of({
-        getTimeline,
-        getNotifications,
-        getFeed,
-        getListFeed,
-        getAuthorFeed,
-        getPost,
-        getPostThread,
-        getFollowers,
-        getFollows,
-        getKnownFollowers,
-        getRelationships,
-        getList,
-        getLists,
-        getBlocks,
-        getMutes,
-        getFeedGenerator,
-        getFeedGenerators,
-        getActorFeeds,
-        getLikes,
-        getRepostedBy,
-        getQuotes,
-        resolveHandle,
-        resolveIdentity,
-        getProfiles,
-        searchActors,
-        searchFeedGenerators,
-        searchPosts,
-        getTrendingTopics: () => getTrendingTopics
-      });
-    })
-  );
+    return {
+      getTimeline,
+      getNotifications,
+      getFeed,
+      getListFeed,
+      getAuthorFeed,
+      getPost,
+      getPostThread,
+      getFollowers,
+      getFollows,
+      getKnownFollowers,
+      getRelationships,
+      getList,
+      getLists,
+      getBlocks,
+      getMutes,
+      getFeedGenerator,
+      getFeedGenerators,
+      getActorFeeds,
+      getLikes,
+      getRepostedBy,
+      getQuotes,
+      resolveHandle,
+      resolveIdentity,
+      getProfiles,
+      searchActors,
+      searchFeedGenerators,
+      searchPosts,
+      getTrendingTopics: () => getTrendingTopics
+    };
+  })
+}) {
+  static readonly layer = BskyClient.Default;
 }

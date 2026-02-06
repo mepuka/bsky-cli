@@ -11,8 +11,7 @@
  * - Centralized parsing logic for post data ingestion
  */
 
-import { Context, Effect, Layer, ParseResult, Schema } from "effect";
-import { Post } from "../domain/post.js";
+import { Effect, Schema } from "effect";
 import { PostFromRaw } from "../domain/raw.js";
 
 /**
@@ -33,30 +32,12 @@ import { PostFromRaw } from "../domain/raw.js";
  * });
  * ```
  */
-export class PostParser extends Context.Tag("@skygent/PostParser")<
-  PostParser,
-  {
-    /**
-     * Parse raw post data into a normalized Post object.
-     *
-     * This method uses Schema.decodeUnknown with the PostFromRaw schema to:
-     * 1. Validate the input data structure
-     * 2. Transform raw fields into the normalized Post type
-     * 3. Return a typed Post object or a ParseError on failure
-     *
-     * @param raw - The raw, unknown data to parse (typically from an external source)
-     * @returns Effect that resolves to a validated Post object, or fails with ParseError
-     * @throws ParseResult.ParseError if the input data doesn't match the expected schema
-     */
-    readonly parsePost: (raw: unknown) => Effect.Effect<Post, ParseResult.ParseError>;
+export class PostParser extends Effect.Service<PostParser>()("@skygent/PostParser", {
+  succeed: {
+    parsePost: Effect.fn("PostParser.parsePost")((raw: unknown) =>
+      Schema.decodeUnknown(PostFromRaw)(raw)
+    )
   }
->() {
-  static readonly layer = Layer.succeed(
-    PostParser,
-    PostParser.of({
-      parsePost: Effect.fn("PostParser.parsePost")((raw: unknown) =>
-        Schema.decodeUnknown(PostFromRaw)(raw)
-      )
-    })
-  );
+}) {
+  static readonly layer = PostParser.Default;
 }

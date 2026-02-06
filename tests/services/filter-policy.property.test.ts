@@ -55,7 +55,7 @@ const policyArb = fc.oneof(
 
 const failingLinkLayer = Layer.succeed(
   LinkValidator,
-  LinkValidator.of({
+  LinkValidator.make({
     isValid: () =>
       Effect.fail(FilterEvalError.make({ message: "link failure" })),
     hasValidLink: () =>
@@ -114,7 +114,7 @@ describe("Filter error policy semantics", () => {
         const filter: FilterExpr = { _tag: "HasValidLinks", onError: policy };
         const successLayer = Layer.succeed(
           LinkValidator,
-          LinkValidator.of({
+          LinkValidator.make({
             isValid: () => Effect.succeed(ok),
             hasValidLink: () => Effect.succeed(ok)
           })

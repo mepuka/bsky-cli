@@ -123,7 +123,7 @@ export const makeSyncReporter = (
   monitor: ResourceMonitorService,
   output: CliOutputService
 ) =>
-  SyncReporter.of({
+  SyncReporter.make({
     report: (progress) =>
       Effect.gen(function* () {
         const format = yield* resolveLogFormat;

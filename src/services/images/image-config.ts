@@ -1,5 +1,5 @@
 import { Path } from "@effect/platform";
-import { Config, Context, Duration, Effect, Layer, Option } from "effect";
+import { Config, Duration, Effect, Option } from "effect";
 import { AppConfigService } from "../app-config.js";
 import { validateNonNegative } from "../shared.js";
 
@@ -28,81 +28,77 @@ const resolveCacheRoot = (
     : path.join(storeRoot, override);
 };
 
-export class ImageConfig extends Context.Tag("@skygent/ImageConfig")<
-  ImageConfig,
-  ImageConfigValue
->() {
-  static readonly layer = Layer.effect(
-    ImageConfig,
-    Effect.gen(function* () {
-      const appConfig = yield* AppConfigService;
-      const path = yield* Path.Path;
+export class ImageConfig extends Effect.Service<ImageConfig>()("@skygent/ImageConfig", {
+  effect: Effect.gen(function* () {
+    const appConfig = yield* AppConfigService;
+    const path = yield* Path.Path;
 
-      const enabled = yield* Config.boolean("SKYGENT_IMAGE_CACHE_ENABLED").pipe(
-        Config.withDefault(false)
-      );
-      const cacheRootOverride = yield* Config.string(
-        "SKYGENT_IMAGE_CACHE_ROOT"
-      ).pipe(Config.option);
-      const cacheRoot = resolveCacheRoot(
-        path,
-        appConfig.storeRoot,
-        Option.getOrUndefined(cacheRootOverride)
-      );
+    const enabled = yield* Config.boolean("SKYGENT_IMAGE_CACHE_ENABLED").pipe(
+      Config.withDefault(false)
+    );
+    const cacheRootOverride = yield* Config.string(
+      "SKYGENT_IMAGE_CACHE_ROOT"
+    ).pipe(Config.option);
+    const cacheRoot = resolveCacheRoot(
+      path,
+      appConfig.storeRoot,
+      Option.getOrUndefined(cacheRootOverride)
+    );
 
-      const cacheTtl = yield* Config.duration("SKYGENT_IMAGE_CACHE_TTL").pipe(
-        Config.withDefault(Duration.days(7))
-      );
-      const failureTtl = yield* Config.duration(
-        "SKYGENT_IMAGE_CACHE_FAILURE_TTL"
-      ).pipe(Config.withDefault(Duration.hours(1)));
-      const memCapacity = yield* Config.integer(
-        "SKYGENT_IMAGE_CACHE_MEM_CAPACITY"
-      ).pipe(Config.withDefault(1024));
-      const memTtl = yield* Config.duration("SKYGENT_IMAGE_CACHE_MEM_TTL").pipe(
-        Config.withDefault(Duration.minutes(5))
-      );
+    const cacheTtl = yield* Config.duration("SKYGENT_IMAGE_CACHE_TTL").pipe(
+      Config.withDefault(Duration.days(7))
+    );
+    const failureTtl = yield* Config.duration(
+      "SKYGENT_IMAGE_CACHE_FAILURE_TTL"
+    ).pipe(Config.withDefault(Duration.hours(1)));
+    const memCapacity = yield* Config.integer(
+      "SKYGENT_IMAGE_CACHE_MEM_CAPACITY"
+    ).pipe(Config.withDefault(1024));
+    const memTtl = yield* Config.duration("SKYGENT_IMAGE_CACHE_MEM_TTL").pipe(
+      Config.withDefault(Duration.minutes(5))
+    );
 
-      const cacheTtlError = validateNonNegative(
-        "SKYGENT_IMAGE_CACHE_TTL",
-        Duration.toMillis(cacheTtl)
-      );
-      if (cacheTtlError) {
-        return yield* cacheTtlError;
-      }
-      const failureTtlError = validateNonNegative(
-        "SKYGENT_IMAGE_CACHE_FAILURE_TTL",
-        Duration.toMillis(failureTtl)
-      );
-      if (failureTtlError) {
-        return yield* failureTtlError;
-      }
-      const memCapacityError = validateNonNegative(
-        "SKYGENT_IMAGE_CACHE_MEM_CAPACITY",
-        memCapacity
-      );
-      if (memCapacityError) {
-        return yield* memCapacityError;
-      }
-      const memTtlError = validateNonNegative(
-        "SKYGENT_IMAGE_CACHE_MEM_TTL",
-        Duration.toMillis(memTtl)
-      );
-      if (memTtlError) {
-        return yield* memTtlError;
-      }
+    const cacheTtlError = validateNonNegative(
+      "SKYGENT_IMAGE_CACHE_TTL",
+      Duration.toMillis(cacheTtl)
+    );
+    if (cacheTtlError) {
+      return yield* cacheTtlError;
+    }
+    const failureTtlError = validateNonNegative(
+      "SKYGENT_IMAGE_CACHE_FAILURE_TTL",
+      Duration.toMillis(failureTtl)
+    );
+    if (failureTtlError) {
+      return yield* failureTtlError;
+    }
+    const memCapacityError = validateNonNegative(
+      "SKYGENT_IMAGE_CACHE_MEM_CAPACITY",
+      memCapacity
+    );
+    if (memCapacityError) {
+      return yield* memCapacityError;
+    }
+    const memTtlError = validateNonNegative(
+      "SKYGENT_IMAGE_CACHE_MEM_TTL",
+      Duration.toMillis(memTtl)
+    );
+    if (memTtlError) {
+      return yield* memTtlError;
+    }
 
-      return ImageConfig.of({
-        enabled,
-        cacheRoot,
-        metaRoot: path.join(cacheRoot, "meta"),
-        originalsRoot: path.join(cacheRoot, "original"),
-        thumbsRoot: path.join(cacheRoot, "thumb"),
-        cacheTtl,
-        failureTtl,
-        memCapacity,
-        memTtl
-      });
-    })
-  );
+    return {
+      enabled,
+      cacheRoot,
+      metaRoot: path.join(cacheRoot, "meta"),
+      originalsRoot: path.join(cacheRoot, "original"),
+      thumbsRoot: path.join(cacheRoot, "thumb"),
+      cacheTtl,
+      failureTtl,
+      memCapacity,
+      memTtl
+    };
+  })
+}) {
+  static readonly layer = ImageConfig.Default;
 }

@@ -15,11 +15,9 @@
 
 import {
   Config,
-  Context,
   Duration,
   Effect,
   Either,
-  Layer,
   Option,
   Request,
   RequestResolver
@@ -57,21 +55,8 @@ export class ProfileHandleRequest extends Request.TaggedClass("ProfileHandle")<
  * First checks the identity resolver cache, then fetches from the network
  * in batches if needed.
  */
-export class ProfileResolver extends Context.Tag("@skygent/ProfileResolver")<
-  ProfileResolver,
-  {
-    /**
-     * Resolves a handle for a DID, with automatic batching and caching.
-     *
-     * @param did - The DID to resolve to a handle
-     * @returns Effect resolving to Handle, or BskyError on resolution failure
-     */
-    readonly handleForDid: (did: string) => Effect.Effect<Handle, BskyError>;
-  }
->() {
-  static readonly layer = Layer.effect(
-    ProfileResolver,
-    Effect.gen(function* () {
+export class ProfileResolver extends Effect.Service<ProfileResolver>()("@skygent/ProfileResolver", {
+  effect: Effect.gen(function* () {
       const client = yield* BskyClient;
       const identities = yield* IdentityResolver;
 
@@ -217,7 +202,8 @@ export class ProfileResolver extends Context.Tag("@skygent/ProfileResolver")<
         });
       });
 
-      return ProfileResolver.of({ handleForDid });
-    })
-  );
+    return { handleForDid };
+  })
+}) {
+  static readonly layer = ProfileResolver.Default;
 }

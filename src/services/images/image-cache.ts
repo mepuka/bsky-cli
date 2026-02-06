@@ -1,6 +1,6 @@
 import * as ExperimentalRequestResolver from "@effect/experimental/RequestResolver";
 import * as Persistence from "@effect/experimental/Persistence";
-import { Context, Duration, Effect, Exit, Layer, Option, PrimaryKey, Request, RequestResolver, Schema } from "effect";
+import { Duration, Effect, Exit, Option, PrimaryKey, Request, RequestResolver, Schema } from "effect";
 import { createHash } from "node:crypto";
 import { ImageAsset, ImageVariant } from "../../domain/images.js";
 import { ImageCacheError, isImageArchiveError, isImageCacheError, isImageFetchError } from "../../domain/errors.js";
@@ -59,17 +59,8 @@ const toCacheError = (key: string, operation: string) => (cause: unknown) => {
   });
 };
 
-export class ImageCache extends Context.Tag("@skygent/ImageCache")<
-  ImageCache,
-  {
-    readonly get: (url: string, variant?: ImageVariant) => Effect.Effect<ImageAsset, ImageCacheError>;
-    readonly getCached: (url: string, variant?: ImageVariant) => Effect.Effect<Option.Option<ImageAsset>, ImageCacheError>;
-    readonly invalidate: (url: string, variant?: ImageVariant) => Effect.Effect<void, ImageCacheError>;
-  }
->() {
-  static readonly layer = Layer.scoped(
-    ImageCache,
-    Effect.gen(function* () {
+export class ImageCache extends Effect.Service<ImageCache>()("@skygent/ImageCache", {
+  scoped: Effect.gen(function* () {
       const config = yield* ImageConfig;
       const fetcher = yield* ImageFetcher;
       const archive = yield* ImageArchive;
@@ -249,7 +240,8 @@ export class ImageCache extends Context.Tag("@skygent/ImageCache")<
             )
       );
 
-      return ImageCache.of({ get, getCached, invalidate });
+      return { get, getCached, invalidate };
     })
-  );
+}) {
+  static readonly layer = ImageCache.Default;
 }
