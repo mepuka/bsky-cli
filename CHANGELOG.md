@@ -1,5 +1,11 @@
 # @mepuka/skygent
 
+## 0.8.0
+
+### Minor Changes
+
+- 069c524: Add store serve command with SSE streaming, batch jetstream commits for improved sync performance, harden store DB locking and stream safety, and bump effect-jetstream to 1.1.0.
+
 ## 0.7.1
 
 ### Patch Changes
