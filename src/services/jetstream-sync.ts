@@ -152,63 +152,24 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
           )
         );
 
-      const storePost = (
-        target: StoreRef,
+      const makeUpsertEvent = (
         command: string,
         filterHash: string,
         post: Post
       ) =>
-        Effect.gen(function* () {
-          const meta = yield* makeMeta(command, filterHash);
-          const event = PostUpsert.make({ post, meta });
-          return yield* committer
-            .appendUpsert(target, event)
-            .pipe(
-              Effect.mapError(
-                toSyncError("store", "Failed to append event")
-              ),
-              Effect.map((record) => record.seq)
-            );
-        });
+        makeMeta(command, filterHash).pipe(
+          Effect.map((meta) => PostUpsert.make({ post, meta }))
+        );
 
-      const storePostIfMissing = (
-        target: StoreRef,
-        command: string,
-        filterHash: string,
-        post: Post
-      ) =>
-        Effect.gen(function* () {
-          const meta = yield* makeMeta(command, filterHash);
-          const event = PostUpsert.make({ post, meta });
-          const stored = yield* committer
-            .appendUpsertIfMissing(target, event)
-            .pipe(
-              Effect.mapError(
-                toSyncError("store", "Failed to append event")
-              )
-            );
-          return Option.map(stored, (entry) => entry.seq);
-        });
-
-      const storeDelete = (
-        target: StoreRef,
+      const makeDeleteEvent = (
         command: string,
         filterHash: string,
         uri: PostUri,
         cid: PostCid | undefined
       ) =>
-        Effect.gen(function* () {
-          const meta = yield* makeMeta(command, filterHash);
-          const event = PostDelete.make({ uri, cid, meta });
-          return yield* committer
-            .appendDelete(target, event)
-            .pipe(
-              Effect.mapError(
-                toSyncError("store", "Failed to append event")
-              ),
-              Effect.map((record) => record.seq)
-            );
-        });
+        makeMeta(command, filterHash).pipe(
+          Effect.map((meta) => PostDelete.make({ uri, cid, meta }))
+        );
 
       const processStream = Effect.fn("JetstreamSyncEngine.processStream")(
         (
@@ -391,77 +352,8 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                 )
               );
 
-            const applyPrepared = (prepared: PreparedOutcome) => {
-              if (dryRun) {
-                return Match.type<PreparedOutcome>().pipe(
-                  Match.withReturnType<Effect.Effect<SyncOutcome, SyncError>>(),
-                  Match.tagsExhaustive({
-                    Skip: () => Effect.succeed(skippedOutcome),
-                    Error: (error) =>
-                      strict
-                        ? Effect.fail(error.error)
-                        : Effect.succeed({ _tag: "Error", error: error.error } as const),
-                    Delete: (del) =>
-                      index
-                        .hasUri(config.store, del.uri)
-                        .pipe(
-                          Effect.mapError(
-                            toSyncError("store", "Failed to check existing post")
-                          ),
-                          Effect.map((exists) =>
-                            exists
-                              ? ({
-                                  _tag: "Stored",
-                                  eventSeq: 0 as EventSeq,
-                                  kind: "delete"
-                                } as const)
-                              : skippedOutcome
-                          )
-                        ),
-                    Upsert: (upsert) =>
-                      (upsert.checkExists
-                        ? Effect.gen(function* () {
-                            if (!seenRef) {
-                              return {
-                                _tag: "Stored",
-                                eventSeq: 0 as EventSeq,
-                                kind: "upsert"
-                              } as const;
-                            }
-                            const seen = yield* Ref.get(seenRef);
-                            const uri = upsert.post.uri;
-                            if (seen.has(uri)) {
-                              return skippedOutcome;
-                            }
-                            const exists = yield* index
-                              .hasUri(config.store, uri)
-                              .pipe(
-                                Effect.mapError(
-                                  toSyncError("store", "Failed to check existing post")
-                                )
-                              );
-                            if (exists) {
-                              return skippedOutcome;
-                            }
-                            const next = new Set(seen);
-                            next.add(uri);
-                            yield* Ref.set(seenRef, next);
-                            return {
-                              _tag: "Stored",
-                              eventSeq: 0 as EventSeq,
-                              kind: "upsert"
-                            } as const;
-                          })
-                        : Effect.succeed({
-                            _tag: "Stored",
-                            eventSeq: 0 as EventSeq,
-                            kind: "upsert"
-                          } as const))
-                  })
-                )(prepared);
-              }
-
-              return Match.type<PreparedOutcome>().pipe(
+            const applyPreparedDryRun = (prepared: PreparedOutcome) =>
+              Match.type<PreparedOutcome>().pipe(
                 Match.withReturnType<Effect.Effect<SyncOutcome, SyncError>>(),
                 Match.tagsExhaustive({
                   Skip: () => Effect.succeed(skippedOutcome),
@@ -476,62 +368,234 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                         Effect.mapError(
                           toSyncError("store", "Failed to check existing post")
                         ),
-                        Effect.flatMap((exists) =>
+                        Effect.map((exists) =>
                           exists
-                            ? storeDelete(
-                                config.store,
-                                config.command,
-                                filterHash,
-                                del.uri,
-                                del.cid
-                              ).pipe(
-                                Effect.map(
-                                  (eventSeq): SyncOutcome => ({
-                                    _tag: "Stored",
-                                    eventSeq,
-                                    kind: "delete"
-                                  })
-                                )
-                              )
-                            : Effect.succeed(skippedOutcome)
+                            ? ({
+                                _tag: "Stored",
+                                eventSeq: 0 as EventSeq,
+                                kind: "delete"
+                              } as const)
+                            : skippedOutcome
                         )
                       ),
                   Upsert: (upsert) =>
                     (upsert.checkExists
-                      ? storePostIfMissing(
-                          config.store,
-                          config.command,
-                          filterHash,
-                          upsert.post
-                        ).pipe(
-                          Effect.map((eventSeq) =>
-                            Option.match(eventSeq, {
-                              onNone: () => skippedOutcome,
-                              onSome: (value): SyncOutcome => ({
-                                _tag: "Stored",
-                                eventSeq: value,
-                                kind: "upsert"
-                              })
-                            })
-                          )
-                        )
-                      : storePost(
-                          config.store,
-                          config.command,
-                          filterHash,
-                          upsert.post
-                        ).pipe(
-                          Effect.map(
-                            (eventSeq): SyncOutcome => ({
+                      ? Effect.gen(function* () {
+                          if (!seenRef) {
+                            return {
                               _tag: "Stored",
-                              eventSeq,
+                              eventSeq: 0 as EventSeq,
                               kind: "upsert"
-                            })
-                          )
-                        ))
+                            } as const;
+                          }
+                          const seen = yield* Ref.get(seenRef);
+                          const uri = upsert.post.uri;
+                          if (seen.has(uri)) {
+                            return skippedOutcome;
+                          }
+                          const exists = yield* index
+                            .hasUri(config.store, uri)
+                            .pipe(
+                              Effect.mapError(
+                                toSyncError("store", "Failed to check existing post")
+                              )
+                            );
+                          if (exists) {
+                            return skippedOutcome;
+                          }
+                          const next = new Set(seen);
+                          next.add(uri);
+                          yield* Ref.set(seenRef, next);
+                          return {
+                            _tag: "Stored",
+                            eventSeq: 0 as EventSeq,
+                            kind: "upsert"
+                          } as const;
+                        })
+                      : Effect.succeed({
+                          _tag: "Stored",
+                          eventSeq: 0 as EventSeq,
+                          kind: "upsert"
+                        } as const))
                 })
               )(prepared);
-            };
+
+            type UpsertPrepared = Extract<PreparedOutcome, { readonly _tag: "Upsert" }>;
+            type DeletePrepared = Extract<PreparedOutcome, { readonly _tag: "Delete" }>;
+            type LivePrepared = UpsertPrepared | DeletePrepared;
+            type LiveRunTag = "UpsertCheckExists" | "UpsertRefresh" | "Delete";
+
+            const liveRunTag = (prepared: LivePrepared): LiveRunTag =>
+              prepared._tag === "Delete"
+                ? "Delete"
+                : prepared.checkExists
+                  ? "UpsertCheckExists"
+                  : "UpsertRefresh";
+
+            const applyUpsertCheckExistsRun = (
+              run: ReadonlyArray<UpsertPrepared>
+            ): Effect.Effect<ReadonlyArray<SyncOutcome>, SyncError> =>
+              Effect.gen(function* () {
+                const events = yield* Effect.forEach(run, (upsert) =>
+                  makeUpsertEvent(config.command, filterHash, upsert.post)
+                );
+                const stored = yield* committer
+                  .appendUpsertsIfMissing(config.store, events)
+                  .pipe(
+                    Effect.mapError(
+                      toSyncError("store", "Failed to append events")
+                    )
+                  );
+                return stored.map((entry) =>
+                  Option.match(entry, {
+                    onNone: (): SyncOutcome => skippedOutcome,
+                    onSome: (record): SyncOutcome => ({
+                      _tag: "Stored",
+                      eventSeq: record.seq,
+                      kind: "upsert"
+                    })
+                  })
+                );
+              });
+
+            const applyUpsertRefreshRun = (
+              run: ReadonlyArray<UpsertPrepared>
+            ): Effect.Effect<ReadonlyArray<SyncOutcome>, SyncError> =>
+              Effect.gen(function* () {
+                const events = yield* Effect.forEach(run, (upsert) =>
+                  makeUpsertEvent(config.command, filterHash, upsert.post)
+                );
+                const stored = yield* committer
+                  .appendUpserts(config.store, events)
+                  .pipe(
+                    Effect.mapError(
+                      toSyncError("store", "Failed to append events")
+                    )
+                  );
+                return stored.map(
+                  (record): SyncOutcome => ({
+                    _tag: "Stored",
+                    eventSeq: record.seq,
+                    kind: "upsert"
+                  })
+                );
+              });
+
+            const applyDeleteRun = (
+              run: ReadonlyArray<DeletePrepared>
+            ): Effect.Effect<ReadonlyArray<SyncOutcome>, SyncError> =>
+              Effect.gen(function* () {
+                const deletedUris = new Set<string>();
+                const deletable: Array<DeletePrepared> = [];
+                const effects: Array<"skip" | "delete"> = [];
+
+                for (const item of run) {
+                  const key = String(item.uri);
+                  if (deletedUris.has(key)) {
+                    effects.push("skip");
+                    continue;
+                  }
+                  const exists = yield* index
+                    .hasUri(config.store, item.uri)
+                    .pipe(
+                      Effect.mapError(
+                        toSyncError("store", "Failed to check existing post")
+                      )
+                    );
+                  if (!exists) {
+                    effects.push("skip");
+                    continue;
+                  }
+                  deletedUris.add(key);
+                  effects.push("delete");
+                  deletable.push(item);
+                }
+
+                if (deletable.length === 0) {
+                  return effects.map(() => skippedOutcome);
+                }
+
+                const events = yield* Effect.forEach(deletable, (item) =>
+                  makeDeleteEvent(config.command, filterHash, item.uri, item.cid)
+                );
+                const stored = yield* committer
+                  .appendDeletes(config.store, events)
+                  .pipe(
+                    Effect.mapError(
+                      toSyncError("store", "Failed to append events")
+                    )
+                  );
+
+                let storedIndex = 0;
+                return effects.map((effect) => {
+                  if (effect === "skip") {
+                    return skippedOutcome;
+                  }
+                  const record = stored[storedIndex++];
+                  return {
+                    _tag: "Stored",
+                    eventSeq: record!.seq,
+                    kind: "delete"
+                  } satisfies SyncOutcome;
+                });
+              });
+
+            const applyPreparedLiveBatch = (
+              preparedBatch: ReadonlyArray<PreparedOutcome>
+            ): Effect.Effect<ReadonlyArray<SyncOutcome>, SyncError> =>
+              Effect.gen(function* () {
+                const outcomes: Array<SyncOutcome> = [];
+                let indexCursor = 0;
+                while (indexCursor < preparedBatch.length) {
+                  const current = preparedBatch[indexCursor]!;
+                  if (current._tag === "Skip") {
+                    outcomes.push(skippedOutcome);
+                    indexCursor += 1;
+                    continue;
+                  }
+                  if (current._tag === "Error") {
+                    if (strict) {
+                      return yield* current.error;
+                    }
+                    outcomes.push({ _tag: "Error", error: current.error });
+                    indexCursor += 1;
+                    continue;
+                  }
+
+                  const runTag = liveRunTag(current);
+                  const run: Array<LivePrepared> = [current];
+                  indexCursor += 1;
+                  while (indexCursor < preparedBatch.length) {
+                    const next = preparedBatch[indexCursor]!;
+                    if (next._tag === "Skip" || next._tag === "Error") {
+                      break;
+                    }
+                    if (liveRunTag(next) !== runTag) {
+                      break;
+                    }
+                    run.push(next);
+                    indexCursor += 1;
+                  }
+
+                  const runOutcomes = yield* Match.value(runTag).pipe(
+                    Match.withReturnType<
+                      Effect.Effect<ReadonlyArray<SyncOutcome>, SyncError>
+                    >(),
+                    Match.when("UpsertCheckExists", () =>
+                      applyUpsertCheckExistsRun(run as Array<UpsertPrepared>)
+                    ),
+                    Match.when("UpsertRefresh", () =>
+                      applyUpsertRefreshRun(run as Array<UpsertPrepared>)
+                    ),
+                    Match.when("Delete", () =>
+                      applyDeleteRun(run as Array<DeletePrepared>)
+                    ),
+                    Match.exhaustive
+                  );
+                  outcomes.push(...runOutcomes);
+                }
+                return outcomes;
+              });
 
             const processBatch = (batch: Chunk.Chunk<CommitMessage>) =>
               Effect.gen(function* () {
@@ -545,7 +609,9 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
                   batching: true
                 }).pipe(Effect.withRequestBatching(true));
 
-                const outcomes = yield* Effect.forEach(prepared, applyPrepared);
+                const outcomes = yield* (dryRun
+                  ? Effect.forEach(prepared, applyPreparedDryRun)
+                  : applyPreparedLiveBatch(prepared));
 
                 let added = 0;
                 let deleted = 0;
@@ -677,49 +743,52 @@ export class JetstreamSyncEngine extends Context.Tag("@skygent/JetstreamSyncEngi
 
       const sync = Effect.fn("JetstreamSyncEngine.sync")((config: JetstreamSyncConfig) =>
         Effect.gen(function* () {
-          const predicate = yield* runtime
-            .evaluateWithMetadata(config.filter)
-            .pipe(
-              Effect.mapError(
-                toSyncError("filter", "Filter compilation failed")
-              )
-            );
-
-          const filterHash = filterExprSignature(config.filter);
-          const previousCheckpoint = yield* checkpoints
-            .load(config.store, config.source)
-            .pipe(
-              Effect.mapError(toSyncError("store", "Failed to load sync checkpoint"))
-            );
-          const activeCheckpoint = Option.filter(previousCheckpoint, (value) =>
-            value.filterHash ? value.filterHash === filterHash : true
-          );
-
-          const stream = yield* processStream(config, predicate, activeCheckpoint);
           const resultRef = yield* Ref.make(SyncResultMonoid.empty);
-          const tagged = stream.pipe(
-            Stream.tap((result) =>
-              Ref.update(resultRef, (current) =>
-                SyncResultMonoid.combine(current, result)
-              )
-            )
-          );
-          const withTimeout = config.duration
-            ? tagged.pipe(
-                Stream.interruptWhen(
-                  Effect.sleep(config.duration).pipe(
-                    Effect.zipRight(
-                      reporter.warn("Jetstream sync exceeded duration; shutting down.", {
-                        durationMs: Duration.toMillis(config.duration),
-                        store: config.store.name
-                      })
-                    ),
-                    Effect.zipRight(safeShutdown)
-                  )
+          const run = Effect.gen(function* () {
+            const predicate = yield* runtime
+              .evaluateWithMetadata(config.filter)
+              .pipe(
+                Effect.mapError(
+                  toSyncError("filter", "Filter compilation failed")
+                )
+              );
+
+            const filterHash = filterExprSignature(config.filter);
+            const previousCheckpoint = yield* checkpoints
+              .load(config.store, config.source)
+              .pipe(
+                Effect.mapError(toSyncError("store", "Failed to load sync checkpoint"))
+              );
+            const activeCheckpoint = Option.filter(previousCheckpoint, (value) =>
+              value.filterHash ? value.filterHash === filterHash : true
+            );
+
+            const stream = yield* processStream(config, predicate, activeCheckpoint);
+            const tagged = stream.pipe(
+              Stream.tap((result) =>
+                Ref.update(resultRef, (current) =>
+                  SyncResultMonoid.combine(current, result)
                 )
               )
-            : tagged;
-          yield* Stream.runDrain(withTimeout);
+            );
+
+            yield* Stream.runDrain(tagged);
+          });
+
+          if (config.duration) {
+            const completed = yield* run.pipe(
+              Effect.timeoutOption(config.duration)
+            );
+            if (Option.isNone(completed)) {
+              yield* reporter.warn("Jetstream sync exceeded duration; shutting down.", {
+                durationMs: Duration.toMillis(config.duration),
+                store: config.store.name
+              });
+              yield* safeShutdown;
+            }
+          } else {
+            yield* run;
+          }
           return yield* Ref.get(resultRef);
         })
       );

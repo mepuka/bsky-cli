@@ -79,6 +79,19 @@ const commitDelete = Schema.decodeUnknownSync(JetstreamMessage.CommitDelete)({
   }
 });
 
+const commitDeleteDuplicate = Schema.decodeUnknownSync(JetstreamMessage.CommitDelete)({
+  _tag: "CommitDelete",
+  did: "did:plc:alice",
+  time_us: 4_000_000,
+  kind: "commit",
+  commit: {
+    rev: "4",
+    operation: "delete",
+    collection: "app.bsky.feed.post",
+    rkey: "1"
+  }
+});
+
 const commitCreateDuplicate = Schema.decodeUnknownSync(JetstreamMessage.CommitCreate)({
   _tag: "CommitCreate",
   did: "did:plc:alice",
@@ -355,6 +368,44 @@ describe("JetstreamSyncEngine", () => {
       expect(outcome.result.postsAdded).toBe(0);
       expect(outcome.result.postsDeleted).toBe(0);
       expect(outcome.result.postsSkipped).toBe(2);
+      expect(outcome.result.errors).toEqual([]);
+      expect(outcome.count).toBe(0);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("skips duplicate deletes within the same batch", async () => {
+    const filter = all();
+    const source = DataSource.jetstream() as Extract<DataSource, { _tag: "Jetstream" }>;
+
+    const program = Effect.gen(function* () {
+      const engine = yield* JetstreamSyncEngine;
+      const index = yield* StoreIndex;
+      const result = yield* engine.sync({
+        source,
+        store: sampleStore,
+        filter,
+        command: "sync jetstream",
+        limit: 3
+      });
+      const count = yield* index.count(sampleStore);
+      return { result, count };
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = makeTestLayer(
+      tempDir,
+      Stream.fromIterable([commitCreate, commitDelete, commitDeleteDuplicate])
+    );
+    try {
+      const outcome = await Effect.runPromise(
+        program.pipe(Effect.provide(layer))
+      );
+
+      expect(outcome.result.postsAdded).toBe(1);
+      expect(outcome.result.postsDeleted).toBe(1);
+      expect(outcome.result.postsSkipped).toBe(1);
       expect(outcome.result.errors).toEqual([]);
       expect(outcome.count).toBe(0);
     } finally {

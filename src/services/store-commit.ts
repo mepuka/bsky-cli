@@ -45,6 +45,10 @@ interface StoreCommitterService {
     store: StoreRef,
     event: PostDelete
   ) => Effect.Effect<EventLogEntry, StoreIoError>;
+  readonly appendDeletes: (
+    store: StoreRef,
+    events: ReadonlyArray<PostDelete>
+  ) => Effect.Effect<ReadonlyArray<EventLogEntry>, StoreIoError>;
 }
 
 /**
@@ -183,12 +187,36 @@ export class StoreCommitter extends Effect.Service<StoreCommitter>()("@skygent/S
         )
     );
 
+    const appendDeletes = Effect.fn("StoreCommitter.appendDeletes")(
+      (store: StoreRef, events: ReadonlyArray<PostDelete>) => {
+        if (events.length === 0) {
+          return Effect.succeed([] as ReadonlyArray<EventLogEntry>);
+        }
+        return reactivity.mutation(
+          { "store:events": [store.name] },
+          storeDb
+            .withClient(store, (client) =>
+              client.withTransaction(
+                Effect.forEach(events, (event) =>
+                  Effect.gen(function* () {
+                    yield* deletePost(client, event.uri);
+                    return yield* writer.appendWithClient(client, event);
+                  })
+                )
+              )
+            )
+            .pipe(Effect.mapError(toStoreIoError(store.root)))
+        );
+      }
+    );
+
     const service: StoreCommitterService = {
       appendUpsert,
       appendUpserts,
       appendUpsertIfMissing,
       appendUpsertsIfMissing,
-      appendDelete
+      appendDelete,
+      appendDeletes
     };
     return service;
   })

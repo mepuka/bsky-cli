@@ -1107,19 +1107,18 @@ export class StoreIndex extends Effect.Service<StoreIndex>()("@skygent/StoreInde
 
       const entries = (store: StoreRef) =>
         Stream.paginateChunkEffect(
-          Option.none<{ readonly createdAt: string; readonly uri: PostUri }>(),
+          undefined as { readonly createdAt: string; readonly uri: PostUri } | undefined,
           (cursor) =>
-          withClient(store, "StoreIndex.entries failed", (client) =>
-            Effect.gen(function* () {
-              const where = Option.match(cursor, {
-                onNone: () => client`1 = 1`,
-                onSome: (value) =>
-                  client`(
-                    p.created_at > ${value.createdAt}
-                    OR (p.created_at = ${value.createdAt} AND p.uri > ${value.uri})
-                  )`
-              });
-              const rows = yield* client`SELECT
+            withClient(store, "StoreIndex.entries failed", (client) =>
+              Effect.gen(function* () {
+                const where =
+                  cursor === undefined
+                    ? client`1 = 1`
+                    : client`(
+                    p.created_at > ${cursor.createdAt}
+                    OR (p.created_at = ${cursor.createdAt} AND p.uri > ${cursor.uri})
+                  )`;
+                const rows = yield* client`SELECT
                   p.uri as uri,
                   p.created_at as created_at,
                   p.created_date as created_date,
@@ -1132,29 +1131,32 @@ export class StoreIndex extends Effect.Service<StoreIndex>()("@skygent/StoreInde
                 ORDER BY p.created_at ASC, p.uri ASC
                 LIMIT ${entryPageSize}`;
 
-              const decoded = yield* Schema.decodeUnknown(
-                Schema.Array(postEntryPageRow)
-              )(rows).pipe(
-                Effect.mapError(toStoreIndexError("StoreIndex.entries decode failed"))
-              );
+                const decoded = yield* Schema.decodeUnknown(
+                  Schema.Array(postEntryPageRow)
+                )(rows).pipe(
+                  Effect.mapError(toStoreIndexError("StoreIndex.entries decode failed"))
+                );
 
-              const entries = yield* Effect.forEach(
-                decoded,
-                (row) => decodeEntryRow(row),
-                { discard: false }
-              );
+                const entries = yield* Effect.forEach(
+                  decoded,
+                  (row) => decodeEntryRow(row),
+                  { discard: false }
+                );
 
-              const next =
-                entries.length < entryPageSize
-                  ? Option.none<{ readonly createdAt: string; readonly uri: PostUri }>()
-                  : Option.some({
-                      createdAt: decoded[decoded.length - 1]!.created_at,
-                      uri: decoded[decoded.length - 1]!.uri
-                    });
+                const nextCursor =
+                  entries.length < entryPageSize
+                    ? undefined
+                    : {
+                        createdAt: decoded[decoded.length - 1]!.created_at,
+                        uri: decoded[decoded.length - 1]!.uri
+                      };
 
-              return [Chunk.fromIterable(entries), next] as const;
-            })
-          )
+                return [
+                  Chunk.fromIterable(entries),
+                  nextCursor === undefined ? Option.none() : Option.some(nextCursor)
+                ] as const;
+              })
+            )
         );
 
       const threadGroups = Effect.fn("StoreIndex.threadGroups")(

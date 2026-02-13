@@ -6,7 +6,7 @@ import { StoreCommitter } from "../../src/services/store-commit.js";
 import { StoreWriter } from "../../src/services/store-writer.js";
 import { StoreDb } from "../../src/services/store-db.js";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
-import { EventMeta, PostUpsert } from "../../src/domain/events.js";
+import { EventMeta, PostDelete, PostUpsert } from "../../src/domain/events.js";
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
 
@@ -163,6 +163,40 @@ describe("StoreCommitter", () => {
 
       expect(inserted.length).toBe(1);
       expect(skipped.length).toBe(9);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("appendDeletes batches delete events in a single operation", async () => {
+    const upsert = makeEvent(77);
+    const deleteEvent = PostDelete.make({
+      uri: upsert.post.uri,
+      meta: sampleMeta
+    });
+
+    const program = Effect.gen(function* () {
+      const committer = yield* StoreCommitter;
+      const storeDb = yield* StoreDb;
+
+      yield* committer.appendUpsert(storeA, upsert);
+      const deleted = yield* committer.appendDeletes(storeA, [deleteEvent, deleteEvent]);
+      const rows = yield* storeDb.withClient(storeA, (client) =>
+        client`SELECT COUNT(*) as count FROM posts`
+      );
+      return {
+        deletedCount: deleted.length,
+        postCount: Number(rows[0]?.count ?? 0)
+      };
+    });
+
+    const tempDir = await makeTempDir();
+    try {
+      const layer = buildLayer(tempDir);
+      const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+
+      expect(result.deletedCount).toBe(2);
+      expect(result.postCount).toBe(0);
     } finally {
       await removeTempDir(tempDir);
     }
