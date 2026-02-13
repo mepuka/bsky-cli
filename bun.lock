@@ -16,7 +16,7 @@
         "@effect/sql-sqlite-bun": "^0.50.0",
         "@effect/typeclass": "^0.38.0",
         "effect": "^3.19.15",
-        "effect-jetstream": "^1.0.4",
+        "effect-jetstream": "^1.1.0",
       },
       "devDependencies": {
         "@changesets/cli": "^2.29.8",
@@ -195,7 +195,7 @@
 
     "effect": ["effect@3.19.15", "", { "dependencies": { "@standard-schema/spec": "^1.0.0", "fast-check": "^3.23.1" } }, "sha512-vzMmgfZKLcojmUjBdlQx+uaKryO7yULlRxjpDnHdnvcp1NPHxJyoM6IOXBLlzz2I/uPtZpGKavt5hBv7IvGZkA=="],
 
-    "effect-jetstream": ["effect-jetstream@1.0.4", "", { "dependencies": { "@effect/platform": "^0.94.1", "effect": "^3.19.14" }, "peerDependencies": { "typescript": "^5" } }, "sha512-14U0PDQ8Ibr1TIK5vxBVBrSW0AdRJ54iB6gKEOpoW3S91Ky72HbU2sG5APw6EvCv9HqQQdW1iUI2qFULW9IjaQ=="],
+    "effect-jetstream": ["effect-jetstream@1.1.0", "", { "dependencies": { "@effect/platform": "^0.94.1", "effect": "^3.19.14" }, "peerDependencies": { "typescript": "^5" } }, "sha512-JKbvYRCKbayNW9EFpulqUzkHlKgrlF1fi4nsQup5fNj5V4vnuWOglAfLJve7mj/pVFls1Jl2IU0942soPIvl4g=="],
 
     "enquirer": ["enquirer@2.4.1", "", { "dependencies": { "ansi-colors": "^4.1.1", "strip-ansi": "^6.0.1" } }, "sha512-rRqJg/6gd538VHvR3PSrdRBb/1Vy2YfzHqzvbhGIQpDRKIa4FgV/54b5Q1xYSxOOwKvjXweS26E0Q+nAMwp2pQ=="],
 
