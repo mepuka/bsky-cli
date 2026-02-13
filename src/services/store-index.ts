@@ -67,7 +67,6 @@ import { EventSeq, Handle, PostUri, Timestamp } from "../domain/primitives.js";
 import { Post } from "../domain/post.js";
 import type { StoreRef } from "../domain/store.js";
 import { StoreDb } from "./store-db.js";
-import { StoreEventLog } from "./store-event-log.js";
 import { deletePost, upsertPost } from "./store-index-sql.js";
 
 const indexName = "primary";
@@ -108,12 +107,26 @@ const postEntryRow = Schema.Struct({
   author: Schema.NullOr(Handle),
   hashtags: Schema.NullOr(Schema.String)
 });
+const postEntryPageRow = Schema.Struct({
+  uri: PostUri,
+  created_at: Schema.String,
+  created_date: Schema.String,
+  author: Schema.NullOr(Handle),
+  hashtags: Schema.NullOr(Schema.String)
+});
 const checkpointRow = Schema.Struct({
   index_name: Schema.String,
   version: Schema.Number,
   last_event_seq: EventSeq,
   event_count: Schema.Number,
   updated_at: Schema.String
+});
+const eventLogRow = Schema.Struct({
+  event_seq: EventSeq,
+  payload_json: Schema.String
+});
+const lastEventSeqRow = Schema.Struct({
+  value: EventSeq
 });
 
 const toStoreIndexError = (message: string) => (cause: unknown) =>
@@ -160,7 +173,7 @@ const buildColumnFtsQuery = (column: string, query: string) => {
   return buildColumnLiteralFtsQuery(column, trimmed);
 };
 
-const decodeEntryRow = (row: typeof postEntryRow.Type) =>
+const decodeEntryRow = (row: typeof postEntryRow.Type | typeof postEntryPageRow.Type) =>
   Schema.decodeUnknown(PostIndexEntry)({
     uri: row.uri,
     createdDate: row.created_date,
@@ -176,6 +189,12 @@ const decodeCheckpointRow = (row: typeof checkpointRow.Type) =>
     eventCount: row.event_count,
     updatedAt: row.updated_at
   }).pipe(Effect.mapError(toStoreIndexError("StoreIndex.checkpoint decode failed")));
+
+const decodeEventRow = (row: typeof eventLogRow.Type) =>
+  Schema.decodeUnknown(Schema.parseJson(PostEventRecord))(row.payload_json).pipe(
+    Effect.mapError(toStoreIndexError("StoreIndex.event decode failed")),
+    Effect.map((record) => ({ seq: row.event_seq, record } as const))
+  );
 
 const toIso = (value: Date | string) =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString();
@@ -568,7 +587,6 @@ const applyDelete = (
  */
 export class StoreIndex extends Effect.Service<StoreIndex>()("@skygent/StoreIndex", {
   scoped: Effect.gen(function* () {
-      const eventLog = yield* StoreEventLog;
       const storeDb = yield* StoreDb;
       const bootstrapped = yield* Ref.make(new Set<string>());
       const withClient = <A, E>(
@@ -631,43 +649,55 @@ export class StoreIndex extends Effect.Service<StoreIndex>()("@skygent/StoreInde
           }
         });
 
-      const rebuildWithClient = (store: StoreRef, client: SqlClient.SqlClient) =>
+      const rebuildWithClient = (_store: StoreRef, client: SqlClient.SqlClient) =>
         Effect.gen(function* () {
           const checkpoint = yield* loadCheckpointWithClient(client, indexName);
-          const lastEventSeq = Option.map(checkpoint, (value) => value.lastEventSeq);
+          const initialCursor = Option.map(checkpoint, (value) => value.lastEventSeq);
 
-          const stream = eventLog.stream(store).pipe(
-            Stream.filter((entry) =>
-              Option.match(lastEventSeq, {
-                onNone: () => true,
-                onSome: (seq) => entry.seq > seq
+          const loadBatch = (cursor: Option.Option<EventSeq>) =>
+            Option.match(cursor, {
+              onNone: () =>
+                client`SELECT event_seq, payload_json
+                  FROM event_log
+                  ORDER BY event_seq ASC
+                  LIMIT ${entryPageSize}`,
+              onSome: (seq) =>
+                client`SELECT event_seq, payload_json
+                  FROM event_log
+                  WHERE event_seq > ${seq}
+                  ORDER BY event_seq ASC
+                  LIMIT ${entryPageSize}`
+            }).pipe(
+              Effect.flatMap((rows) => Schema.decodeUnknown(Schema.Array(eventLogRow))(rows)),
+              Effect.flatMap((rows) =>
+                Effect.forEach(rows, decodeEventRow, { discard: false })
+              ),
+              Effect.mapError(toStoreIndexError("StoreIndex.rebuild event load failed"))
+            );
+
+          let count = 0;
+          let lastSeq = initialCursor;
+          let cursor = initialCursor;
+
+          while (true) {
+            const batch = yield* loadBatch(cursor);
+            if (batch.length === 0) {
+              break;
+            }
+
+            yield* client.withTransaction(
+              Effect.forEach(batch, (entry) => applyWithClient(client, entry.record), {
+                discard: true
               })
-            )
-          );
+            );
 
-          const state = yield* stream.pipe(
-            Stream.grouped(entryPageSize),
-            Stream.runFoldEffect(
-              {
-                count: 0,
-                lastSeq: Option.none<EventSeq>()
-              },
-              (state, batch) =>
-                client.withTransaction(
-                  Effect.gen(function* () {
-                    for (const record of batch) {
-                      yield* applyWithClient(client, record.record);
-                    }
-                    const size = Chunk.size(batch);
-                    const lastEntry = size > 0 ? Option.some(Chunk.unsafeLast(batch).seq) : state.lastSeq;
-                    return {
-                      count: state.count + size,
-                      lastSeq: lastEntry
-                    };
-                  })
-                )
-            )
-          );
+            const tail = batch[batch.length - 1]!.seq;
+            cursor = Option.some(tail);
+            lastSeq = Option.some(tail);
+            count += batch.length;
+          }
+
+          const state = { count, lastSeq };
 
           if (state.count === 0 || Option.isNone(state.lastSeq)) {
             return;
@@ -694,7 +724,7 @@ export class StoreIndex extends Effect.Service<StoreIndex>()("@skygent/StoreInde
           yield* client`PRAGMA optimize`;
         });
 
-      const bootstrapStore = (store: StoreRef, client: SqlClient.SqlClient) =>
+      const bootstrapStore = (_store: StoreRef, client: SqlClient.SqlClient) =>
         Effect.gen(function* () {
           const countRows = yield* client`SELECT COUNT(*) as count FROM posts`;
           const count = Number(countRows[0]?.count ?? 0);
@@ -702,12 +732,22 @@ export class StoreIndex extends Effect.Service<StoreIndex>()("@skygent/StoreInde
             return;
           }
 
-          const lastEventSeq = yield* eventLog.getLastEventSeq(store);
+          const lastRows = yield* client`SELECT event_seq as value
+            FROM event_log
+            ORDER BY event_seq DESC
+            LIMIT 1`.pipe(
+            Effect.flatMap((rows) => Schema.decodeUnknown(Schema.Array(lastEventSeqRow))(rows)),
+            Effect.mapError(toStoreIndexError("StoreIndex.bootstrap last event decode failed"))
+          );
+          const lastEventSeq =
+            lastRows.length > 0
+              ? Option.some(lastRows[0]!.value)
+              : Option.none<EventSeq>();
           if (Option.isNone(lastEventSeq)) {
             return;
           }
 
-          yield* rebuildWithClient(store, client);
+          yield* rebuildWithClient(_store, client);
         });
 
       const apply = Effect.fn("StoreIndex.apply")(
@@ -1066,22 +1106,34 @@ export class StoreIndex extends Effect.Service<StoreIndex>()("@skygent/StoreInde
       );
 
       const entries = (store: StoreRef) =>
-        Stream.paginateChunkEffect(0, (offset) =>
+        Stream.paginateChunkEffect(
+          Option.none<{ readonly createdAt: string; readonly uri: PostUri }>(),
+          (cursor) =>
           withClient(store, "StoreIndex.entries failed", (client) =>
             Effect.gen(function* () {
+              const where = Option.match(cursor, {
+                onNone: () => client`1 = 1`,
+                onSome: (value) =>
+                  client`(
+                    p.created_at > ${value.createdAt}
+                    OR (p.created_at = ${value.createdAt} AND p.uri > ${value.uri})
+                  )`
+              });
               const rows = yield* client`SELECT
                   p.uri as uri,
+                  p.created_at as created_at,
                   p.created_date as created_date,
                   p.author as author,
                   group_concat(h.tag) as hashtags
                 FROM posts p
                 LEFT JOIN post_hashtag h ON p.uri = h.uri
+                WHERE ${where}
                 GROUP BY p.uri
-                ORDER BY p.created_at ASC
-                LIMIT ${entryPageSize} OFFSET ${offset}`;
+                ORDER BY p.created_at ASC, p.uri ASC
+                LIMIT ${entryPageSize}`;
 
               const decoded = yield* Schema.decodeUnknown(
-                Schema.Array(postEntryRow)
+                Schema.Array(postEntryPageRow)
               )(rows).pipe(
                 Effect.mapError(toStoreIndexError("StoreIndex.entries decode failed"))
               );
@@ -1094,8 +1146,11 @@ export class StoreIndex extends Effect.Service<StoreIndex>()("@skygent/StoreInde
 
               const next =
                 entries.length < entryPageSize
-                  ? Option.none<number>()
-                  : Option.some(offset + entryPageSize);
+                  ? Option.none<{ readonly createdAt: string; readonly uri: PostUri }>()
+                  : Option.some({
+                      createdAt: decoded[decoded.length - 1]!.created_at,
+                      uri: decoded[decoded.length - 1]!.uri
+                    });
 
               return [Chunk.fromIterable(entries), next] as const;
             })

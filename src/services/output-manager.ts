@@ -34,6 +34,16 @@ export interface MaterializedStoreOutput {
   readonly filters: ReadonlyArray<MaterializedFilterOutput>;
 }
 
+interface MaterializeFilterDeps {
+  readonly storeRoot: string;
+  readonly fs: FileSystem.FileSystem;
+  readonly path: Path.Path;
+  readonly compiler: FilterCompiler;
+  readonly runtime: FilterRuntime;
+  readonly index: StoreIndex;
+  readonly filterSettings: FilterSettings;
+}
+
 const toStoreIoError = (path: string) => (cause: unknown) =>
   StoreIoError.make({
     path: Schema.decodeUnknownSync(StorePath)(path),
@@ -83,17 +93,19 @@ const resolveOutputDir = (
   });
 
 const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
-  (store: StoreRef, spec: FilterSpec) =>
+  (deps: MaterializeFilterDeps, store: StoreRef, spec: FilterSpec) =>
     Effect.gen(function* () {
-      const config = yield* AppConfigService;
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const compiler = yield* FilterCompiler;
-      const runtime = yield* FilterRuntime;
-      const index = yield* StoreIndex;
-      const filterSettings = yield* FilterSettings;
+      const {
+        storeRoot,
+        fs,
+        path,
+        compiler,
+        runtime,
+        index,
+        filterSettings
+      } = deps;
 
-      const outputDir = yield* resolveOutputDir(path, config.storeRoot, store, spec.output.path);
+      const outputDir = yield* resolveOutputDir(path, storeRoot, store, spec.output.path);
       yield* fs
         .makeDirectory(outputDir, { recursive: true, mode: privateDirMode })
         .pipe(Effect.mapError(toStoreIoError(outputDir)));
@@ -205,8 +217,12 @@ const materializeFilter = Effect.fn("OutputManager.materializeFilter")(
     })
 );
 
-const materializeFilters = (store: StoreRef, filters: ReadonlyArray<FilterSpec>) =>
-  Effect.forEach(filters, (spec) => materializeFilter(store, spec), {
+const materializeFilters = (
+  deps: MaterializeFilterDeps,
+  store: StoreRef,
+  filters: ReadonlyArray<FilterSpec>
+) =>
+  Effect.forEach(filters, (spec) => materializeFilter(deps, store, spec), {
     discard: false
   });
 
@@ -221,25 +237,15 @@ export class OutputManager extends Effect.Service<OutputManager>()("@skygent/Out
     const manager = yield* StoreManager;
     const filterSettings = yield* FilterSettings;
 
-    type OutputManagerDeps =
-      | AppConfigService
-      | FileSystem.FileSystem
-      | Path.Path
-      | FilterCompiler
-      | FilterRuntime
-      | StoreIndex
-      | FilterSettings;
-
-    const provideDeps = <A, E>(effect: Effect.Effect<A, E, OutputManagerDeps>) =>
-      effect.pipe(
-        Effect.provideService(AppConfigService, appConfig),
-        Effect.provideService(FileSystem.FileSystem, fs),
-        Effect.provideService(Path.Path, path),
-        Effect.provideService(FilterCompiler, compiler),
-        Effect.provideService(FilterRuntime, runtime),
-        Effect.provideService(StoreIndex, index),
-        Effect.provideService(FilterSettings, filterSettings)
-      );
+    const deps: MaterializeFilterDeps = {
+      storeRoot: appConfig.storeRoot,
+      fs,
+      path,
+      compiler,
+      runtime,
+      index,
+      filterSettings
+    };
 
     const materializeStore = Effect.fn("OutputManager.materializeStore")(
       (store: StoreRef) =>
@@ -247,7 +253,7 @@ export class OutputManager extends Effect.Service<OutputManager>()("@skygent/Out
           const configOption = yield* manager.getConfig(store.name);
           const config = Option.getOrElse(configOption, () => defaultStoreConfig);
 
-          const results = yield* provideDeps(materializeFilters(store, config.filters));
+          const results = yield* materializeFilters(deps, store, config.filters);
           return {
             store: store.name,
             filters: results
@@ -257,7 +263,7 @@ export class OutputManager extends Effect.Service<OutputManager>()("@skygent/Out
 
     const materializeFiltersFn = Effect.fn("OutputManager.materializeFilters")(
       (store: StoreRef, filters: ReadonlyArray<FilterSpec>) =>
-        provideDeps(materializeFilters(store, filters))
+        materializeFilters(deps, store, filters)
     );
 
     return {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
 import { PostFromRaw } from "../../src/domain/raw.js";
+import { isEmbedUnknown } from "../../src/domain/bsky.js";
 
 describe("PostFromRaw", () => {
   test("decodes raw post into enriched Post", () => {
@@ -64,5 +65,28 @@ describe("PostFromRaw", () => {
       }
     };
     expect(() => Schema.decodeUnknownSync(PostFromRaw)(raw)).toThrow();
+  });
+
+  test("falls back to EmbedUnknown when record embed cannot be decoded", () => {
+    const raw = {
+      uri: "at://did:plc:abc123/app.bsky.feed.post/456",
+      author: "alice.bsky",
+      record: {
+        text: "hello",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        embed: {
+          $type: "app.bsky.embed.record",
+          record: {
+            bogus: true
+          }
+        }
+      }
+    };
+    const post = Schema.decodeUnknownSync(PostFromRaw)(raw);
+    expect(post.embed).toBeDefined();
+    expect(post.embed && isEmbedUnknown(post.embed)).toBe(true);
+    if (post.embed && isEmbedUnknown(post.embed)) {
+      expect(post.embed.rawType).toBe("app.bsky.embed.record");
+    }
   });
 });

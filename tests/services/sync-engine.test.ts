@@ -70,7 +70,7 @@ const removeTempDir = (path: string) =>
     }).pipe(Effect.provide(BunContext.layer))
   );
 
-const buildLayer = (storeRoot: string) => {
+const buildLayer = (storeRoot: string, clientLayer = bskyLayer) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
   const syncOverrides = Layer.succeed(SyncSettingsOverrides, {});
   const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
@@ -91,7 +91,7 @@ const buildLayer = (storeRoot: string) => {
   );
 
   return SyncEngine.layer.pipe(
-    Layer.provideMerge(bskyLayer),
+    Layer.provideMerge(clientLayer),
     Layer.provideMerge(PostParser.layer),
     Layer.provideMerge(filterRuntimeLayer),
     Layer.provideMerge(committerLayer),
@@ -163,6 +163,53 @@ describe("SyncEngine", () => {
       expect(outcome.first.postsAdded).toBe(1);
       expect(outcome.second.postsAdded).toBe(0);
       expect(outcome.second.postsSkipped).toBe(1);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("sync records parse errors and continues processing", async () => {
+    const invalidRaw = {
+      uri: "at://did:plc:example/app.bsky.feed.post/bad",
+      author: "@bad",
+      record: {
+        text: "Invalid",
+        createdAt: "2026-01-01T00:00:00.000Z"
+      }
+    } as unknown as RawPost;
+
+    const mixedBskyLayer = Layer.succeed(
+      BskyClient,
+      makeBskyClient({
+        getTimeline: () => Stream.fromIterable([invalidRaw, sampleRaw]),
+        getNotifications: () => Stream.empty,
+        getFeed: () => Stream.empty,
+        getPost: () => Effect.succeed(sampleRaw)
+      })
+    );
+
+    const program = Effect.gen(function* () {
+      const sync = yield* SyncEngine;
+      const index = yield* StoreIndex;
+
+      const result = yield* sync.sync(
+        DataSource.timeline(),
+        sampleStore,
+        all()
+      );
+      const byDate = yield* index.getByDate(sampleStore, "2026-01-01");
+      return { result, byDate };
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir, mixedBskyLayer);
+    try {
+      const outcome = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+
+      expect(outcome.result.postsAdded).toBe(1);
+      expect(outcome.result.postsSkipped).toBe(1);
+      expect(outcome.result.errors).toHaveLength(1);
+      expect(outcome.byDate).toEqual([sampleRaw.uri]);
     } finally {
       await removeTempDir(tempDir);
     }

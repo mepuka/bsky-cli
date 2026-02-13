@@ -1,5 +1,6 @@
 import { FileSystem, Path } from "@effect/platform";
-import { Effect, Exit, Ref, Scope } from "effect";
+import { Effect, Exit, Ref, Scope, SynchronizedRef } from "effect";
+import type { Semaphore } from "effect/Effect";
 import * as Reactivity from "@effect/experimental/Reactivity";
 import * as Migrator from "@effect/sql/Migrator";
 import { storeIndexMigrations } from "../db/migrations/store-index/index.js";
@@ -94,6 +95,7 @@ export class StoreDb extends Effect.Service<StoreDb>()("@skygent/StoreDb", {
       };
       const clients = yield* Ref.make(new Map<string, CachedClient>());
       const clientLock = yield* Effect.makeSemaphore(1);
+      const storeLocks = yield* SynchronizedRef.make(new Map<string, Semaphore>());
 
       const migrate = Migrator.make({})({
         loader: Migrator.fromRecord(storeIndexMigrations)
@@ -186,26 +188,51 @@ export class StoreDb extends Effect.Service<StoreDb>()("@skygent/StoreDb", {
           );
         });
 
+      const getStoreLock = (storeName: string) =>
+        SynchronizedRef.modifyEffect(storeLocks, (current) =>
+          Effect.gen(function* () {
+            const existing = current.get(storeName);
+            if (existing) {
+              return [existing, current] as const;
+            }
+            const created = yield* Effect.makeSemaphore(1);
+            const next = new Map(current);
+            next.set(storeName, created);
+            return [created, next] as const;
+          })
+        );
+
+      const withStoreLock = <A, E>(storeName: string, effect: Effect.Effect<A, E>) =>
+        getStoreLock(storeName).pipe(
+          Effect.flatMap((semaphore) => semaphore.withPermits(1)(effect))
+        );
+
       const withClient = <A, E>(
         store: StoreRef,
         run: (client: SqlClient.SqlClient) => Effect.Effect<A, E>
       ) =>
-        getClient(store).pipe(
-          Effect.mapError(toStoreIoError(store.root)),
-          Effect.flatMap(run)
+        withStoreLock(
+          store.name,
+          getClient(store).pipe(
+            Effect.mapError(toStoreIoError(store.root)),
+            Effect.flatMap(run)
+          )
         );
 
       const removeClient = (storeName: string) =>
-        Ref.modify(clients, (current) => {
-          const next = new Map(current);
-          const existing = next.get(storeName);
-          if (existing) {
-            next.delete(storeName);
-          }
-          return [existing, next] as const;
-        }).pipe(
-          Effect.flatMap((existing) =>
-            existing ? closeCachedClient(existing) : Effect.void
+        withStoreLock(
+          storeName,
+          Ref.modify(clients, (current) => {
+            const next = new Map(current);
+            const existing = next.get(storeName);
+            if (existing) {
+              next.delete(storeName);
+            }
+            return [existing, next] as const;
+          }).pipe(
+            Effect.flatMap((existing) =>
+              existing ? closeCachedClient(existing) : Effect.void
+            )
           )
         );
 

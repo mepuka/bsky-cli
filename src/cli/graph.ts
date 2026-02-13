@@ -68,15 +68,9 @@ const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
 );
 
 const ensureSupportedFormat = (
-  format: Option.Option<typeof jsonNdjsonTableFormats[number]>,
-  configFormat: string
-) =>
-  Option.isNone(format) && configFormat === "markdown"
-    ? CliInputError.make({
-        message: 'Output format "markdown" is not supported for graph commands. Use --format json|ndjson|table.',
-        cause: { format: configFormat }
-      })
-    : Effect.void;
+  _format: Option.Option<typeof jsonNdjsonTableFormats[number]>,
+  _configFormat: string
+) => Effect.void;
 
 const snapshotMeta = (snapshot: GraphSnapshot, extra: Record<string, unknown> = {}) => ({
   kind: "meta" as const,

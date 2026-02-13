@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Chunk, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Chunk, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { StoreIndex } from "../../src/services/store-index.js";
@@ -8,10 +8,11 @@ import { StoreWriter } from "../../src/services/store-writer.js";
 import { StoreDb } from "../../src/services/store-db.js";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { EventMeta, PostEventRecord, PostDelete, PostUpsert, StoreQuery } from "../../src/domain/events.js";
-import { EventId, Timestamp } from "../../src/domain/primitives.js";
+import { EventId, EventSeq, Timestamp } from "../../src/domain/primitives.js";
 import { EmbedImage, EmbedImages } from "../../src/domain/bsky.js";
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
+import { IndexCheckpoint } from "../../src/domain/indexes.js";
 
 const samplePost = Schema.decodeUnknownSync(Post)({
   uri: "at://did:plc:example/app.bsky.feed.post/1",
@@ -657,6 +658,70 @@ describe("StoreIndex", () => {
       const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
       const uris = result.map((post) => post.uri);
       expect(uris).toEqual([rootA.uri, replyA.uri]);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("getPost fails when stored post_json is corrupted", async () => {
+    const upsert = PostUpsert.make({ post: samplePost, meta: sampleMeta });
+
+    const program = Effect.gen(function* () {
+      const writer = yield* StoreWriter;
+      const storeIndex = yield* StoreIndex;
+      const storeDb = yield* StoreDb;
+
+      yield* writer.append(sampleStore, upsert);
+      yield* storeIndex.rebuild(sampleStore);
+
+      yield* storeDb.withClient(sampleStore, (client) =>
+        client`UPDATE posts
+          SET post_json = ${"{bad json"}
+          WHERE uri = ${samplePost.uri}`.pipe(Effect.asVoid)
+      );
+
+      return yield* storeIndex.getPost(sampleStore, samplePost.uri);
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const exit = await Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
+      expect(Exit.isFailure(exit)).toBe(true);
+    } finally {
+      await removeTempDir(tempDir);
+    }
+  });
+
+  test("loadCheckpoint fails when checkpoint row is invalid", async () => {
+    const checkpoint = IndexCheckpoint.make({
+      index: "primary",
+      version: 1,
+      lastEventSeq: Schema.decodeUnknownSync(EventSeq)(1),
+      eventCount: 1,
+      updatedAt: rangeStart
+    });
+
+    const program = Effect.gen(function* () {
+      const storeIndex = yield* StoreIndex;
+      const storeDb = yield* StoreDb;
+
+      yield* storeIndex.saveCheckpoint(sampleStore, checkpoint);
+      yield* storeDb.withClient(sampleStore, (client) =>
+        client`UPDATE index_checkpoints
+          SET last_event_seq = ${-1},
+              event_count = ${-5}
+          WHERE index_name = ${"primary"}`.pipe(Effect.asVoid)
+      );
+
+      return yield* storeIndex.loadCheckpoint(sampleStore);
+    });
+
+    const tempDir = await makeTempDir();
+    const layer = buildLayer(tempDir);
+    try {
+      const exit = await Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
+      expect(Exit.isFailure(exit)).toBe(true);
     } finally {
       await removeTempDir(tempDir);
     }

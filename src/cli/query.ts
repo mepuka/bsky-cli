@@ -346,6 +346,20 @@ export const queryCommand = Command.make(
         queryOutputFormats,
         "json"
       );
+      const writeJsonArrayStream = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
+        Effect.gen(function* () {
+          const writeChunk = (value: string) =>
+            Stream.fromIterable([value]).pipe(Stream.run(output.stdout));
+          let isFirst = true;
+          yield* writeChunk("[");
+          yield* Stream.runForEach(stream, (value) => {
+            const json = JSON.stringify(value);
+            const prefix = isFirst ? "" : ",\n";
+            isFirst = false;
+            return writeChunk(`${prefix}${json}`);
+          });
+          yield* writeChunk(isFirst ? "]\n" : "\n]\n");
+        });
       if (extractImages && !jsonNdjsonTableFormats.includes(outputFormat as typeof jsonNdjsonTableFormats[number])) {
         return yield* CliInputError.make({
           message: "--extract-images only supports json, ndjson, or table output.",
@@ -933,18 +947,7 @@ export const queryCommand = Command.make(
           return;
         }
         if (outputFormat === "json") {
-          const writeChunk = (value: string) =>
-            Stream.fromIterable([value]).pipe(Stream.run(output.stdout));
-          let isFirst = true;
-          yield* writeChunk("[");
-          yield* Stream.runForEach(imageStream, (value) => {
-            const json = JSON.stringify(value);
-            const prefix = isFirst ? "" : ",\n";
-            isFirst = false;
-            return writeChunk(`${prefix}${json}`);
-          });
-          const suffix = isFirst ? "]\n" : "\n]\n";
-          yield* writeChunk(suffix);
+          yield* writeJsonArrayStream(imageStream);
           yield* warnIfScanLimitReached();
           return;
         }
@@ -963,18 +966,7 @@ export const queryCommand = Command.make(
         return;
       }
       if (outputFormat === "json") {
-        const writeChunk = (value: string) =>
-          Stream.fromIterable([value]).pipe(Stream.run(output.stdout));
-        let isFirst = true;
-        yield* writeChunk("[");
-        yield* Stream.runForEach(outputStream, (value) => {
-          const json = JSON.stringify(value);
-          const prefix = isFirst ? "" : ",\n";
-          isFirst = false;
-          return writeChunk(`${prefix}${json}`);
-        });
-        const suffix = isFirst ? "]\n" : "\n]\n";
-        yield* writeChunk(suffix);
+        yield* writeJsonArrayStream(outputStream);
         yield* warnIfScanLimitReached();
         return;
       }

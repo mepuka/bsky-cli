@@ -11,8 +11,8 @@
  * - Error handling and mapping to StoreIoError
  */
 
-import { Effect, Option, SynchronizedRef } from "effect";
-import type { Semaphore } from "effect/Effect";
+import { Effect, Option } from "effect";
+import * as Reactivity from "@effect/experimental/Reactivity";
 import { StoreIoError } from "../domain/errors.js";
 import type { StorePath } from "../domain/primitives.js";
 import type { StoreRef } from "../domain/store.js";
@@ -71,37 +71,16 @@ interface StoreCommitterService {
  * ```
  */
 export class StoreCommitter extends Effect.Service<StoreCommitter>()("@skygent/StoreCommitter", {
+  dependencies: [Reactivity.layer],
   effect: Effect.gen(function* () {
     const storeDb = yield* StoreDb;
     const writer = yield* StoreWriter;
-    const locks = yield* SynchronizedRef.make(new Map<string, Semaphore>());
-
-    const getLock = (storeName: string) =>
-      SynchronizedRef.modifyEffect(locks, (current) =>
-        Effect.gen(function* () {
-          const existing = current.get(storeName);
-          if (existing) {
-            return [existing, current] as const;
-          }
-          const created = yield* Effect.makeSemaphore(1);
-          const next = new Map(current);
-          next.set(storeName, created);
-          return [created, next] as const;
-        })
-      );
-
-    const withStoreLock = <A, E, R>(
-      store: StoreRef,
-      effect: Effect.Effect<A, E, R>
-    ): Effect.Effect<A, E, R> =>
-      getLock(store.name).pipe(
-        Effect.flatMap((semaphore) => semaphore.withPermits(1)(effect))
-      );
+    const reactivity = yield* Reactivity.Reactivity;
 
     const appendUpsert = Effect.fn("StoreCommitter.appendUpsert")(
       (store: StoreRef, event: PostUpsert) =>
-        withStoreLock(
-          store,
+        reactivity.mutation(
+          { "store:events": [store.name] },
           storeDb
             .withClient(store, (client) =>
               client.withTransaction(
@@ -120,8 +99,8 @@ export class StoreCommitter extends Effect.Service<StoreCommitter>()("@skygent/S
         if (events.length === 0) {
           return Effect.succeed([] as ReadonlyArray<EventLogEntry>);
         }
-        return withStoreLock(
-          store,
+        return reactivity.mutation(
+          { "store:events": [store.name] },
           storeDb
             .withClient(store, (client) =>
               client.withTransaction(
@@ -141,8 +120,8 @@ export class StoreCommitter extends Effect.Service<StoreCommitter>()("@skygent/S
     const appendUpsertIfMissing = Effect.fn(
       "StoreCommitter.appendUpsertIfMissing"
     )((store: StoreRef, event: PostUpsert) =>
-      withStoreLock(
-        store,
+      reactivity.mutation(
+        { "store:events": [store.name] },
         storeDb
           .withClient(store, (client) =>
             client.withTransaction(
@@ -166,8 +145,8 @@ export class StoreCommitter extends Effect.Service<StoreCommitter>()("@skygent/S
       if (events.length === 0) {
         return Effect.succeed([] as ReadonlyArray<Option.Option<EventLogEntry>>);
       }
-      return withStoreLock(
-        store,
+      return reactivity.mutation(
+        { "store:events": [store.name] },
         storeDb
           .withClient(store, (client) =>
             client.withTransaction(
@@ -189,8 +168,8 @@ export class StoreCommitter extends Effect.Service<StoreCommitter>()("@skygent/S
 
     const appendDelete = Effect.fn("StoreCommitter.appendDelete")(
       (store: StoreRef, event: PostDelete) =>
-        withStoreLock(
-          store,
+        reactivity.mutation(
+          { "store:events": [store.name] },
           storeDb
             .withClient(store, (client) =>
               client.withTransaction(

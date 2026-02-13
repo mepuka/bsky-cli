@@ -68,7 +68,7 @@ const decodeEventJson = (raw: string) =>
   Schema.decodeUnknown(Schema.parseJson(PostEventRecord))(raw);
 
 const toStoreIoError = (path: StorePath) => (cause: unknown) =>
-  StoreIoError.make({ path, cause });
+  cause instanceof StoreIoError ? cause : StoreIoError.make({ path, cause });
 
 /**
  * Service for managing and streaming store event logs.
@@ -95,11 +95,11 @@ export class StoreEventLog extends Effect.Service<StoreEventLog>()("@skygent/Sto
   effect: Effect.gen(function* () {
     const storeDb = yield* StoreDb;
 
-    const stream = (store: StoreRef) =>
-      Stream.unwrap(
-        storeDb.withClient(store, (client) =>
-          Effect.gen(function* () {
-            const firstPage = SqlSchema.findAll({
+    const loadPageRows = (store: StoreRef, cursor: Option.Option<EventSeq>) =>
+      storeDb.withClient(store, (client) =>
+        Option.match(cursor, {
+          onNone: () =>
+            SqlSchema.findAll({
               Request: Schema.Void,
               Result: eventLogRow,
               execute: () =>
@@ -107,63 +107,61 @@ export class StoreEventLog extends Effect.Service<StoreEventLog>()("@skygent/Sto
                   FROM event_log
                   ORDER BY event_seq ASC
                   LIMIT ${pageSize}`
-            });
-            const nextPage = SqlSchema.findAll({
+            })(undefined),
+          onSome: (after) =>
+            SqlSchema.findAll({
               Request: EventSeq,
               Result: eventLogRow,
-              execute: (after) =>
+              execute: (seq) =>
                 client`SELECT event_seq, payload_json
                   FROM event_log
-                  WHERE event_seq > ${after}
+                  WHERE event_seq > ${seq}
                   ORDER BY event_seq ASC
                   LIMIT ${pageSize}`
-            });
+            })(after)
+        })
+      );
 
-            const decodeRows = (rows: ReadonlyArray<typeof eventLogRow.Type>) =>
-              Effect.forEach(
-                rows,
-                (row) =>
-                  decodeEventJson(row.payload_json).pipe(
-                    Effect.map((record) => ({
-                      seq: row.event_seq,
-                      record
-                    }) satisfies EventLogEntry)
-                  ),
-                { discard: false }
+    const stream = (store: StoreRef) =>
+      Effect.gen(function* () {
+        const decodeRows = (rows: ReadonlyArray<typeof eventLogRow.Type>) =>
+          Effect.forEach(
+            rows,
+            (row) =>
+              decodeEventJson(row.payload_json).pipe(
+                Effect.map((record) => ({
+                  seq: row.event_seq,
+                  record
+                }) satisfies EventLogEntry)
+              ),
+            { discard: false }
+          );
+
+        const toPage = (
+          rows: ReadonlyArray<typeof eventLogRow.Type>
+        ): Effect.Effect<
+          Option.Option<readonly [ReadonlyArray<EventLogEntry>, Option.Option<EventSeq>]>,
+          ParseResult.ParseError
+        > =>
+          rows.length === 0
+            ? Effect.succeed(Option.none())
+            : decodeRows(rows).pipe(
+                Effect.map((records) => {
+                  const lastSeq = rows[rows.length - 1]!.event_seq;
+                  return Option.some([
+                    records,
+                    Option.some(lastSeq)
+                  ] as const);
+                })
               );
 
-            const toPage = (
-              rows: ReadonlyArray<typeof eventLogRow.Type>
-            ): Effect.Effect<
-              Option.Option<readonly [ReadonlyArray<EventLogEntry>, Option.Option<EventSeq>]>,
-              ParseResult.ParseError
-            > =>
-              rows.length === 0
-                ? Effect.succeed(Option.none())
-                : decodeRows(rows).pipe(
-                    Effect.map((records) => {
-                      const lastSeq = rows[rows.length - 1]!.event_seq;
-                      return Option.some([
-                        records,
-                        Option.some(lastSeq)
-                      ] as const);
-                    })
-                  );
-
-            return Stream.unfoldEffect(
-              Option.none<EventSeq>(),
-              (cursor) =>
-                Option.match(cursor, {
-                  onNone: () => firstPage(undefined).pipe(Effect.flatMap(toPage)),
-                  onSome: (after) => nextPage(after).pipe(Effect.flatMap(toPage))
-                })
-            ).pipe(
-              Stream.mapConcat((records) => records),
-              Stream.mapError(toStoreIoError(store.root))
-            );
-          })
-        ).pipe(Effect.mapError(toStoreIoError(store.root)))
-      );
+        return Stream.unfoldEffect(Option.none<EventSeq>(), (cursor) =>
+          loadPageRows(store, cursor).pipe(
+            Effect.flatMap(toPage),
+            Effect.mapError(toStoreIoError(store.root))
+          )
+        ).pipe(Stream.mapConcat((records) => records));
+      }).pipe(Stream.unwrap);
 
     const clear = Effect.fn("StoreEventLog.clear")((store: StoreRef) =>
       storeDb
@@ -201,7 +199,46 @@ export class StoreEventLog extends Effect.Service<StoreEventLog>()("@skygent/Sto
           .pipe(Effect.mapError(toStoreIoError(store.root)))
     );
 
-    return { stream, clear, getLastEventSeq };
+    const getEventsAfter = Effect.fn("StoreEventLog.getEventsAfter")(
+      (store: StoreRef, afterSeq: Option.Option<EventSeq>) =>
+        storeDb
+          .withClient(store, (client) => {
+            const query = Option.match(afterSeq, {
+              onNone: () =>
+                SqlSchema.findAll({
+                  Request: Schema.Void,
+                  Result: eventLogRow,
+                  execute: () =>
+                    client`SELECT event_seq, payload_json
+                      FROM event_log ORDER BY event_seq ASC`
+                })(undefined),
+              onSome: (seq) =>
+                SqlSchema.findAll({
+                  Request: EventSeq,
+                  Result: eventLogRow,
+                  execute: (after) =>
+                    client`SELECT event_seq, payload_json
+                      FROM event_log WHERE event_seq > ${after}
+                      ORDER BY event_seq ASC`
+                })(seq)
+            });
+            return query.pipe(
+              Effect.flatMap((rows) =>
+                Effect.forEach(rows, (row) =>
+                  decodeEventJson(row.payload_json).pipe(
+                    Effect.map(
+                      (record) =>
+                        ({ seq: row.event_seq, record }) satisfies EventLogEntry
+                    )
+                  )
+                )
+              )
+            );
+          })
+          .pipe(Effect.mapError(toStoreIoError(store.root)))
+    );
+
+    return { stream, clear, getLastEventSeq, getEventsAfter };
   })
 }) {
   static readonly layer = StoreEventLog.Default;

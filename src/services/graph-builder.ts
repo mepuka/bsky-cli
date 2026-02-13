@@ -76,15 +76,30 @@ export class GraphBuilder extends Effect.Service<GraphBuilder>()("@skygent/Graph
             const limitedStream = input.limit
               ? filteredStream.pipe(Stream.take(input.limit))
               : filteredStream;
-            const collected = yield* Stream.runCollect(limitedStream);
-            const posts = Chunk.toReadonlyArray(collected);
 
             const byUri = new Map<string, Did>();
-            for (const post of posts) {
-              if (post.authorDid) {
-                byUri.set(String(post.uri), post.authorDid);
+            const pendingReplies = new Map<string, Array<Did>>();
+            let postsScanned = 0;
+
+            const queuePendingReply = (parentUri: string, authorDid: Did) => {
+              const existing = pendingReplies.get(parentUri);
+              if (existing) {
+                existing.push(authorDid);
+                return;
               }
-            }
+              pendingReplies.set(parentUri, [authorDid]);
+            };
+
+            const flushPendingReplies = (uri: string, parentDid: Did) => {
+              const waiting = pendingReplies.get(uri);
+              if (!waiting) {
+                return;
+              }
+              for (const authorDid of waiting) {
+                addEdge(authorDid, parentDid, "reply");
+              }
+              pendingReplies.delete(uri);
+            };
 
             const nodes = new Map<Did, GraphNode>();
             const edges = new Map<string, GraphEdge>();
@@ -119,43 +134,51 @@ export class GraphBuilder extends Effect.Service<GraphBuilder>()("@skygent/Graph
               edges.set(key, GraphEdge.make({ from, to, type, weight }));
             };
 
-            for (const post of posts) {
-              const authorDid = post.authorDid;
-              if (!authorDid) {
-                continue;
-              }
-              ensureNode(authorDid, post.author);
-
-              for (const mentionDid of post.mentionDids ?? []) {
-                ensureNode(mentionDid);
-                addEdge(authorDid, mentionDid, "mention");
-              }
-
-              const replyParentUri = post.reply?.parent.uri
-                ? String(post.reply.parent.uri)
-                : undefined;
-              if (replyParentUri) {
-                const parentDid = byUri.get(replyParentUri);
-                if (parentDid) {
-                  ensureNode(parentDid);
-                  addEdge(authorDid, parentDid, "reply");
+            yield* Stream.runForEach(limitedStream, (post) =>
+              Effect.sync(() => {
+                postsScanned += 1;
+                const authorDid = post.authorDid;
+                if (!authorDid) {
+                  return;
                 }
-              }
-
-              const quotedAuthor = getEmbedRecordAuthor(post.embed);
-              if (quotedAuthor) {
-                ensureNode(quotedAuthor.did, quotedAuthor.handle);
-                addEdge(authorDid, quotedAuthor.did, "quote");
-              }
-
-              const reason = post.feed?.reason;
-              if (reason && isFeedReasonRepost(reason)) {
-                const repostActor = recordRepostActor(reason);
-                ensureNode(repostActor.did, repostActor.handle);
+                const postUri = String(post.uri);
+                byUri.set(postUri, authorDid);
                 ensureNode(authorDid, post.author);
-                addEdge(repostActor.did, authorDid, "repost");
-              }
-            }
+                flushPendingReplies(postUri, authorDid);
+
+                for (const mentionDid of post.mentionDids ?? []) {
+                  ensureNode(mentionDid);
+                  addEdge(authorDid, mentionDid, "mention");
+                }
+
+                const replyParentUri = post.reply?.parent.uri
+                  ? String(post.reply.parent.uri)
+                  : undefined;
+                if (replyParentUri) {
+                  const parentDid = byUri.get(replyParentUri);
+                  if (parentDid) {
+                    ensureNode(parentDid);
+                    addEdge(authorDid, parentDid, "reply");
+                  } else {
+                    queuePendingReply(replyParentUri, authorDid);
+                  }
+                }
+
+                const quotedAuthor = getEmbedRecordAuthor(post.embed);
+                if (quotedAuthor) {
+                  ensureNode(quotedAuthor.did, quotedAuthor.handle);
+                  addEdge(authorDid, quotedAuthor.did, "quote");
+                }
+
+                const reason = post.feed?.reason;
+                if (reason && isFeedReasonRepost(reason)) {
+                  const repostActor = recordRepostActor(reason);
+                  ensureNode(repostActor.did, repostActor.handle);
+                  ensureNode(authorDid, post.author);
+                  addEdge(repostActor.did, authorDid, "repost");
+                }
+              })
+            );
 
             const now = yield* Clock.currentTimeMillis;
             const builtAt = yield* Schema.decodeUnknown(
@@ -177,7 +200,7 @@ export class GraphBuilder extends Effect.Service<GraphBuilder>()("@skygent/Graph
                 ? 0
                 : edgeCount / (nodeCount * (nodeCount - 1));
             const summary = GraphSummary.make({
-              postsScanned: posts.length,
+              postsScanned,
               interactionsByType: interactionCounts,
               uniqueActors: nodeCount,
               edgeCount,
