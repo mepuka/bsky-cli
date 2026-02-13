@@ -1,5 +1,6 @@
 import * as KeyValueStore from "@effect/platform/KeyValueStore";
 import * as Persistence from "@effect/experimental/Persistence";
+import * as Reactivity from "@effect/experimental/Reactivity";
 import { Path } from "@effect/platform";
 import * as FetchHttpClient from "@effect/platform/FetchHttpClient";
 import { Effect, Layer } from "effect";
@@ -220,6 +221,8 @@ const storeTopologyLayer = StoreTopology.layer.pipe(
   Layer.provideMerge(storeSourcesLayer)
 );
 
+const reactivityLayer = Reactivity.layer;
+
 export const CliLive = Layer.mergeAll(
   appConfigLayer,
   filterSettingsLayer,
@@ -227,6 +230,7 @@ export const CliLive = Layer.mergeAll(
   CliInput.layer,
   CliOutput.layer,
   resourceMonitorLayer,
+  reactivityLayer,
   managerLayer,
   committerLayer,
   indexLayer,

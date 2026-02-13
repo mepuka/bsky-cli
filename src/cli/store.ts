@@ -66,6 +66,7 @@ import {
   renderStoreTreeTable,
   type StoreTreeRenderOptions
 } from "./store-tree.js";
+import { storeServe } from "./store-serve.js";
 
 const storeNameArg = Args.text({ name: "name" }).pipe(
   Args.withSchema(StoreName),
@@ -1602,6 +1603,7 @@ export const storeCommand = Command.make("store", {}).pipe(
     storeCacheClean,
     storeCacheSweep,
     storeCacheTtlSweep,
+    storeServe,
     storeTree
   ]),
   Command.withDescription(
