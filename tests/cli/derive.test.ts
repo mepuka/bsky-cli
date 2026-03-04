@@ -12,6 +12,7 @@ import { StoreManager } from "../../src/services/store-manager.js";
 import { ViewCheckpointStore } from "../../src/services/view-checkpoint-store.js";
 import { FilterLibrary } from "../../src/services/filter-library.js";
 import { FilterNotFound } from "../../src/domain/errors.js";
+import { CliInputError } from "../../src/cli/errors.js";
 import { CliPreferences } from "../../src/cli/preferences.js";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { BunContext } from "@effect/platform-bun";
@@ -182,6 +183,125 @@ describe("CLI derive command", () => {
     );
 
     expect(Option.isSome(result)).toBe(true);
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.remove(storeRoot, { recursive: true });
+      }).pipe(Effect.provide(BunContext.layer))
+    );
+  });
+
+  test("shows contextual hint when source looks like a subcommand", async () => {
+    const run = Command.run(deriveCommand, {
+      name: "skygent",
+      version: "0.0.0"
+    });
+    const { layer: outputLayer } = makeOutputCapture();
+    const storeRoot = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return yield* fs.makeTempDirectory();
+      }).pipe(Effect.provide(BunContext.layer))
+    );
+    const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
+    const appConfigLayer = AppConfigService.layer.pipe(
+      Layer.provide(overrides),
+      Layer.provide(BunContext.layer)
+    );
+    const storeLayer = StoreManager.layer.pipe(
+      Layer.provideMerge(appConfigLayer)
+    );
+    const engineLayer = Layer.succeed(
+      DerivationEngine,
+      DerivationEngine.make({
+        derive: () =>
+          Effect.succeed(
+            DerivationResult.make({
+              eventsProcessed: 0,
+              eventsMatched: 0,
+              eventsSkipped: 0,
+              deletesPropagated: 0,
+              durationMs: 0
+            })
+          )
+      })
+    );
+    const checkpointsLayer = Layer.succeed(
+      ViewCheckpointStore,
+      ViewCheckpointStore.make({
+        load: () => Effect.succeed(Option.none()),
+        save: () => Effect.void,
+        remove: () => Effect.void
+      })
+    );
+    const outputManagerLayer = Layer.succeed(
+      OutputManager,
+      OutputManager.make({
+        materializeStore: (store) =>
+          Effect.succeed({ store: store.name, filters: [] }),
+        materializeFilters: () => Effect.succeed([])
+      })
+    );
+    const filterLibraryLayer = Layer.succeed(
+      FilterLibrary,
+      FilterLibrary.make({
+        list: () => Effect.succeed([]),
+        get: (name) => Effect.fail(FilterNotFound.make({ name })),
+        save: () => Effect.void,
+        remove: () => Effect.void,
+        validateAll: () => Effect.succeed([])
+      })
+    );
+    const stubDid = Schema.decodeUnknownSync(Did)("did:plc:example");
+    const stubHandle = Schema.decodeUnknownSync(Handle)("example.bsky");
+    const identityLayer = Layer.succeed(
+      IdentityResolver,
+      IdentityResolver.make({
+        lookupDid: () => Effect.succeed(Option.none()),
+        lookupHandle: () => Effect.succeed(Option.none()),
+        resolveDid: () => Effect.succeed(stubDid),
+        resolveHandle: () => Effect.succeed(stubHandle),
+        resolveIdentity: () =>
+          Effect.succeed(
+            IdentityInfo.make({ did: stubDid, handle: stubHandle, didDoc: {} })
+          ),
+        cacheProfile: () => Effect.void
+      })
+    );
+    const preferencesLayer = Layer.succeed(CliPreferences, { compact: false });
+    const appLayer = Layer.mergeAll(
+      outputLayer,
+      storeLayer,
+      engineLayer,
+      checkpointsLayer,
+      outputManagerLayer,
+      filterLibraryLayer,
+      identityLayer,
+      preferencesLayer,
+      appConfigLayer
+    ).pipe(Layer.provideMerge(BunContext.layer));
+
+    const result = await Effect.runPromise(
+      run([
+        "node",
+        "skygent",
+        "list",
+        "target",
+        "--dry-run"
+      ]).pipe(
+        Effect.provide(appLayer),
+        Effect.either
+      )
+    );
+
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left).toBeInstanceOf(CliInputError);
+      expect(result.left.message).toContain("not subcommands");
+      expect(result.left.message).toContain("derive");
+      expect(result.left.message).toContain("<source> <target>");
+    }
 
     await Effect.runPromise(
       Effect.gen(function* () {

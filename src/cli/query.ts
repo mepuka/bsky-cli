@@ -134,11 +134,13 @@ const progressOption = Options.boolean("progress").pipe(
   Options.withDescription("Show progress for filtered queries")
 );
 const countOption = Options.boolean("count").pipe(
-  Options.withDescription("Only output the count of matching posts")
+  Options.withDescription(
+    "Only output counts (--count for total; --count author|hashtag|date|hour for grouped counts)"
+  )
 );
 const countByValues = ["author", "hashtag", "date", "hour"] as const;
 const countByOption = Options.choice("count-by", countByValues).pipe(
-  Options.withDescription("Count posts grouped by field (sorted by count desc)"),
+  Options.withDescription("Alias for --count <field> (sorted by count desc)"),
   Options.optional
 );
 
@@ -416,25 +418,25 @@ export const queryCommand = Command.make(
         const countByValue = countBy.value;
         if (Option.isSome(fields)) {
           return yield* CliInputError.make({
-            message: "--count-by cannot be combined with --fields.",
+            message: "--count <field> cannot be combined with --fields.",
             cause: { countBy: countByValue }
           });
         }
         if (extractImages) {
           return yield* CliInputError.make({
-            message: "--count-by cannot be combined with --extract-images.",
+            message: "--count <field> cannot be combined with --extract-images.",
             cause: { countBy: countByValue }
           });
         }
         if (Option.isSome(sort)) {
           return yield* CliInputError.make({
-            message: "--count-by always sorts by count descending. Remove --sort.",
+            message: "--count <field> always sorts by count descending. Remove --sort.",
             cause: { countBy: countByValue, sort: sort.value }
           });
         }
         if (!["json", "ndjson", "table"].includes(outputFormat)) {
           return yield* CliInputError.make({
-            message: `--count-by only supports json, ndjson, or table output (got: ${outputFormat}).`,
+            message: `--count <field> only supports json, ndjson, or table output (got: ${outputFormat}).`,
             cause: { countBy: countByValue, format: outputFormat }
           });
         }
@@ -1105,6 +1107,7 @@ export const queryCommand = Command.make(
         "skygent query my-store --sort desc --limit 25",
         "skygent query my-store --sort by-engagement --limit 25",
         "skygent query my-store --filter 'contains:ai' --count",
+        "skygent query my-store --count author --limit 10",
         "skygent query my-store --filter 'has:images' --extract-images --resolve-images --format ndjson",
         "skygent query store-a,store-b --format ndjson"
       ],

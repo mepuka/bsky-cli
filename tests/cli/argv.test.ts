@@ -72,4 +72,32 @@ describe("relocateGlobalOptions", () => {
       "node", "skygent", "--compact", "query", "my-store", "--limit", "10"
     ]);
   });
+
+  test("normalizes --count <field> to --count-by for query", () => {
+    const input = ["node", "skygent", "query", "my-store", "--count", "author"];
+    expect(relocateGlobalOptions(input)).toEqual([
+      "node", "skygent", "query", "my-store", "--count-by", "author"
+    ]);
+  });
+
+  test("normalizes --count=<field> to --count-by=<field> for query", () => {
+    const input = ["node", "skygent", "query", "my-store", "--count=hashtag"];
+    expect(relocateGlobalOptions(input)).toEqual([
+      "node", "skygent", "query", "my-store", "--count-by=hashtag"
+    ]);
+  });
+
+  test("does not rewrite bare --count", () => {
+    const input = ["node", "skygent", "query", "my-store", "--count"];
+    expect(relocateGlobalOptions(input)).toEqual([
+      "node", "skygent", "query", "my-store", "--count"
+    ]);
+  });
+
+  test("does not rewrite --count <value> for non-query commands", () => {
+    const input = ["node", "skygent", "store", "stats", "my-store", "--count", "author"];
+    expect(relocateGlobalOptions(input)).toEqual([
+      "node", "skygent", "store", "stats", "my-store", "--count", "author"
+    ]);
+  });
 });

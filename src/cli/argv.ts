@@ -5,6 +5,7 @@ const subcommandNames = new Set([
   "filter", "search", "graph", "feed", "post", "image-cache",
   "pipe", "digest", "actor", "capabilities"
 ]);
+const queryCountByValues = new Set(["author", "hashtag", "date", "hour"]);
 
 const booleanGlobals = new Set(["--full", "--compact"]);
 const globalNames = new Set(globalOptionNames as ReadonlyArray<string>);
@@ -39,6 +40,53 @@ const findSubcommandIndex = (tokens: ReadonlyArray<string>): number => {
   }
 
   return -1;
+};
+
+const normalizeQueryCountSyntax = (
+  argv: ReadonlyArray<string>
+): ReadonlyArray<string> => {
+  const prefix = argv.slice(0, 2);
+  const tokens = argv.slice(2);
+  const subcommandIndex = findSubcommandIndex(tokens);
+  if (subcommandIndex < 0 || tokens[subcommandIndex] !== "query") {
+    return [...argv];
+  }
+
+  const beforeAndCommand = tokens.slice(0, subcommandIndex + 1);
+  const queryTokens = tokens.slice(subcommandIndex + 1);
+  const normalized: string[] = [];
+
+  let i = 0;
+  while (i < queryTokens.length) {
+    const token = queryTokens[i]!;
+    if (token === "--count") {
+      const next = queryTokens[i + 1];
+      if (next && queryCountByValues.has(next)) {
+        normalized.push("--count-by", next);
+        i += 2;
+        continue;
+      }
+      normalized.push(token);
+      i += 1;
+      continue;
+    }
+
+    if (token.startsWith("--count=")) {
+      const value = token.slice("--count=".length);
+      if (queryCountByValues.has(value)) {
+        normalized.push(`--count-by=${value}`);
+      } else {
+        normalized.push(token);
+      }
+      i += 1;
+      continue;
+    }
+
+    normalized.push(token);
+    i += 1;
+  }
+
+  return [...prefix, ...beforeAndCommand, ...normalized];
 };
 
 /**
@@ -99,5 +147,10 @@ export const relocateGlobalOptions = (
     }
   }
 
-  return [...prefix, ...beforeSub, ...relocated, ...remaining];
+  return normalizeQueryCountSyntax([
+    ...prefix,
+    ...beforeSub,
+    ...relocated,
+    ...remaining
+  ]);
 };

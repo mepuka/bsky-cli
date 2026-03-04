@@ -175,7 +175,7 @@ skygent query my-store --fields @minimal --newest-first
 skygent query my-store --fields @images --resolve-images
 skygent query my-store --extract-images --format json
 skygent query store-a,store-b --format ndjson
-skygent query my-store --filter 'hashtag:#ai' --count-by hashtag
+skygent query my-store --filter 'hashtag:#ai' --count hashtag
 skygent query my-store --filter 'engagement:minLikes=50' --count
 ```
 
@@ -187,7 +187,7 @@ skygent query my-store --filter 'engagement:minLikes=50' --count
 
 **Image options:** `--extract-images`, `--resolve-images`, `--cache-images`, `--no-cache-images-thumbnails`.
 
-**Aggregation:** `--count` for totals, `--count-by author|hashtag|date|hour` for breakdowns.
+**Aggregation:** `--count` for totals, `--count author|hashtag|date|hour` for breakdowns (`--count-by` remains supported as an alias).
 
 Multi-store queries accept comma-separated store lists and include store names in output by default.
 
