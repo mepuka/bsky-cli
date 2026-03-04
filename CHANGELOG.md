@@ -1,5 +1,13 @@
 # @mepuka/skygent
 
+## 0.8.1
+
+### Patch Changes
+
+- ad11bb7: - consolidate shared CLI/test utilities to reduce duplication and keep output/layer setup consistent
+  - fix derive command type-safety in store resolution and improve runtime typing at entrypoint
+  - upgrade `effect-jetstream` to `^1.2.0`
+
 ## 0.8.0
 
 ### Minor Changes
