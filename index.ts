@@ -55,6 +55,8 @@ const program = cli(relocateGlobalOptions(process.argv)).pipe(
   )
 );
 
+const runnable = program as Effect.Effect<void, unknown>;
+
 BunRuntime.runMain({
   disableErrorReporting: true,
   disablePrettyLogger: true,
@@ -65,4 +67,4 @@ BunRuntime.runMain({
       process.exit(code);
     }
   }
-})(program);
+})(runnable);

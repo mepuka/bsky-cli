@@ -177,22 +177,29 @@ export const deriveCommand = Command.make(
 
       // Resolve source before checkpoint reads so subcommand-like store names
       // produce a contextual CLI hint immediately.
-      const sourceRef = yield* storeOptions.loadStoreRef(source).pipe(
-        Effect.catchTag("StoreNotFound", (error) =>
-          likelySubcommandVerbs.has(String(error.name))
-            ? CliInputError.make({
-                message:
-                  `Store "${error.name}" does not exist. Note: "derive" takes <source> <target> arguments, not subcommands. ` +
-                  `Run "skygent derive --help" for usage.`,
-                cause: {
-                  source,
-                  target,
-                  usage: "skygent derive <source> <target> [options]"
-                }
-              })
-            : Effect.fail(error)
-        )
+      const sourceRefResult = yield* storeOptions.loadStoreRef(source).pipe(
+        Effect.either
       );
+      if (sourceRefResult._tag === "Left") {
+        const error = sourceRefResult.left;
+        if (
+          error._tag === "StoreNotFound" &&
+          likelySubcommandVerbs.has(String(error.name))
+        ) {
+          return yield* CliInputError.make({
+            message:
+              `Store "${error.name}" does not exist. Note: "derive" takes <source> <target> arguments, not subcommands. ` +
+              `Run "skygent derive --help" for usage.`,
+            cause: {
+              source,
+              target,
+              usage: "skygent derive <source> <target> [options]"
+            }
+          });
+        }
+        return yield* error;
+      }
+      const sourceRef = sourceRefResult.right;
 
       // Validation 4: Filter or mode change detection (only if not resetting)
       if (!reset) {
