@@ -13,6 +13,7 @@ import { parseRangeOptions } from "./range-options.js";
 import { withExamples } from "./help.js";
 import { storeOptions } from "./store.js";
 import { renderTableLegacy } from "./doc/table.js";
+import { makeFormatOption } from "./format-utils.js";
 
 const digestFormats = ["json", "markdown", "table"] as const;
 
@@ -36,10 +37,7 @@ const untilOption = Options.text("until").pipe(
   Options.optional
 );
 
-const formatOption = Options.choice("format", digestFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
+const formatOption = makeFormatOption(digestFormats);
 
 type DigestBucketUnit = "hour" | "day";
 

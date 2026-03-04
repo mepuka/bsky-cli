@@ -16,6 +16,7 @@ import { StoreIndex } from "../services/store-index.js";
 import { parseFilterExpr } from "./filter-input.js";
 import { decodeJson } from "./parse.js";
 import { writeJson, writeText } from "./output.js";
+import { emitWithFormat } from "./output-render.js";
 import { CliInputError, CliJsonError } from "./errors.js";
 import { storeOptions } from "./store.js";
 import { describeFilter, formatFilterExpr } from "../domain/filter-describe.js";
@@ -27,6 +28,7 @@ import { filterOption, filterJsonOption } from "./shared-options.js";
 import { jsonTableFormats, resolveOutputFormat, textJsonFormats } from "./output-format.js";
 import { filterHelpText } from "./filter-help.js";
 import { PositiveInt } from "./option-schemas.js";
+import { makeFormatOption } from "./format-utils.js";
 
 const filterNameArg = Args.text({ name: "name" }).pipe(
   Args.withSchema(StoreName),
@@ -61,18 +63,9 @@ const sampleSizeOption = Options.integer("sample-size").pipe(
   Options.withDescription("Number of posts to evaluate (default: 1000)"),
   Options.optional
 );
-const describeFormatOption = Options.choice("format", textJsonFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
-const testFormatOption = Options.choice("format", textJsonFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
-const listFormatOption = Options.choice("format", jsonTableFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
+const describeFormatOption = makeFormatOption(textJsonFormats);
+const testFormatOption = makeFormatOption(textJsonFormats);
+const listFormatOption = makeFormatOption(jsonTableFormats);
 const describeAnsiOption = Options.boolean("ansi").pipe(
   Options.withDescription("Enable ANSI colors in output")
 );
@@ -169,24 +162,25 @@ export const filterList = Command.make("list", { format: listFormatOption }, ({ 
     const appConfig = yield* AppConfigService;
     const library = yield* FilterLibrary;
     const names = yield* library.list();
-    const outputFormat = resolveOutputFormat(
+    yield* emitWithFormat(
       format,
       appConfig.outputFormat,
       jsonTableFormats,
-      "json"
+      "json",
+      {
+        json: writeJson(names),
+        table: Effect.gen(function* () {
+          const filters = yield* Effect.forEach(names, (name) =>
+            library
+              .get(name as StoreName)
+              .pipe(Effect.map((expr) => ({ name, expr: formatFilterExpr(expr) })))
+          );
+          const rows = filters.map((f) => [f.name, f.expr]);
+          const table = renderTableLegacy(["NAME", "EXPRESSION"], rows);
+          yield* writeText(table);
+        })
+      }
     );
-
-    if (outputFormat === "table") {
-      const filters = yield* Effect.forEach(names, (name) =>
-        library.get(name as StoreName).pipe(Effect.map((expr) => ({ name, expr: formatFilterExpr(expr) })))
-      );
-      const rows = filters.map((f) => [f.name, f.expr]);
-      const table = renderTableLegacy(["NAME", "EXPRESSION"], rows);
-      yield* writeText(table);
-      return;
-    }
-    
-    yield* writeJson(names);
   })
 ).pipe(
   Command.withDescription(

@@ -16,6 +16,7 @@ import { StoreLineage, StoreSource } from "../../src/domain/derivation.js";
 import { all, filterExprSignature } from "../../src/domain/filter.js";
 import { TimelineSource } from "../../src/domain/store-sources.js";
 import { StoreName } from "../../src/domain/primitives.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const sampleConfig = Schema.decodeUnknownSync(StoreConfig)({
   format: { json: true, markdown: false },
@@ -23,21 +24,6 @@ const sampleConfig = Schema.decodeUnknownSync(StoreConfig)({
   filters: []
 });
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const buildLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });

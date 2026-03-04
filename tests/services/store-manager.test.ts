@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { Chunk, Effect, Layer, Option, Schema } from "effect";
-import { FileSystem } from "@effect/platform";
-import { BunContext } from "@effect/platform-bun";
+import { Chunk, Effect, Option, Schema } from "effect";
 import { StoreManager } from "../../src/services/store-manager.js";
-import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { StoreConfig } from "../../src/domain/store.js";
 import { StoreName } from "../../src/domain/primitives.js";
+import { buildStoreCoreLayer } from "../support/layers.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const sampleName = Schema.decodeUnknownSync(StoreName)("arsenal");
 const otherName = Schema.decodeUnknownSync(StoreName)("milan");
@@ -20,32 +19,7 @@ const sampleConfig = Schema.decodeUnknownSync(StoreConfig)({
     }
   ]
 });
-
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const buildLayer = (storeRoot: string) => {
-  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
-  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
-  const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer));
-
-  return Layer.mergeAll(appConfigLayer, managerLayer).pipe(
-    Layer.provideMerge(BunContext.layer)
-  );
-};
+const buildLayer = (storeRoot: string) => buildStoreCoreLayer(storeRoot);
 
 describe("StoreManager", () => {
   test("createStore persists metadata + config", async () => {

@@ -1,8 +1,7 @@
 import { Command } from "@effect/cli";
 import { describe, expect, test } from "bun:test";
-import { Chunk, Clock, Effect, Layer, Ref, Sink, Stream } from "effect";
+import { Chunk, Clock, Effect, Layer, Stream } from "effect";
 import { CliInput, type CliInputService } from "../../src/cli/input.js";
-import { CliOutput, type CliOutputService } from "../../src/cli/output.js";
 import { pipeCommand } from "../../src/cli/pipe.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
 import { FilterLibrary } from "../../src/services/filter-library.js";
@@ -11,57 +10,12 @@ import { PostParser } from "../../src/services/post-parser.js";
 import type { FilterExpr } from "../../src/domain/filter.js";
 import type { Post } from "../../src/domain/post.js";
 import { CliInputError } from "../../src/cli/errors.js";
-
-const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
-
-const decodeChunk = (chunk: string | Uint8Array) =>
-  typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
-
-const makeOutputCapture = () => {
-  const stdoutRef = Ref.unsafeMake<ReadonlyArray<string>>([]);
-  const stderrRef = Ref.unsafeMake<ReadonlyArray<string>>([]);
-
-  const append = (ref: Ref.Ref<ReadonlyArray<string>>, chunk: string | Uint8Array) =>
-    Ref.update(ref, (items) => [...items, decodeChunk(chunk)]);
-
-  const stdoutSink = Sink.forEach((chunk: string | Uint8Array) =>
-    append(stdoutRef, chunk)
-  );
-  const stderrSink = Sink.forEach((chunk: string | Uint8Array) =>
-    append(stderrRef, chunk)
-  );
-
-  const writeJson = (value: unknown, pretty?: boolean) =>
-    append(
-      stdoutRef,
-      ensureNewline(JSON.stringify(value, null, pretty ? 2 : 0))
-    );
-
-  const writeText = (value: string) =>
-    append(stdoutRef, ensureNewline(value));
-
-  const writeJsonStream = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
-    stream.pipe(
-      Stream.map((value) => `${JSON.stringify(value)}\n`),
-      Stream.run(stdoutSink)
-    );
-
-  const writeStderr = (value: string) =>
-    append(stderrRef, ensureNewline(value));
-
-  const service: CliOutputService = {
-    stdout: stdoutSink,
-    stderr: stderrSink,
-    writeJson,
-    writeText,
-    writeJsonStream,
-    writeStderr
-  };
-
-  const layer = Layer.succeed(CliOutput, CliOutput.of(service));
-
-  return { layer, stdoutRef, stderrRef };
-};
+import {
+  makeOutputCapture,
+  parseNdjson,
+  readStderr,
+  readStdout
+} from "../support/cli-output-capture.js";
 
 const makeInputLayer = (lines: ReadonlyArray<string>) => {
   const service: CliInputService = {
@@ -160,14 +114,11 @@ describe("pipe command", () => {
       ]).pipe(Effect.provide(appLayer))
     );
 
-    const stdout = await Effect.runPromise(Ref.get(stdoutRef));
-    const stderr = await Effect.runPromise(Ref.get(stderrRef));
+    const stdout = await readStdout(stdoutRef);
+    const stderr = await readStderr(stderrRef);
 
     expect(stderr.length).toBe(0);
-    const payloads = stdout
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line));
+    const payloads = parseNdjson<Record<string, unknown>>(stdout);
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).toMatchObject({ text: "match me" });
   });
@@ -201,13 +152,10 @@ describe("pipe command", () => {
       ]).pipe(Effect.provide(appLayer))
     );
 
-    const stdout = await Effect.runPromise(Ref.get(stdoutRef));
-    const stderr = await Effect.runPromise(Ref.get(stderrRef));
+    const stdout = await readStdout(stdoutRef);
+    const stderr = await readStderr(stderrRef);
 
-    const payloads = stdout
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line));
+    const payloads = parseNdjson<Record<string, unknown>>(stdout);
     expect(payloads).toHaveLength(2);
     expect(stderr.length).toBeGreaterThan(0);
   });
@@ -238,11 +186,8 @@ describe("pipe command", () => {
       ]).pipe(Effect.provide(appLayer))
     );
 
-    const stdout = await Effect.runPromise(Ref.get(stdoutRef));
-    const payloads = stdout
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line));
+    const stdout = await readStdout(stdoutRef);
+    const payloads = parseNdjson<Record<string, unknown>>(stdout);
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).toMatchObject({ text: "match me" });

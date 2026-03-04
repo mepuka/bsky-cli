@@ -16,6 +16,7 @@ import { DerivationCheckpoint } from "../src/domain/derivation.js";
 import { PostUpsert, EventMeta } from "../src/domain/events.js";
 import { Post } from "../src/domain/post.js";
 import { AppConfigService, ConfigOverrides } from "../src/services/app-config.js";
+import { makeTempDir, removeTempDir } from "./support/temp-dir.js";
 
 // Test helpers
 const createTestStoreName = (name: string) =>
@@ -57,21 +58,6 @@ const createTestPost = (uri: string, text: string): Post =>
 // Test layer setup - build complete layers with dependencies satisfied
 // CRITICAL: StoreIndex depends on StoreEventLog, so we build complete layers
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const buildTestLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });

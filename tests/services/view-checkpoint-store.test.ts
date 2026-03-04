@@ -9,6 +9,7 @@ import { StoreManager } from "../../src/services/store-manager.js";
 import { StoreDb } from "../../src/services/store-db.js";
 import { defaultStoreConfig } from "../../src/domain/defaults.js";
 import { FileSystem } from "@effect/platform";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const sampleViewName = Schema.decodeUnknownSync(StoreName)("arsenal-links");
 const sampleSourceName = Schema.decodeUnknownSync(StoreName)("arsenal");
@@ -24,21 +25,6 @@ const sampleCheckpoint = Schema.decodeUnknownSync(DerivationCheckpoint)({
   updatedAt: "2026-01-01T00:00:00.000Z"
 });
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const buildLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });

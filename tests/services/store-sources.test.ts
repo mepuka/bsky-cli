@@ -8,6 +8,7 @@ import { AppConfigService, ConfigOverrides } from "../../src/services/app-config
 import { StoreRef } from "../../src/domain/store.js";
 import { AuthorSource, storeSourceId } from "../../src/domain/store-sources.js";
 import { Did, Handle, Timestamp } from "../../src/domain/primitives.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const sampleStore = Schema.decodeUnknownSync(StoreRef)({
   name: "alpha",
@@ -21,21 +22,6 @@ const sampleAuthor = AuthorSource.make({
   enabled: true
 });
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const buildLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });

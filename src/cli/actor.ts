@@ -11,6 +11,7 @@ import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
+import { makeFormatOption } from "./format-utils.js";
 
 const identifiersArg = Args.text({ name: "identifier" }).pipe(
   Args.repeated,
@@ -18,10 +19,7 @@ const identifiersArg = Args.text({ name: "identifier" }).pipe(
   Args.withDescription("Handle or DID to resolve (repeatable)")
 );
 
-const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
+const formatOption = makeFormatOption(jsonNdjsonTableFormats);
 
 const cacheOnlyOption = Options.boolean("cache-only").pipe(
   Options.withDescription("Only check local cache, don't fetch from network")

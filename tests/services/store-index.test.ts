@@ -13,6 +13,7 @@ import { EmbedImage, EmbedImages } from "../../src/domain/bsky.js";
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
 import { IndexCheckpoint } from "../../src/domain/indexes.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const samplePost = Schema.decodeUnknownSync(Post)({
   uri: "at://did:plc:example/app.bsky.feed.post/1",
@@ -119,21 +120,6 @@ const eventId = Schema.decodeUnknownSync(EventId)("01ARZ3NDEKTSV4RRFFQ69G5FAV");
 const rangeStart = Schema.decodeUnknownSync(Timestamp)("2026-01-01T00:00:00.000Z");
 const rangeEnd = Schema.decodeUnknownSync(Timestamp)("2026-01-03T00:00:00.000Z");
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const buildLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });

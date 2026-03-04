@@ -1,22 +1,17 @@
 import { Command } from "@effect/cli";
-import { BunContext } from "@effect/platform-bun";
 import { describe, expect, test } from "bun:test";
-import { Chunk, Effect, Layer, Ref, Sink, Stream } from "effect";
-import { FileSystem } from "@effect/platform";
+import { Chunk, Effect, Layer, Schema } from "effect";
 import { queryCommand } from "../../src/cli/query.js";
-import { CliOutput, type CliOutputService } from "../../src/cli/output.js";
-import { CliPreferences } from "../../src/cli/preferences.js";
-import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { StoreManager } from "../../src/services/store-manager.js";
-import { StoreDb } from "../../src/services/store-db.js";
-import { StoreEventLog } from "../../src/services/store-event-log.js";
 import { StoreIndex } from "../../src/services/store-index.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
 import { StoreConfig } from "../../src/domain/store.js";
 import { EventMeta, PostEventRecord, PostUpsert } from "../../src/domain/events.js";
 import { EventId, StoreName } from "../../src/domain/primitives.js";
 import { Post } from "../../src/domain/post.js";
-import { Schema } from "effect";
+import { makeOutputCapture, parseNdjson, readStdout } from "../support/cli-output-capture.js";
+import { buildCliTestLayer } from "../support/layers.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const sampleConfig = Schema.decodeUnknownSync(StoreConfig)({
   format: { json: true, markdown: false },
@@ -104,118 +99,26 @@ const makeRecord = (post: Post, id: string) =>
     event: PostUpsert.make({ post, meta: sampleMeta })
   });
 
-const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
-
-const decodeChunk = (chunk: string | Uint8Array) =>
-  typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
-
-const makeOutputCapture = () => {
-  const stdoutRef = Ref.unsafeMake<ReadonlyArray<string>>([]);
-  const stderrRef = Ref.unsafeMake<ReadonlyArray<string>>([]);
-
-  const append = (ref: Ref.Ref<ReadonlyArray<string>>, chunk: string | Uint8Array) =>
-    Ref.update(ref, (items) => [...items, decodeChunk(chunk)]);
-
-  const stdoutSink = Sink.forEach((chunk: string | Uint8Array) =>
-    append(stdoutRef, chunk)
-  );
-  const stderrSink = Sink.forEach((chunk: string | Uint8Array) =>
-    append(stderrRef, chunk)
-  );
-
-  const writeJson = (value: unknown, pretty?: boolean) =>
-    append(stdoutRef, ensureNewline(JSON.stringify(value, null, pretty ? 2 : 0)));
-
-  const writeText = (value: string) =>
-    append(stdoutRef, ensureNewline(value));
-
-  const writeJsonStream = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
-    stream.pipe(
-      Stream.map((value) => `${JSON.stringify(value)}\n`),
-      Stream.run(stdoutSink)
-    );
-
-  const writeStderr = (value: string) =>
-    append(stderrRef, ensureNewline(value));
-
-  const service: CliOutputService = {
-    stdout: stdoutSink,
-    stderr: stderrSink,
-    writeJson,
-    writeText,
-    writeJsonStream,
-    writeStderr
-  };
-
-  const layer = Layer.succeed(CliOutput, CliOutput.of(service));
-
-  return { layer, stdoutRef, stderrRef };
-};
-
-const buildLayer = (storeRoot: string) => {
-  const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
-  const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(overrides));
-  const storeDbLayer = StoreDb.layer.pipe(Layer.provideMerge(appConfigLayer));
-  const eventLogLayer = StoreEventLog.layer.pipe(Layer.provideMerge(storeDbLayer));
-  const indexLayer = StoreIndex.layer.pipe(
-    Layer.provideMerge(storeDbLayer),
-    Layer.provideMerge(eventLogLayer)
-  );
-  const managerLayer = StoreManager.layer.pipe(Layer.provideMerge(appConfigLayer));
-  const filterRuntimeLayer = Layer.succeed(
-    FilterRuntime,
-    FilterRuntime.make({
-      evaluate: () => Effect.succeed(() => Effect.succeed(true)),
-      evaluateWithMetadata: () => Effect.succeed(() => Effect.succeed({ ok: true })),
-      evaluateBatch: () =>
-        Effect.succeed((posts) => Effect.succeed(Chunk.map(posts, () => true))),
-      explain: () => Effect.succeed(() => Effect.succeed({ ok: true, reasons: [] }))
-    })
-  );
-
-  return Layer.mergeAll(
-    appConfigLayer,
-    storeDbLayer,
-    eventLogLayer,
-    indexLayer,
-    managerLayer,
-    filterRuntimeLayer
-  ).pipe(Layer.provideMerge(BunContext.layer));
-};
-
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
+const filterRuntimeLayer = Layer.succeed(
+  FilterRuntime,
+  FilterRuntime.make({
+    evaluate: () => Effect.succeed(() => Effect.succeed(true)),
+    evaluateWithMetadata: () => Effect.succeed(() => Effect.succeed({ ok: true })),
+    evaluateBatch: () =>
+      Effect.succeed((posts) => Effect.succeed(Chunk.map(posts, () => true))),
+    explain: () => Effect.succeed(() => Effect.succeed({ ok: true, reasons: [] }))
+  })
+);
 
 const setupAppLayer = (storeRoot: string) => {
-  const { layer: outputLayer, stdoutRef, stderrRef } = makeOutputCapture();
-  const appLayer = Layer.mergeAll(
+  const { layer: outputLayer, stdoutRef } = makeOutputCapture();
+  const appLayer = buildCliTestLayer({
+    storeRoot,
     outputLayer,
-    Layer.succeed(CliPreferences, { compact: false }),
-    buildLayer(storeRoot)
-  );
-  return { appLayer, stdoutRef, stderrRef };
+    extraLayers: [filterRuntimeLayer]
+  });
+  return { appLayer, stdoutRef };
 };
-
-const parseNdjson = (stdout: ReadonlyArray<string>) =>
-  stdout
-    .join("")
-    .trim()
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as { store?: string; post?: { uri: string } });
 
 describe("query multi-store", () => {
   test("merges ordered results and includes store name", async () => {
@@ -249,8 +152,8 @@ describe("query multi-store", () => {
         }).pipe(Effect.provide(appLayer))
       );
 
-      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
-      const items = parseNdjson(stdout);
+      const stdout = await readStdout(stdoutRef);
+      const items = parseNdjson<{ store?: string; post?: { uri: string } }>(stdout);
 
       expect(items.length).toBe(3);
       expect(items[0]?.store).toBe("alpha");
@@ -314,7 +217,9 @@ describe("query multi-store", () => {
         }).pipe(Effect.provide(appLayer))
       );
 
-      const results = parseNdjson(await Effect.runPromise(Ref.get(stdoutRef)));
+      const results = parseNdjson<{ store?: string; post?: { uri: string } }>(
+        await readStdout(stdoutRef)
+      );
       const uris = results.map((row) => row.post?.uri).filter((uri): uri is string => uri !== undefined);
       expect(uris).toEqual([postHigh.uri, postMid.uri, postLow.uri]);
     } finally {
@@ -370,8 +275,8 @@ describe("query multi-store", () => {
         }).pipe(Effect.provide(appLayer))
       );
 
-      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
-      const items = parseNdjson(stdout);
+      const stdout = await readStdout(stdoutRef);
+      const items = parseNdjson<{ store?: string; post?: { uri: string } }>(stdout);
 
       expect(items.length).toBe(2);
       expect(items[0]?.store).toBe("bravo");
@@ -438,8 +343,8 @@ describe("query multi-store", () => {
         }).pipe(Effect.provide(appLayer))
       );
 
-      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
-      const items = parseNdjson(stdout);
+      const stdout = await readStdout(stdoutRef);
+      const items = parseNdjson<{ store?: string; post?: { uri: string } }>(stdout);
 
       expect(items.length).toBe(2);
       expect(items[0]?.post?.uri).toBe("at://did:plc:example/app.bsky.feed.post/10");
@@ -510,8 +415,8 @@ describe("query multi-store", () => {
         }).pipe(Effect.provide(appLayer))
       );
 
-      const stdout = await Effect.runPromise(Ref.get(stdoutRef));
-      const items = parseNdjson(stdout);
+      const stdout = await readStdout(stdoutRef);
+      const items = parseNdjson<{ store?: string; post?: { uri: string } }>(stdout);
 
       expect(items.length).toBe(2);
       expect(items[0]?.post?.uri).toBe("at://did:plc:example/app.bsky.feed.post/40");
@@ -567,7 +472,7 @@ describe("query thread output", () => {
         }).pipe(Effect.provide(appLayer))
       );
 
-      const stdout = (await Effect.runPromise(Ref.get(stdoutRef))).join("");
+      const stdout = await readStdout(stdoutRef);
       expect(stdout).toContain(`Thread 1: ${rootA.uri} (2 posts)`);
       expect(stdout).toContain(`Thread 2: ${rootB.uri} (1 post)`);
     } finally {

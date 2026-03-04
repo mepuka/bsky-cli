@@ -3,6 +3,7 @@ import { ConfigProvider, Effect, Layer, Option, Redacted } from "effect";
 import { FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 import {
   CredentialStore,
   CredentialsOverrides,
@@ -13,21 +14,6 @@ import { BskyCredentials } from "../../src/domain/credentials.js";
 const envProvider = (entries: Array<readonly [string, string]>) =>
   Layer.setConfigProvider(ConfigProvider.fromMap(new Map(entries)));
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const buildLayer = (
   storeRoot: string,

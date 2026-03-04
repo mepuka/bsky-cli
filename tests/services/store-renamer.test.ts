@@ -12,6 +12,7 @@ import { AppConfigService, ConfigOverrides } from "../../src/services/app-config
 import { defaultStoreConfig } from "../../src/domain/defaults.js";
 import { StoreLineage, DerivationCheckpoint } from "../../src/domain/derivation.js";
 import { StoreName } from "../../src/domain/primitives.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const sourceName = Schema.decodeUnknownSync(StoreName)("arsenal");
 const derivedName = Schema.decodeUnknownSync(StoreName)("arsenal-links");
@@ -45,21 +46,6 @@ const sampleCheckpoint = Schema.decodeUnknownSync(DerivationCheckpoint)({
   updatedAt: "2026-01-01T00:00:00.000Z"
 });
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const buildLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });

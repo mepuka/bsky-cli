@@ -4,12 +4,14 @@ import { Options } from "@effect/cli";
 import { Clock, Effect, Option, Stream } from "effect";
 import { withExamples } from "./help.js";
 import { writeJson, writeText } from "./output.js";
+import { emitWithFormat } from "./output-render.js";
 import { renderTableLegacy } from "./doc/table.js";
 import { AppConfigService } from "../services/app-config.js";
 import { CredentialStore } from "../services/credential-store.js";
 import { BskyClient } from "../services/bsky-client.js";
 import { jsonTableFormats, resolveOutputFormat } from "./output-format.js";
 import { BskyCredentials } from "../domain/credentials.js";
+import { makeFormatOption } from "./format-utils.js";
 
 type CheckStatus = "ok" | "warn" | "error";
 
@@ -34,10 +36,7 @@ const checkError = (name: string, message: string): CheckResult => ({
   message
 });
 
-const checkFormatOption = Options.choice("format", jsonTableFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
+const checkFormatOption = makeFormatOption(jsonTableFormats);
 
 const configCheckCommand = Command.make("check", { format: checkFormatOption }, ({ format }) =>
   Effect.gen(function* () {
@@ -136,26 +135,25 @@ const configCheckCommand = Command.make("check", { format: checkFormatOption }, 
 const configShowCommand = Command.make("show", { format: checkFormatOption }, ({ format }) =>
   Effect.gen(function* () {
     const config = yield* AppConfigService;
-    const outputFormat = resolveOutputFormat(
+    yield* emitWithFormat(
       format,
       config.outputFormat,
       jsonTableFormats,
-      "json"
+      "json",
+      {
+        json: writeJson(config),
+        table: Effect.gen(function* () {
+          const rows = [
+            ["service", config.service],
+            ["storeRoot", config.storeRoot],
+            ["outputFormat", config.outputFormat],
+            ["identifier", config.identifier ?? "(none)"]
+          ];
+          const table = renderTableLegacy(["KEY", "VALUE"], rows);
+          yield* writeText(table);
+        })
+      }
     );
-
-    if (outputFormat === "table") {
-      const rows = [
-        ["service", config.service],
-        ["storeRoot", config.storeRoot],
-        ["outputFormat", config.outputFormat],
-        ["identifier", config.identifier ?? "(none)"]
-      ];
-      const table = renderTableLegacy(["KEY", "VALUE"], rows);
-      yield* writeText(table);
-      return;
-    }
-
-    yield* writeJson(config);
   })
 ).pipe(
   Command.withDescription("Show resolved configuration values")
@@ -166,38 +164,37 @@ const credentialStatusCommand = Command.make("status", { format: checkFormatOpti
     const config = yield* AppConfigService;
     const credentials = yield* CredentialStore;
     const status = yield* credentials.status();
-    const outputFormat = resolveOutputFormat(
+    yield* emitWithFormat(
       format,
       config.outputFormat,
       jsonTableFormats,
-      "json"
+      "json",
+      {
+        json: writeJson(status),
+        table: Effect.gen(function* () {
+          const rows = [
+            ["source", status.source],
+            ["identifierSource", status.identifierSource],
+            ["passwordSource", status.passwordSource],
+            ["hasCredentials", status.hasCredentials ? "yes" : "no"],
+            ["fileExists", status.fileExists ? "yes" : "no"],
+            ["fileReadable", status.fileReadable ? "yes" : "no"],
+            ["keyPresent", status.keyPresent ? "yes" : "no"],
+            ["keySource", status.keySource],
+            ["keyFileExists", status.keyFileExists ? "yes" : "no"],
+            ["keyFileReadable", status.keyFileReadable ? "yes" : "no"]
+          ];
+          if (status.fileError) {
+            rows.push(["fileError", status.fileError]);
+          }
+          if (status.keyFileError) {
+            rows.push(["keyFileError", status.keyFileError]);
+          }
+          const table = renderTableLegacy(["FIELD", "VALUE"], rows);
+          yield* writeText(table);
+        })
+      }
     );
-
-    if (outputFormat === "table") {
-      const rows = [
-        ["source", status.source],
-        ["identifierSource", status.identifierSource],
-        ["passwordSource", status.passwordSource],
-        ["hasCredentials", status.hasCredentials ? "yes" : "no"],
-        ["fileExists", status.fileExists ? "yes" : "no"],
-        ["fileReadable", status.fileReadable ? "yes" : "no"],
-        ["keyPresent", status.keyPresent ? "yes" : "no"],
-        ["keySource", status.keySource],
-        ["keyFileExists", status.keyFileExists ? "yes" : "no"],
-        ["keyFileReadable", status.keyFileReadable ? "yes" : "no"]
-      ];
-      if (status.fileError) {
-        rows.push(["fileError", status.fileError]);
-      }
-      if (status.keyFileError) {
-        rows.push(["keyFileError", status.keyFileError]);
-      }
-      const table = renderTableLegacy(["FIELD", "VALUE"], rows);
-      yield* writeText(table);
-      return;
-    }
-
-    yield* writeJson(status);
   })
 ).pipe(
   Command.withDescription("Show credential resolution status")
@@ -211,35 +208,34 @@ const credentialKeyStatusCommand = Command.make(
       const config = yield* AppConfigService;
       const credentials = yield* CredentialStore;
       const status = yield* credentials.status();
-      const outputFormat = resolveOutputFormat(
+      yield* emitWithFormat(
         format,
         config.outputFormat,
         jsonTableFormats,
-        "json"
-      );
-
-      if (outputFormat === "table") {
-        const rows = [
-          ["keyPresent", status.keyPresent ? "yes" : "no"],
-          ["keySource", status.keySource],
-          ["keyFileExists", status.keyFileExists ? "yes" : "no"],
-          ["keyFileReadable", status.keyFileReadable ? "yes" : "no"]
-        ];
-        if (status.keyFileError) {
-          rows.push(["keyFileError", status.keyFileError]);
+        "json",
+        {
+          json: writeJson({
+            keyPresent: status.keyPresent,
+            keySource: status.keySource,
+            keyFileExists: status.keyFileExists,
+            keyFileReadable: status.keyFileReadable,
+            ...(status.keyFileError ? { keyFileError: status.keyFileError } : {})
+          }),
+          table: Effect.gen(function* () {
+            const rows = [
+              ["keyPresent", status.keyPresent ? "yes" : "no"],
+              ["keySource", status.keySource],
+              ["keyFileExists", status.keyFileExists ? "yes" : "no"],
+              ["keyFileReadable", status.keyFileReadable ? "yes" : "no"]
+            ];
+            if (status.keyFileError) {
+              rows.push(["keyFileError", status.keyFileError]);
+            }
+            const table = renderTableLegacy(["FIELD", "VALUE"], rows);
+            yield* writeText(table);
+          })
         }
-        const table = renderTableLegacy(["FIELD", "VALUE"], rows);
-        yield* writeText(table);
-        return;
-      }
-
-      yield* writeJson({
-        keyPresent: status.keyPresent,
-        keySource: status.keySource,
-        keyFileExists: status.keyFileExists,
-        keyFileReadable: status.keyFileReadable,
-        ...(status.keyFileError ? { keyFileError: status.keyFileError } : {})
-      });
+      );
     })
 ).pipe(
   Command.withDescription("Show credential key status")

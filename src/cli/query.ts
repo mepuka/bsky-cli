@@ -47,6 +47,7 @@ import { PositiveInt } from "./option-schemas.js";
 import { renderTableLegacy } from "./doc/table.js";
 import { logWarn } from "./logging.js";
 import { globalOptionNames } from "./config.js";
+import { makeFormatOption } from "./format-utils.js";
 
 const storeNamesArg = Args.text({ name: "store" }).pipe(
   Args.repeated,
@@ -100,10 +101,7 @@ const sortOption = Options.choice("sort", sortValues).pipe(
 const newestFirstOption = Options.boolean("newest-first").pipe(
   Options.withDescription("Sort newest posts first (alias for --sort desc)")
 );
-const formatOption = Options.choice("format", queryOutputFormats).pipe(
-  Options.optional,
-  Options.withDescription("Output format (default: config output format)")
-);
+const formatOption = makeFormatOption(queryOutputFormats);
 const includeStoreOption = Options.boolean("include-store").pipe(
   Options.withDescription("Include store name in output")
 );

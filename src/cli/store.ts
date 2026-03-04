@@ -67,6 +67,7 @@ import {
   type StoreTreeRenderOptions
 } from "./store-tree.js";
 import { storeServe } from "./store-serve.js";
+import { makeFormatOption } from "./format-utils.js";
 
 const storeNameArg = Args.text({ name: "name" }).pipe(
   Args.withSchema(StoreName),
@@ -98,9 +99,9 @@ const filterNameOption = Options.text("filter").pipe(
   Options.withDescription("Filter spec name to materialize"),
   Options.optional
 );
-const treeFormatOption = Options.choice("format", treeTableJsonFormats).pipe(
-  Options.withDescription("Output format for store tree (default: tree)"),
-  Options.optional
+const treeFormatOption = makeFormatOption(
+  treeTableJsonFormats,
+  "Output format for store tree (default: tree)"
 );
 const treeAnsiOption = Options.boolean("ansi").pipe(
   Options.withDescription("Enable ANSI color output for tree format")

@@ -1,8 +1,7 @@
 import { Command } from "@effect/cli";
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer, Option, Ref, Schema, Sink, Stream } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { deriveCommand } from "../../src/cli/derive.js";
-import { CliOutput, type CliOutputService } from "../../src/cli/output.js";
 import { DerivationResult } from "../../src/domain/derivation.js";
 import { defaultStoreConfig } from "../../src/domain/defaults.js";
 import { Did, Handle, StoreName } from "../../src/domain/primitives.js";
@@ -13,62 +12,88 @@ import { ViewCheckpointStore } from "../../src/services/view-checkpoint-store.js
 import { FilterLibrary } from "../../src/services/filter-library.js";
 import { FilterNotFound } from "../../src/domain/errors.js";
 import { CliInputError } from "../../src/cli/errors.js";
-import { CliPreferences } from "../../src/cli/preferences.js";
-import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
-import { BunContext } from "@effect/platform-bun";
-import { FileSystem } from "@effect/platform";
 import { IdentityResolver } from "../../src/services/identity-resolver.js";
 import { IdentityInfo } from "../../src/domain/bsky.js";
+import { makeOutputCapture } from "../support/cli-output-capture.js";
+import { buildCliTestLayer } from "../support/layers.js";
+import { withTempDir } from "../support/temp-dir.js";
 
-const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
+const engineLayer = Layer.succeed(
+  DerivationEngine,
+  DerivationEngine.make({
+    derive: () =>
+      Effect.succeed(
+        DerivationResult.make({
+          eventsProcessed: 0,
+          eventsMatched: 0,
+          eventsSkipped: 0,
+          deletesPropagated: 0,
+          durationMs: 0
+        })
+      )
+  })
+);
 
-const decodeChunk = (chunk: string | Uint8Array) =>
-  typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+const checkpointsLayer = Layer.succeed(
+  ViewCheckpointStore,
+  ViewCheckpointStore.make({
+    load: () => Effect.succeed(Option.none()),
+    save: () => Effect.void,
+    remove: () => Effect.void
+  })
+);
 
-const makeOutputCapture = () => {
-  const stdoutRef = Ref.unsafeMake<ReadonlyArray<string>>([]);
-  const stderrRef = Ref.unsafeMake<ReadonlyArray<string>>([]);
+const outputManagerLayer = Layer.succeed(
+  OutputManager,
+  OutputManager.make({
+    materializeStore: (store) =>
+      Effect.succeed({ store: store.name, filters: [] }),
+    materializeFilters: () => Effect.succeed([])
+  })
+);
 
-  const append = (ref: Ref.Ref<ReadonlyArray<string>>, chunk: string | Uint8Array) =>
-    Ref.update(ref, (items) => [...items, decodeChunk(chunk)]);
+const filterLibraryLayer = Layer.succeed(
+  FilterLibrary,
+  FilterLibrary.make({
+    list: () => Effect.succeed([]),
+    get: (name) => Effect.fail(FilterNotFound.make({ name })),
+    save: () => Effect.void,
+    remove: () => Effect.void,
+    validateAll: () => Effect.succeed([])
+  })
+);
 
-  const stdoutSink = Sink.forEach((chunk: string | Uint8Array) =>
-    append(stdoutRef, chunk)
-  );
-  const stderrSink = Sink.forEach((chunk: string | Uint8Array) =>
-    append(stderrRef, chunk)
-  );
+const stubDid = Schema.decodeUnknownSync(Did)("did:plc:example");
+const stubHandle = Schema.decodeUnknownSync(Handle)("example.bsky");
 
-  const writeJson = (value: unknown, pretty?: boolean) =>
-    append(
-      stdoutRef,
-      ensureNewline(JSON.stringify(value, null, pretty ? 2 : 0))
-    );
+const identityLayer = Layer.succeed(
+  IdentityResolver,
+  IdentityResolver.make({
+    lookupDid: () => Effect.succeed(Option.none()),
+    lookupHandle: () => Effect.succeed(Option.none()),
+    resolveDid: () => Effect.succeed(stubDid),
+    resolveHandle: () => Effect.succeed(stubHandle),
+    resolveIdentity: () =>
+      Effect.succeed(
+        IdentityInfo.make({ did: stubDid, handle: stubHandle, didDoc: {} })
+      ),
+    cacheProfile: () => Effect.void
+  })
+);
 
-  const writeText = (value: string) =>
-    append(stdoutRef, ensureNewline(value));
-
-  const writeJsonStream = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
-    stream.pipe(
-      Stream.map((value) => `${JSON.stringify(value)}\n`),
-      Stream.run(stdoutSink)
-    );
-
-  const writeStderr = (value: string) =>
-    append(stderrRef, ensureNewline(value));
-
-  const service: CliOutputService = {
-    stdout: stdoutSink,
-    stderr: stderrSink,
-    writeJson,
-    writeText,
-    writeJsonStream,
-    writeStderr
-  };
-
-  const layer = Layer.succeed(CliOutput, CliOutput.of(service));
-
-  return { layer, stdoutRef, stderrRef };
+const buildDeriveAppLayer = (storeRoot: string) => {
+  const { layer: outputLayer } = makeOutputCapture();
+  return buildCliTestLayer({
+    storeRoot,
+    outputLayer,
+    extraLayers: [
+      engineLayer,
+      checkpointsLayer,
+      outputManagerLayer,
+      filterLibraryLayer,
+      identityLayer
+    ]
+  });
 };
 
 describe("CLI derive command", () => {
@@ -77,119 +102,30 @@ describe("CLI derive command", () => {
       name: "skygent",
       version: "0.0.0"
     });
-    const { layer: outputLayer } = makeOutputCapture();
-    const storeRoot = await Effect.runPromise(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        return yield* fs.makeTempDirectory();
-      }).pipe(Effect.provide(BunContext.layer))
-    );
-    const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
-    const appConfigLayer = AppConfigService.layer.pipe(
-      Layer.provide(overrides),
-      Layer.provide(BunContext.layer)
-    );
-    const storeLayer = StoreManager.layer.pipe(
-      Layer.provideMerge(appConfigLayer)
-    );
-    const engineLayer = Layer.succeed(
-      DerivationEngine,
-      DerivationEngine.make({
-        derive: () =>
-          Effect.succeed(
-            DerivationResult.make({
-              eventsProcessed: 0,
-              eventsMatched: 0,
-              eventsSkipped: 0,
-              deletesPropagated: 0,
-              durationMs: 0
-            })
-          )
-      })
-    );
-    const checkpointsLayer = Layer.succeed(
-      ViewCheckpointStore,
-      ViewCheckpointStore.make({
-        load: () => Effect.succeed(Option.none()),
-        save: () => Effect.void,
-        remove: () => Effect.void
-      })
-    );
-    const outputManagerLayer = Layer.succeed(
-      OutputManager,
-      OutputManager.make({
-        materializeStore: (store) =>
-          Effect.succeed({ store: store.name, filters: [] }),
-        materializeFilters: () => Effect.succeed([])
-      })
-    );
-    const filterLibraryLayer = Layer.succeed(
-      FilterLibrary,
-      FilterLibrary.make({
-        list: () => Effect.succeed([]),
-        get: (name) => Effect.fail(FilterNotFound.make({ name })),
-        save: () => Effect.void,
-        remove: () => Effect.void,
-        validateAll: () => Effect.succeed([])
-      })
-    );
-    const stubDid = Schema.decodeUnknownSync(Did)("did:plc:example");
-    const stubHandle = Schema.decodeUnknownSync(Handle)("example.bsky");
-    const identityLayer = Layer.succeed(
-      IdentityResolver,
-      IdentityResolver.make({
-        lookupDid: () => Effect.succeed(Option.none()),
-        lookupHandle: () => Effect.succeed(Option.none()),
-        resolveDid: () => Effect.succeed(stubDid),
-        resolveHandle: () => Effect.succeed(stubHandle),
-        resolveIdentity: () =>
-          Effect.succeed(
-            IdentityInfo.make({ did: stubDid, handle: stubHandle, didDoc: {} })
-          ),
-        cacheProfile: () => Effect.void
-      })
-    );
-    const preferencesLayer = Layer.succeed(CliPreferences, { compact: false });
-    const appLayer = Layer.mergeAll(
-      outputLayer,
-      storeLayer,
-      engineLayer,
-      checkpointsLayer,
-      outputManagerLayer,
-      filterLibraryLayer,
-      identityLayer,
-      preferencesLayer,
-      appConfigLayer
-    ).pipe(Layer.provideMerge(BunContext.layer));
+    await withTempDir(async (storeRoot) => {
+      const appLayer = buildDeriveAppLayer(storeRoot);
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const manager = yield* StoreManager;
+          const sourceName = Schema.decodeUnknownSync(StoreName)("source");
+          const targetName = Schema.decodeUnknownSync(StoreName)("target");
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const manager = yield* StoreManager;
-        const sourceName = Schema.decodeUnknownSync(StoreName)("source");
-        const targetName = Schema.decodeUnknownSync(StoreName)("target");
+          yield* manager.createStore(sourceName, defaultStoreConfig);
+          yield* run([
+            "node",
+            "skygent",
+            "source",
+            "target",
+            "--filter-json",
+            "{\"_tag\":\"All\"}"
+          ]);
 
-        yield* manager.createStore(sourceName, defaultStoreConfig);
-        yield* run([
-          "node",
-          "skygent",
-          "source",
-          "target",
-          "--filter-json",
-          "{\"_tag\":\"All\"}"
-        ]);
+          return yield* manager.getStore(targetName);
+        }).pipe(Effect.provide(appLayer))
+      );
 
-        return yield* manager.getStore(targetName);
-      }).pipe(Effect.provide(appLayer))
-    );
-
-    expect(Option.isSome(result)).toBe(true);
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.remove(storeRoot, { recursive: true });
-      }).pipe(Effect.provide(BunContext.layer))
-    );
+      expect(Option.isSome(result)).toBe(true);
+    });
   });
 
   test("shows contextual hint when source looks like a subcommand", async () => {
@@ -197,117 +133,28 @@ describe("CLI derive command", () => {
       name: "skygent",
       version: "0.0.0"
     });
-    const { layer: outputLayer } = makeOutputCapture();
-    const storeRoot = await Effect.runPromise(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        return yield* fs.makeTempDirectory();
-      }).pipe(Effect.provide(BunContext.layer))
-    );
-    const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
-    const appConfigLayer = AppConfigService.layer.pipe(
-      Layer.provide(overrides),
-      Layer.provide(BunContext.layer)
-    );
-    const storeLayer = StoreManager.layer.pipe(
-      Layer.provideMerge(appConfigLayer)
-    );
-    const engineLayer = Layer.succeed(
-      DerivationEngine,
-      DerivationEngine.make({
-        derive: () =>
-          Effect.succeed(
-            DerivationResult.make({
-              eventsProcessed: 0,
-              eventsMatched: 0,
-              eventsSkipped: 0,
-              deletesPropagated: 0,
-              durationMs: 0
-            })
-          )
-      })
-    );
-    const checkpointsLayer = Layer.succeed(
-      ViewCheckpointStore,
-      ViewCheckpointStore.make({
-        load: () => Effect.succeed(Option.none()),
-        save: () => Effect.void,
-        remove: () => Effect.void
-      })
-    );
-    const outputManagerLayer = Layer.succeed(
-      OutputManager,
-      OutputManager.make({
-        materializeStore: (store) =>
-          Effect.succeed({ store: store.name, filters: [] }),
-        materializeFilters: () => Effect.succeed([])
-      })
-    );
-    const filterLibraryLayer = Layer.succeed(
-      FilterLibrary,
-      FilterLibrary.make({
-        list: () => Effect.succeed([]),
-        get: (name) => Effect.fail(FilterNotFound.make({ name })),
-        save: () => Effect.void,
-        remove: () => Effect.void,
-        validateAll: () => Effect.succeed([])
-      })
-    );
-    const stubDid = Schema.decodeUnknownSync(Did)("did:plc:example");
-    const stubHandle = Schema.decodeUnknownSync(Handle)("example.bsky");
-    const identityLayer = Layer.succeed(
-      IdentityResolver,
-      IdentityResolver.make({
-        lookupDid: () => Effect.succeed(Option.none()),
-        lookupHandle: () => Effect.succeed(Option.none()),
-        resolveDid: () => Effect.succeed(stubDid),
-        resolveHandle: () => Effect.succeed(stubHandle),
-        resolveIdentity: () =>
-          Effect.succeed(
-            IdentityInfo.make({ did: stubDid, handle: stubHandle, didDoc: {} })
-          ),
-        cacheProfile: () => Effect.void
-      })
-    );
-    const preferencesLayer = Layer.succeed(CliPreferences, { compact: false });
-    const appLayer = Layer.mergeAll(
-      outputLayer,
-      storeLayer,
-      engineLayer,
-      checkpointsLayer,
-      outputManagerLayer,
-      filterLibraryLayer,
-      identityLayer,
-      preferencesLayer,
-      appConfigLayer
-    ).pipe(Layer.provideMerge(BunContext.layer));
+    await withTempDir(async (storeRoot) => {
+      const appLayer = buildDeriveAppLayer(storeRoot);
+      const result = await Effect.runPromise(
+        run([
+          "node",
+          "skygent",
+          "list",
+          "target",
+          "--dry-run"
+        ]).pipe(
+          Effect.provide(appLayer),
+          Effect.either
+        )
+      );
 
-    const result = await Effect.runPromise(
-      run([
-        "node",
-        "skygent",
-        "list",
-        "target",
-        "--dry-run"
-      ]).pipe(
-        Effect.provide(appLayer),
-        Effect.either
-      )
-    );
-
-    expect(result._tag).toBe("Left");
-    if (result._tag === "Left") {
-      expect(result.left).toBeInstanceOf(CliInputError);
-      expect(result.left.message).toContain("not subcommands");
-      expect(result.left.message).toContain("derive");
-      expect(result.left.message).toContain("<source> <target>");
-    }
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.remove(storeRoot, { recursive: true });
-      }).pipe(Effect.provide(BunContext.layer))
-    );
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") {
+        expect(result.left).toBeInstanceOf(CliInputError);
+        expect(result.left.message).toContain("not subcommands");
+        expect(result.left.message).toContain("derive");
+        expect(result.left.message).toContain("<source> <target>");
+      }
+    });
   });
 });

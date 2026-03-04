@@ -22,6 +22,7 @@ import { all, filterExprSignature, none } from "../../src/domain/filter.js";
 import { Handle, Timestamp } from "../../src/domain/primitives.js";
 import { StoreRef } from "../../src/domain/store.js";
 import { DataSource } from "../../src/domain/sync.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const sampleStore = Schema.decodeUnknownSync(StoreRef)({
   name: "jetstream-store",
@@ -153,21 +154,6 @@ const filterRuntimeLayer = FilterRuntime.layer.pipe(
   Layer.provideMerge(TrendingTopics.testLayer)
 );
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const makeTestLayer = (
   storeRoot: string,

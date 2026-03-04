@@ -22,6 +22,7 @@ import {
 } from "./thread-options.js";
 import { resolveOutputFormat, textJsonFormats } from "./output-format.js";
 import { PositiveInt } from "./option-schemas.js";
+import { makeFormatOption } from "./format-utils.js";
 
 const uriArg = Args.text({ name: "uri" }).pipe(
   Args.withSchema(PostUri),
@@ -48,10 +49,7 @@ const widthOption = Options.integer("width").pipe(
   Options.optional
 );
 
-const formatOption = Options.choice("format", textJsonFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
+const formatOption = makeFormatOption(textJsonFormats);
 
 const depthOption = threadDepthOption("Reply depth (API only, default: 6)");
 const parentHeightOption = threadParentHeightOption(

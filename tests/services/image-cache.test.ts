@@ -11,25 +11,11 @@ import { ImageCache } from "../../src/services/images/image-cache.js";
 import { ImageConfig } from "../../src/services/images/image-config.js";
 import { ImagePipeline } from "../../src/services/images/image-pipeline.js";
 import { ImageRefIndex } from "../../src/services/images/image-ref-index.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const envProvider = (entries: Array<readonly [string, string]>) =>
   Layer.setConfigProvider(ConfigProvider.fromMap(new Map(entries)));
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const makeFetcherLayer = (onFetch: () => void) => {
   const fetch = (url: string) => {

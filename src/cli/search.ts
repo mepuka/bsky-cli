@@ -16,6 +16,7 @@ import { formatSchemaError } from "./shared.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
+import { makeFormatOption } from "./format-utils.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
 import { parseTimestampInput } from "./time.js";
 
@@ -35,10 +36,7 @@ const typeaheadOption = Options.boolean("typeahead").pipe(
   Options.withDescription("Use prefix typeahead search (handles only)")
 );
 
-const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
+const formatOption = makeFormatOption(jsonNdjsonTableFormats);
 
 const storeOption = Options.text("store").pipe(
   Options.withSchema(StoreName),

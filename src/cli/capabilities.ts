@@ -1,4 +1,4 @@
-import { Command, Options } from "@effect/cli";
+import { Command } from "@effect/cli";
 import { Effect } from "effect";
 import pkg from "../../package.json" with { type: "json" };
 import { AppConfigService } from "../services/app-config.js";
@@ -6,18 +6,16 @@ import { filterSuggestions } from "./filter-dsl.js";
 import { renderTableLegacy } from "./doc/table.js";
 import { withExamples } from "./help.js";
 import { writeJson, writeText } from "./output.js";
+import { emitWithFormat } from "./output-render.js";
 import {
   jsonNdjsonTableFormats,
   jsonTableFormats,
   queryOutputFormats,
-  resolveOutputFormat,
   treeTableJsonFormats
 } from "./output-format.js";
+import { makeFormatOption } from "./format-utils.js";
 
-const formatOption = Options.choice("format", jsonTableFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
+const formatOption = makeFormatOption(jsonTableFormats);
 
 const unique = (items: ReadonlyArray<string>) => Array.from(new Set(items));
 
@@ -73,12 +71,6 @@ export const capabilitiesCommand = Command.make(
   ({ format }) =>
     Effect.gen(function* () {
       const appConfig = yield* AppConfigService;
-      const outputFormat = resolveOutputFormat(
-        format,
-        appConfig.outputFormat,
-        jsonTableFormats,
-        "json"
-      );
       const payload = {
         version: pkg.version,
         commands: commandNames,
@@ -96,18 +88,24 @@ export const capabilitiesCommand = Command.make(
         sourceTypes
       };
 
-      if (outputFormat === "json") {
-        yield* writeJson(payload);
-        return;
-      }
-
-      const rows = [
-        ["version", pkg.version],
-        ["commands", String(commandNames.length)],
-        ["predicates", String(predicateKeys.length)],
-        ["source types", sourceTypes.join(", ")]
-      ];
-      yield* writeText(renderTableLegacy(["FIELD", "VALUE"], rows));
+      yield* emitWithFormat(
+        format,
+        appConfig.outputFormat,
+        jsonTableFormats,
+        "json",
+        {
+          json: writeJson(payload),
+          table: Effect.gen(function* () {
+            const rows = [
+              ["version", pkg.version],
+              ["commands", String(commandNames.length)],
+              ["predicates", String(predicateKeys.length)],
+              ["source types", sourceTypes.join(", ")]
+            ];
+            yield* writeText(renderTableLegacy(["FIELD", "VALUE"], rows));
+          })
+        }
+      );
     })
 ).pipe(
   Command.withDescription(

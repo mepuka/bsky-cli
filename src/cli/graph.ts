@@ -26,6 +26,7 @@ import { renderTableLegacy } from "./doc/table.js";
 import { renderProfileTable } from "./doc/table-renderers.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
+import { makeFormatOption } from "./format-utils.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
 import { CliPreferences } from "./preferences.js";
 import { compactListItemView, compactListView, compactProfileView } from "./compact-output.js";
@@ -62,10 +63,7 @@ const cursorOption = baseCursorOption.pipe(
   Options.withDescription("Pagination cursor")
 );
 
-const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
+const formatOption = makeFormatOption(jsonNdjsonTableFormats);
 
 const ensureSupportedFormat = (
   _format: Option.Option<typeof jsonNdjsonTableFormats[number]>,

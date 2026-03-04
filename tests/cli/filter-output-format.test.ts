@@ -1,62 +1,14 @@
 import { Command } from "@effect/cli";
 import { BunContext } from "@effect/platform-bun";
 import { describe, expect, test } from "bun:test";
-import { Chunk, Effect, Layer, Ref, Sink, Stream, TestContext } from "effect";
-import { CliOutput, type CliOutputService } from "../../src/cli/output.js";
+import { Chunk, Effect, Layer, TestContext } from "effect";
 import { filterCommand } from "../../src/cli/filter.js";
 import { AppConfigService, ConfigOverrides } from "../../src/services/app-config.js";
 import { FilterLibrary } from "../../src/services/filter-library.js";
 import { FilterRuntime } from "../../src/services/filter-runtime.js";
 import { FilterNotFound } from "../../src/domain/errors.js";
 import { PostParser } from "../../src/services/post-parser.js";
-
-const ensureNewline = (value: string) => (value.endsWith("\n") ? value : `${value}\n`);
-
-const decodeChunk = (chunk: string | Uint8Array) =>
-  typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
-
-const makeOutputCapture = () => {
-  const stdoutRef = Ref.unsafeMake<ReadonlyArray<string>>([]);
-  const stderrRef = Ref.unsafeMake<ReadonlyArray<string>>([]);
-
-  const append = (ref: Ref.Ref<ReadonlyArray<string>>, chunk: string | Uint8Array) =>
-    Ref.update(ref, (items) => [...items, decodeChunk(chunk)]);
-
-  const stdoutSink = Sink.forEach((chunk: string | Uint8Array) =>
-    append(stdoutRef, chunk)
-  );
-  const stderrSink = Sink.forEach((chunk: string | Uint8Array) =>
-    append(stderrRef, chunk)
-  );
-
-  const writeJson = (value: unknown, pretty?: boolean) =>
-    append(stdoutRef, ensureNewline(JSON.stringify(value, null, pretty ? 2 : 0)));
-
-  const writeText = (value: string) =>
-    append(stdoutRef, ensureNewline(value));
-
-  const writeJsonStream = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
-    stream.pipe(
-      Stream.map((value) => `${JSON.stringify(value)}\n`),
-      Stream.run(stdoutSink)
-    );
-
-  const writeStderr = (value: string) =>
-    append(stderrRef, ensureNewline(value));
-
-  const service: CliOutputService = {
-    stdout: stdoutSink,
-    stderr: stderrSink,
-    writeJson,
-    writeText,
-    writeJsonStream,
-    writeStderr
-  };
-
-  const layer = Layer.succeed(CliOutput, CliOutput.of(service));
-
-  return { layer, stdoutRef, stderrRef };
-};
+import { makeOutputCapture, readStdout } from "../support/cli-output-capture.js";
 
 const configLayer = Layer.succeed(ConfigOverrides, { outputFormat: "json" });
 const appConfigLayer = AppConfigService.layer.pipe(Layer.provide(configLayer));
@@ -95,9 +47,11 @@ const buildLayer = () => {
   return { appLayer, stdoutRef };
 };
 
-const parseJsonOutput = async (stdoutRef: Ref.Ref<ReadonlyArray<string>>) => {
-  const stdout = await Effect.runPromise(Ref.get(stdoutRef));
-  return JSON.parse(stdout.join("").trim()) as unknown;
+const parseJsonOutput = async (
+  stdoutRef: ReturnType<typeof makeOutputCapture>["stdoutRef"]
+) => {
+  const stdout = await readStdout(stdoutRef);
+  return JSON.parse(stdout.trim()) as unknown;
 };
 
 describe("filter output format defaults", () => {

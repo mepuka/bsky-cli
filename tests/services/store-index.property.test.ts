@@ -13,6 +13,7 @@ import { EventId, Handle, Hashtag, PostUri } from "../../src/domain/primitives.j
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
 import { PostOrder } from "../../src/domain/order.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const postUriArb = Arbitrary.make(PostUri);
 const handleArb = Arbitrary.make(Handle);
@@ -188,21 +189,6 @@ const queryModel = (
   return collected;
 };
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const buildLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });

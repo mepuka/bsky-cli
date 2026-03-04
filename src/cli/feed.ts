@@ -14,6 +14,7 @@ import { withExamples } from "./help.js";
 import { writeJson, writeJsonStream, writeText } from "./output.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
+import { makeFormatOption, rejectImplicitUnsupportedFormat } from "./format-utils.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
 
 const feedUriArg = Args.text({ name: "uri" }).pipe(
@@ -35,21 +36,19 @@ const cursorOption = baseCursorOption.pipe(
   Options.withDescription("Pagination cursor")
 );
 
-const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
+const formatOption = makeFormatOption(jsonNdjsonTableFormats);
 
 const ensureSupportedFormat = (
   format: Option.Option<typeof jsonNdjsonTableFormats[number]>,
   configFormat: string
 ) =>
-  Option.isNone(format) && configFormat === "markdown"
-    ? CliInputError.make({
-        message: 'Output format "markdown" is not supported for feed commands. Use --format json|ndjson|table.',
-        cause: { format: configFormat }
-      })
-    : Effect.void;
+  rejectImplicitUnsupportedFormat({
+    explicitFormat: format,
+    configFormat,
+    unsupported: ["markdown"],
+    commandName: "feed",
+    supportedHint: "json|ndjson|table"
+  });
 
 
 const renderFeedInfoTable = (

@@ -26,6 +26,7 @@ import { LinkValidator } from "../src/services/link-validator.js";
 import { TrendingTopics } from "../src/services/trending-topics.js";
 import { AppConfigService, ConfigOverrides } from "../src/services/app-config.js";
 import { defaultStoreConfig } from "../src/domain/defaults.js";
+import { makeTempDir, removeTempDir } from "./support/temp-dir.js";
 
 // Mock services
 const MockLinkValidator = Layer.succeed(LinkValidator, {
@@ -41,21 +42,6 @@ const MockTrendingTopics = Layer.succeed(TrendingTopics, {
 // is available when StoreIndex.layer is being constructed. We do this by building
 // complete layers with their dependencies satisfied.
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const sourceRef = StoreRef.make({ name: "source", root: "stores/source" });
 const targetRef = StoreRef.make({ name: "target", root: "stores/target" });

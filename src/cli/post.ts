@@ -14,8 +14,8 @@ import { renderTableLegacy } from "./doc/table.js";
 import { renderProfileTable } from "./doc/table-renderers.js";
 import { jsonNdjsonTableFormats } from "./output-format.js";
 import { emitWithFormat } from "./output-render.js";
+import { makeFormatOption, rejectImplicitUnsupportedFormat } from "./format-utils.js";
 import { cursorOption as baseCursorOption, limitOption as baseLimitOption, parsePagination } from "./pagination.js";
-import { CliInputError } from "./errors.js";
 import { CliPreferences } from "./preferences.js";
 import { compactPost, compactPostLike, compactProfileView } from "./compact-output.js";
 
@@ -27,21 +27,19 @@ const cursorOption = baseCursorOption.pipe(
   Options.withDescription("Pagination cursor")
 );
 
-const formatOption = Options.choice("format", jsonNdjsonTableFormats).pipe(
-  Options.withDescription("Output format (default: config output format)"),
-  Options.optional
-);
+const formatOption = makeFormatOption(jsonNdjsonTableFormats);
 
 const ensureSupportedFormat = (
   format: Option.Option<typeof jsonNdjsonTableFormats[number]>,
   configFormat: string
 ) =>
-  Option.isNone(format) && configFormat === "markdown"
-    ? CliInputError.make({
-        message: 'Output format "markdown" is not supported for post commands. Use --format json|ndjson|table.',
-        cause: { format: configFormat }
-      })
-    : Effect.void;
+  rejectImplicitUnsupportedFormat({
+    explicitFormat: format,
+    configFormat,
+    unsupported: ["markdown"],
+    commandName: "post",
+    supportedHint: "json|ndjson|table"
+  });
 
 const cidOption = Options.text("cid").pipe(
   Options.withSchema(PostCid),

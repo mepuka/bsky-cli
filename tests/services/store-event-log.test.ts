@@ -9,6 +9,7 @@ import { AppConfigService, ConfigOverrides } from "../../src/services/app-config
 import { EventMeta, PostUpsert } from "../../src/domain/events.js";
 import { Post } from "../../src/domain/post.js";
 import { StoreRef } from "../../src/domain/store.js";
+import { makeTempDir, removeTempDir } from "../support/temp-dir.js";
 
 const samplePost = Schema.decodeUnknownSync(Post)({
   uri: "at://did:plc:example/app.bsky.feed.post/1",
@@ -32,21 +33,6 @@ const sampleStore = Schema.decodeUnknownSync(StoreRef)({
   root: "stores/arsenal"
 });
 
-const makeTempDir = () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectory();
-    }).pipe(Effect.provide(BunContext.layer))
-  );
-
-const removeTempDir = (path: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(path, { recursive: true });
-    }).pipe(Effect.provide(BunContext.layer))
-  );
 
 const buildLayer = (storeRoot: string) => {
   const overrides = Layer.succeed(ConfigOverrides, { storeRoot });
